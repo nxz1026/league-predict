@@ -9,35 +9,29 @@ P2: 隐含概率计算 + 加权评分 + 自动校准
 输出: JSON 写入 /root/football/predictions/prediction_YYYY-MM-DD_HH.json
       校准写入 /tmp/pred_calibration.json
 """
-import json, urllib.request, gzip, os, sys, math
+import json, urllib.request, gzip, os, sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 # ── 配置 ──────────────────────────────────────
-# Use repo root as base (works on GHA and locally)
-_SCRIPT_DIR = Path(__file__).resolve().parent
-_REPO_DIR = _SCRIPT_DIR.parent
-FOOTBALL_DIR = _REPO_DIR
+# 默认输出到 skill 目录下（可通过环境变量 override）
+_SKILL_DIR = Path(__file__).parent.parent
+FOOTBALL_DIR = Path(os.environ.get("WC_OUTPUT_DIR", str(_SKILL_DIR)))
 PREDICTIONS_DIR = FOOTBALL_DIR / "predictions"
 RESULTS_DIR = FOOTBALL_DIR / "results"
-TRENDS_FILE = _REPO_DIR / "references" / "tournament-trends.md"
+TRENDS_FILE = _SKILL_DIR / "references" / "tournament-trends.md"
 ESPN_URL_TEMPLATE = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates={dates}&limit=50"
 
 # ── 权重 (P2 算法核心) ──────────────────────────
 WEIGHTS = {
-    "home_ml_implied": 0.30,
-    "draw_ml_implied": 0.25,
-    "home_form":       0.12,
-    "away_form":       0.08,
-    "home_record":     0.08,
-    "away_record":     0.07,
-    "spread_move":     0.10,
+    "home_ml_implied": 0.30,       # 主胜隐含概率
+    "draw_ml_implied": 0.25,       # 平局隐含概率 (draw odds 加权)
+    "home_form":       0.12,       # 主队近 5 场状态
+    "away_form":       0.08,       # 客队近 5 场状态 (反向)
+    "home_record":     0.08,       # 主队本届战绩
+    "away_record":     0.07,       # 客队本届战绩 (反向)
+    "spread_move":     0.10,       # 亚盘水位 movement 方向
 }
-
-# ── Poisson 参数 ─────────────────────────────────
-# λ = raw_strength × LAMBDA_MULTIPLIER
-# 强队 λ ~3.0-3.5, 弱队 λ ~0.3-0.8
-LAMBDA_MULTIPLIER = 4.5
 
 def log(msg):
     print(f"[predict] {msg}", file=sys.stderr)
@@ -166,106 +160,44 @@ def record_to_score(records):
     return 0.5
 
 # ── 亚盘 movement 分析 ───────────────────────
-def spread_movement_factor(spread_open, spread_close):
+def spread_movement_factor(away_close):
     """
-    spread 开盘→收盘水位变化
-    正数 = 主队更被市场看好, 负数 = 客队被看好
-    范围 -1 到 1, 0 = 无变化
+    用 away spread close 的 line 判断 market 方向.
+    away line 为负 → away favorite → factor 为负
+    away line 为正 → home favorite → factor 为正
     """
-    def odds_to_int(d):
-        if not d:
-            return None
-        try:
-            return int(str(d.get("odds", "0")).lstrip('+'))
-        except (ValueError, AttributeError, TypeError):
-            return None
-    
-    o = odds_to_int(spread_open)
-    c = odds_to_int(spread_close)
-    if o is None or c is None:
+    if not away_close:
         return 0.0
-    
-    # 水位越负 = 越被看好
-    # -110 → -135: 增加信心, factor > 0
-    # -110 → -105: 减少信心, factor < 0
-    # 计算变化百分比
-    if o < 0 and c < 0:
-        # 都负: -110→-135 means more confidence
-        change = (abs(c) - abs(o)) / abs(o)
-        return min(change, 1.0)
-    elif o < 0 and c > 0:
-        # 从被看好变成不被看好: 大逆转
-        return -0.8
-    elif o > 0 and c < 0:
-        # 从不被看好变成被看好: 大逆转
-        return 0.8
-    else:
-        # 都正: +110→+135 means less confidence (odds went up)
-        change = (abs(o) - abs(c)) / abs(o)
-        return -min(abs(change), 1.0)
+    line = away_close.get("line", None)
+    if line is None:
+        return 0.0
+    try:
+        return max(-1.0, min(1.0, float(line) / 3.0))
+    except (ValueError, TypeError):
+        return 0.0
 
 # ── vig 去除 ──────────────────────────────────
 def remove_vig(home_p, draw_p, away_p=None, default_margin=1.07):
     """
-    三向去水: 已知 home + draw 隐含概率, 推算 + 归一
-    away_p 为 None 时从默认 margin 推算
+    三向去水: 已知任意两个隐含概率, 推算第三个并归一化.
+    home_p 或 away_p 可为 None (但 draw_p 必须存在).
     """
-    if home_p is None or draw_p is None:
+    if draw_p is None:
+        return None, None, None
+    if home_p is None and away_p is None:
         return None, None, None
     if away_p is None:
         away_p = default_margin - home_p - draw_p
         if away_p < 0:
             away_p = 0.05
-    
+    if home_p is None:
+        home_p = default_margin - draw_p - away_p
+        if home_p < 0:
+            home_p = 0.05
     total = home_p + draw_p + away_p
     if total <= 0:
         return home_p / default_margin, draw_p / default_margin, away_p / default_margin
-    
     return home_p / total, draw_p / total, away_p / total
-
-# ── Poisson 工具 ────────────────────────────────
-def poisson_prob(k, lam):
-    """P(X=k) for Poisson(lam), k up to 20 (safe factorial)"""
-    if lam <= 0:
-        return 1.0 if k == 0 else 0.0
-    log_p = k * math.log(lam) - lam - math.lgamma(k + 1)
-    return math.exp(log_p)
-
-def compute_score_distribution(λ_home, λ_away, max_goals=12):
-    """
-    遍历主客 0..max_goals, 计算 Poisson 联合概率
-    返回: top_3_scores + 完整分布 dict + 比分区间概率
-    """
-    scores = []
-    total_prob = 0.0
-    # 遍历所有组合 (不截断低概率，保证 score_bands 归一化)
-    for h in range(max_goals + 1):
-        for a in range(max_goals + 1):
-            ph = poisson_prob(h, λ_home)
-            pa = poisson_prob(a, λ_away)
-            prob = ph * pa
-            scores.append({"score": f"{h}-{a}", "prob": round(prob, 4)})
-            total_prob += prob
-    # 按概率降序
-    scores.sort(key=lambda x: -x["prob"])
-    top3 = scores[:3]
-
-    # 比分区间概率 (总进球数)
-    band_0_1 = sum(s["prob"] for s in scores
-                   if int(s["score"].split("-")[0]) + int(s["score"].split("-")[1]) <= 1)
-    band_2 = sum(s["prob"] for s in scores
-                 if int(s["score"].split("-")[0]) + int(s["score"].split("-")[1]) == 2)
-    band_3 = sum(s["prob"] for s in scores
-                 if int(s["score"].split("-")[0]) + int(s["score"].split("-")[1]) == 3)
-    band_4plus = sum(s["prob"] for s in scores
-                     if int(s["score"].split("-")[0]) + int(s["score"].split("-")[1]) >= 4)
-
-    return top3, {
-        "0-1球": round(band_0_1, 4),
-        "2球": round(band_2, 4),
-        "3球": round(band_3, 4),
-        "4球+": round(band_4plus, 4),
-    }
 
 # ── 主预测函数 ─────────────────────────────────
 def fetch_espn(dates_str):
@@ -375,8 +307,8 @@ def parse_events(events, now_utc=None):
         # 去水
         home_true, draw_true, away_true = remove_vig(home_ml_implied, draw_implied)
         
-        # 亚盘 movement
-        spread_move = spread_movement_factor(spread_h_open, spread_h_close)
+        # 亚盘 movement: 用 away spread close line 判断方向
+        spread_move = spread_movement_factor(spread_a_close)
         
         # 评分
         h_fs = form_to_score(home_form)
@@ -444,19 +376,22 @@ def calculate_prediction(match, weights=None):
     ars = match.get("away_record_score", 0.5)
     sm = match.get("spread_movement_score", 0)
     
+    # Cap spread influence: 防止微幅盘口翻转方向 (max ±0.15 贡献)
+    sm_capped = max(-0.15, min(0.15, sm))
+
     # 计算三向强度 (clamp 到非负)
     # ML 隐含概率直接作为基础 (去水后)
     home_strength = max(0,
         hp * 0.40
         + hfs * 0.20
         + hrs * 0.15
-        + sm * 0.25  # 正 spread movement = 市场看好主队
+        + sm_capped  # spread movement 被 cap，不再主导方向
     )
     away_strength = max(0,
         ap * 0.40
         + afs * 0.20
         + ars * 0.15
-        + (-sm) * 0.25  # 负 spread movement = 客队被看好
+        + (-sm_capped)  # 反向也被 cap
     )
     draw_strength = max(0, dp * 0.50)  # 平局主要靠 ML 决定
     
@@ -488,70 +423,68 @@ def calculate_prediction(match, weights=None):
             direction = "平局 (接近)"
             confidence_raw = (draw_prob_calc - 0.33) * 3
     
-    # 信心星级
-    confidence_raw = min(max(confidence_raw, 0.1), 1.0)
-    if confidence_raw > 0.8:
+    # 信心星级 (更严格的阈值: 5星需要 prob > 0.75)
+    confidence_raw = min(max(confidence_raw, 0.0), 1.0)
+    if confidence_raw >= 0.90:
         stars = "⭐⭐⭐⭐⭐"
-    elif confidence_raw > 0.65:
+    elif confidence_raw >= 0.72:
         stars = "⭐⭐⭐⭐"
-    elif confidence_raw > 0.5:
+    elif confidence_raw >= 0.55:
         stars = "⭐⭐⭐"
-    elif confidence_raw > 0.35:
+    elif confidence_raw >= 0.35:
         stars = "⭐⭐"
     else:
         stars = "⭐"
     
-    # ── Poisson 比分预测 (取代启发式 if-elif) ──────
-    # λ = raw_strength × LAMBDA_MULTIPLIER
-    # raw_strength 来自三向归一化前的原始强度
-    raw_home = max(0, hp * 0.40 + hfs * 0.20 + hrs * 0.15 + sm * 0.25)
-    raw_away = max(0, ap * 0.40 + afs * 0.20 + ars * 0.15 + (-sm) * 0.25)
-    raw_draw = max(0, dp * 0.50)
-
-    # 把三向强度映射到进球数 λ
-    # 主队场均进球倾向: home_strength + 0.5 * draw_strength
-    # 客队场均进球倾向: away_strength + 0.5 * draw_strength
-    λ_home = (raw_home + 0.5 * raw_draw) * LAMBDA_MULTIPLIER
-    λ_away = (raw_away + 0.5 * raw_draw) * LAMBDA_MULTIPLIER
-
-    # 封底: 即使弱队也至少有一点进攻期望
-    λ_home = max(λ_home, 0.3)
-    λ_away = max(λ_away, 0.3)
-
-    top3_scores, score_bands = compute_score_distribution(λ_home, λ_away)
-
-    # 格式化 top-3
-    score_display = " / ".join(
-        f"{s['score']} ({s['prob']*100:.0f}%)" for s in top3_scores
-    )
-
-    # O/U 判断 (用 Poisson 期望总进球)
-    expected_total = round(λ_home + λ_away, 1)
+    # 比分预测 — Poisson 分布 (v2 2026-06-25)
+    LAMBDA_MULTIPLIER = 4.5
+    raw_home = hp * 0.40 + hfs * 0.20 + hrs * 0.15 + sm * 0.25
+    raw_away = ap * 0.40 + afs * 0.20 + ars * 0.15 + (-sm) * 0.25
+    raw_draw = dp * 0.50
+    lambda_home = max((raw_home + 0.5 * raw_draw) * LAMBDA_MULTIPLIER, 0.3)
+    lambda_away = max((raw_away + 0.5 * raw_draw) * LAMBDA_MULTIPLIER, 0.3)
+    
+    # Poisson 联合概率 (对数域计算防溢出)
+    import math
+    def poisson_pmf(k, lam):
+        if k < 0:
+            return 0.0
+        log_p = k * math.log(lam) - lam - math.lgamma(k + 1)
+        return math.exp(log_p)
+    
+    probs = []
+    for h in range(9):
+        for a in range(9):
+            p = poisson_pmf(h, lambda_home) * poisson_pmf(a, lambda_away)
+            if p >= 0.001:
+                probs.append((h, a, p))
+    probs.sort(key=lambda x: -x[2])
+    top3 = probs[:3]
+    predicted_score = f"{top3[0][0]}-{top3[0][1]}"
+    
+    # BTTS (双方进球概率)
+    btts_prob = sum(p[2] for p in probs if p[0] > 0 and p[1] > 0)
+    
+    # O/U 2.5
+    over_25_prob = sum(p[2] for p in probs if p[0] + p[1] > 2)
     ou_total = match.get("total_over_close", "2.5")
-    if expected_total > 2.5:
+    if over_25_prob > 0.5:
         ou = f"Over {ou_total}"
-        ou_note = f"高总分 ({expected_total})"
-    elif expected_total > 1.8:
-        ou = f"Over {ou_total}"
-        ou_note = f"中高总分 ({expected_total})"
     else:
         ou = f"Under {ou_total}"
-        ou_note = f"低总分 ({expected_total})"
-
-    btts = "Yes" if λ_home > 0.8 and λ_away > 0.5 and raw_draw < 0.4 else "No"
     
     return {
         "direction": direction,
         "stars": stars,
         "confidence_score": round(confidence_raw, 3),
-        "predicted_score": score_display,  # "2-0 (15%) / 3-0 (13%) / 1-0 (12%)"
-        "expected_goals_home": round(λ_home, 2),
-        "expected_goals_away": round(λ_away, 2),
-        "expected_goals_total": expected_total,
-        "top3_scores": top3_scores,  # [{score, prob}, ...]
-        "score_bands": score_bands,
+        "predicted_score": predicted_score,
+        "poisson_top3": [
+            {"score": f"{h}-{a}", "prob": round(p, 4)} for h, a, p in top3
+        ],
+        "lambda_home": round(lambda_home, 2),
+        "lambda_away": round(lambda_away, 2),
         "over_under": f"{ou} @ {match.get('total_over_close','')}" if match.get('total_over_close','') else f"{ou}",
-        "btts": btts,
+        "btts": "Yes" if btts_prob > 0.5 else "No",
         "reasoning_factors": {
             "home_ml_true_prob": round(hp, 3),
             "draw_true_prob": round(dp, 3),
@@ -634,23 +567,15 @@ def main():
     
     # 预测
     predictions = []
-    for m in sorted(future, key=lambda x: x.get("time_to_kickoff_h", 0)):
-        if -6 <= m.get("time_to_kickoff_h", 24) <= 30:  # 只预测未来 30h
+    for m in sorted(future, key=lambda x: x.get("time_to_kickoff_h", 0))[:5]:  # 最多 5 场
+        if -24 <= m.get("time_to_kickoff_h", 24) <= 24:  # 只预测未来 24h 内
             pred = calculate_prediction(m)
-            # display 字段：LLM 直接原样输出，不再自行格式化
-            # match_display = "主队 vs 客队"，score_display = "主队进球-客队进球"
-            # direction 中的队名与 match_display 一致
-            home_name = m["home"]
-            away_name = m["away"]
             predictions.append({
                 "match": m["name"],
-                "home": home_name,
-                "away": away_name,
+                "home": m["home"],
+                "away": m["away"],
                 "kickoff_utc": m["kickoff_utc"],
                 "time_to_kickoff_h": m["time_to_kickoff_h"],
-                "match_display": f"{home_name} vs {away_name}",
-                "score_display": pred["predicted_score"],
-                "direction_display": pred["direction"],
                 **pred
             })
     
@@ -683,8 +608,8 @@ def main():
     print(f"   投注热门正确率: {calibration.get('odds_accuracy',0)*100:.0f}% ({calibration.get('favored_won',0)}/{calibration.get('favored_by_odds',0)})", file=sys.stderr)
     print(f"🔥 待预测: {len(predictions)} 场", file=sys.stderr)
     for p in predictions:
-        eg = p.get('expected_goals_total', '?')
-        print(f"  {p.get('match_display', p['match'])} | {p['direction']} {p['stars']} | λ={eg} | {p['predicted_score']}", file=sys.stderr)
+        poisson_str = " / ".join(f"{t['score']}({t['prob']:.0%})" for t in p.get('poisson_top3', [])[:3])
+        print(f"  {p['match']} | {p['direction']} {p['stars']} | {p['predicted_score']} | λ={p.get('lambda_home',0)}/{p.get('lambda_away',0)} | {poisson_str}", file=sys.stderr)
     print(f"{'='*60}", file=sys.stderr)
 
 if __name__ == "__main__":

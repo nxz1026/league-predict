@@ -1,0 +1,7 @@
+# world-cup-predict skill — LLM 配置
+# 改这里切换 provider/model，SKILL.md 和 cron jobs.json 都从这里读
+# base_url / api_key 在 ~/.hermes/config.yaml 的 providers 段（不要在这里重复写密钥）
+
+llm:
+  provider: Api.openmodel.ai
+  model: deepseek-v4-flash
