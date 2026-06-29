@@ -14,10 +14,13 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 # ── 配置 ──────────────────────────────────────
-FOOTBALL_DIR = Path("/root/football")
+# Use repo root as base (works on GHA and locally)
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_REPO_DIR = _SCRIPT_DIR.parent
+FOOTBALL_DIR = _REPO_DIR
 PREDICTIONS_DIR = FOOTBALL_DIR / "predictions"
 RESULTS_DIR = FOOTBALL_DIR / "results"
-TRENDS_FILE = Path("/root/.hermes/skills/productivity/world-cup-predict/references/tournament-trends.md")
+TRENDS_FILE = _REPO_DIR / "references" / "tournament-trends.md"
 ESPN_URL_TEMPLATE = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates={dates}&limit=50"
 
 # ── 权重 (P2 算法核心) ──────────────────────────
