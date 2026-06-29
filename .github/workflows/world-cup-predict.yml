@@ -24,10 +24,10 @@ jobs:
         run: pip install requests
 
       - name: Run prediction
-        run: python3 scripts/predict_wc.py > /tmp/predict_output.txt 2>&1 || (cat /tmp/predict_output.txt && exit 1)
+        run: python3 scripts/predict_wc.py > /tmp/predict_output.txt 2>/tmp/predict_stderr.txt
 
-      - name: Show prediction output
-        run: cat /tmp/predict_output.txt
+      - name: Show stderr (debug)
+        run: cat /tmp/predict_stderr.txt
 
       - name: Format email
         id: format
@@ -35,28 +35,35 @@ jobs:
         run: |
           python3 << 'PYEOF'
           import json, sys
+          from datetime import datetime, timezone, timedelta
+
+          # Read ONLY stdout (clean JSON, no log lines)
           output = open('/tmp/predict_output.txt').read().strip()
           if not output:
-              print('ERROR: No output')
+              print('ERROR: No JSON output')
               sys.exit(1)
-          json_start = output.rfind('{')
-          if json_start == -1:
-              print('ERROR: No JSON found')
+
+          try:
+              data = json.loads(output)
+          except json.JSONDecodeError as e:
+              print(f'JSON parse error: {e}')
+              print(f'Output: {output[:500]}...')
               sys.exit(1)
-          decoder = json.JSONDecoder()
-          data, _ = decoder.raw_decode(output[json_start:])
-          from datetime import datetime, timezone, timedelta
+
+          # Format email body
           bjt = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M')
           lines_out = []
           lines_out.append(f"⚽ 世界杯预测 | {bjt}")
           lines_out.append("=" * 30)
           lines_out.append("")
+
           cal = data.get('calibration', {})
           if cal.get('total_matches', 0) > 0:
               lines_out.append(f"📊 校准：{cal['total_matches']}场 | 主胜 {cal.get('home_win_rate',0)*100:.0f}% 平 {cal.get('draw_rate',0)*100:.0f}% 客胜 {cal.get('away_win_rate',0)*100:.0f}%")
               if cal.get('odds_accuracy', 0) > 0:
                   lines_out.append(f"   热门正确率：{cal['odds_accuracy']*100:.0f}%")
               lines_out.append("")
+
           preds = data.get('predictions', [])
           if not preds:
               lines_out.append("📌 未来 24h 无待预测比赛")
@@ -70,16 +77,19 @@ jobs:
                   lines_out.append(f"   比分：{poisson_str}")
                   lines_out.append(f"   λ：{p.get('lambda_home',0)}/{p.get('lambda_away',0)} | {p.get('over_under','')} | BTTS {p.get('btts','')}")
                   lines_out.append("")
+
           email_body = "\n".join(lines_out)
-          with open('/tmp/email_body.txt', 'w') as f:
-              f.write(email_body)
+
+          # Set outputs via GITHUB_OUTPUT
+          github_output = '/tmp/github_output.txt'
+          with open(github_output, 'w') as f:
+              subject = f"⚽ 世界杯预测 {datetime.now(timezone(timedelta(hours=8))).strftime('%m/%d')}"
+              f.write(f"subject={subject}\n")
+              f.write(f"body<<EOF\n{email_body}\nEOF\n")
+
           print(email_body)
           PYEOF
-          echo "subject=⚽ 世界杯预测 $(TZ=Asia/Shanghai date +%m/%d)" >> "$GITHUB_OUTPUT"
-          echo "body<<EOF" >> "$GITHUB_OUTPUT"
-          cat /tmp/email_body.txt >> "$GITHUB_OUTPUT"
-          echo "" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          cat /tmp/github_output.txt >> "$GITHUB_OUTPUT"
 
       - name: Send email
         uses: dawidd6/action-send-mail@v3
