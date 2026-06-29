@@ -40,13 +40,22 @@ jobs:
               print("ERROR: No output from prediction script")
               sys.exit(1)
           
+          # Find the first { which starts the JSON object
+          json_start = output.find('{')
+          if json_start == -1:
+              print("ERROR: No JSON object found in output")
+              print(f"Output was: {output[:500]}...")
+              sys.exit(1)
+          
+          json_str = output[json_start:]
+          
           # Use raw_decode to parse only the first JSON object
           decoder = json.JSONDecoder()
           try:
-              data, _ = decoder.raw_decode(output)
+              data, _ = decoder.raw_decode(json_str)
           except json.JSONDecodeError as e:
               print(f"JSON parse error: {e}")
-              print(f"Output was: {output[:500]}...")
+              print(f"JSON was: {json_str[:500]}...")
               sys.exit(1)
           
           # Format email body
