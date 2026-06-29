@@ -71,11 +71,13 @@ jobs:
               lines_out.append(f"🔥 待预测：{len(preds)} 场")
               lines_out.append("")
               for p in preds:
-                  poisson_str = " / ".join(f"{t['score']}({t['prob']:.0%})" for t in p.get('poisson_top3', [])[:3])
+                  top3 = p.get('top3_scores', [])[:3]
+                  poisson_str = " / ".join(f"{t['score']}({t['prob']*100:.0f}%)" for t in top3)
                   lines_out.append(f"🏟 {p['match']}")
                   lines_out.append(f"   方向：{p['direction']} {p['stars']}")
-                  lines_out.append(f"   比分：{poisson_str}")
-                  lines_out.append(f"   λ：{p.get('lambda_home',0)}/{p.get('lambda_away',0)} | {p.get('over_under','')} | BTTS {p.get('btts','')}")
+                  if poisson_str:
+                      lines_out.append(f"   比分：{poisson_str}")
+                  lines_out.append(f"   xG：{p.get('expected_goals_home',0)}/{p.get('expected_goals_away',0)} | {p.get('over_under','')} | BTTS {p.get('btts','')}")
                   lines_out.append("")
 
           email_body = "\n".join(lines_out)
