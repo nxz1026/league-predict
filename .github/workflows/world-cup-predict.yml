@@ -98,12 +98,22 @@ jobs:
                       lines_out.append(f'   {p.get("over_under","")} | BTTS {p.get("btts","")}')
                       lines_out.append('')
 
+          # ── 回填结果（过去24h已结束比赛） ────────────
+          pm = data.get('past_matches', [])
+          if pm:
+              lines_out.append('')
+              lines_out.append(f'📋 回填：{len(pm)} 场')
+              for m in pm:
+                  display = m.get('name', f"{m.get('away','?')} vs {m.get('home','?')}")
+                  sc = m.get('score', '?')
+                  lines_out.append(f'   {display} → {sc}')
+
           email_body = '\n'.join(lines_out)
 
           github_output = os.environ.get('GITHUB_OUTPUT', '/tmp/github_output.txt')
           with open(github_output, 'a') as f:
-              subject = f'⚽ 世界杯预测 {datetime.now(timezone(timedelta(hours=8))).strftime("%m/%d")}'
-              f.write(f'subject={subject}\n')
+              day = datetime.now(timezone(timedelta(hours=8))).strftime('%m/%d')
+              f.write(f'subject={day}\n')
               f.write(f'body<<EOF\n{email_body}\nEOF\n')
 
           print(email_body)
