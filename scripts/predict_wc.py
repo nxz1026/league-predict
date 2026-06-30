@@ -388,11 +388,18 @@ def to_cn(name):
 
 
 def form_to_score(form_str):
-    """'DWDDW' → 0-1, W=3, D=1, L=0"""
+    """'DWDDW' → 0-1, W=3, D=1, L=0，带时间衰减（最近比赛权重更高）"""
     if not form_str:
         return 0.5
-    score = sum(3 if c == 'W' else 1 if c == 'D' else 0 for c in form_str)
-    return score / (len(form_str) * 3)
+    total_weight = 0
+    weighted_sum = 0
+    # 时间衰减：从左到右（最老→最新），最新权重最高
+    for i, c in enumerate(form_str):
+        w = 1.0 + 0.3 * i  # 最后一场权重 = 1.0 + 0.3*4 = 2.2
+        score = 3 if c == 'W' else 1 if c == 'D' else 0
+        weighted_sum += score * w
+        total_weight += w * 3
+    return weighted_sum / total_weight if total_weight > 0 else 0.5
 
 
 def record_to_score(records):
@@ -574,6 +581,62 @@ def dixon_coles_match_probs(lambda_h, lambda_a, rho=DC_RHO, max_goals=8):
         "away_win": round(away_win_p, 4),
         "score_probs": score_probs[:12],  # top 12 scores
     }
+
+
+# ─── Dixon-Coles ρ 拟合（从历史比分） ────────
+def fit_dc_rho(past_matches, rho_min=-0.3, rho_max=0.5, step=0.005):
+    """
+    从历史比分数据拟合 Dixon-Coles ρ 参数。
+    使用网格搜索最大化对数似然。
+
+    Args:
+        past_matches: 已结束比赛列表，需要含 "score" 字段
+        rho_min: 搜索下限
+        rho_max: 搜索上限
+        step: 搜索步长
+
+    Returns:
+        float: 最优 ρ 值
+    """
+    scores = []
+    for m in past_matches:
+        score = m.get("score") or m.get("result", "")
+        if not score or "-" not in str(score):
+            continue
+        try:
+            parts = str(score).split("-")
+            h, a = int(parts[0]), int(parts[1])
+            scores.append((h, a))
+        except (ValueError, IndexError):
+            continue
+
+    if len(scores) < 20:
+        log(f"ρ fit: only {len(scores)} matches with scores (need 20+), using default DC_RHO={DC_RHO}")
+        return DC_RHO
+
+    # 用总体均值估算 λ 参数
+    all_h = [s[0] for s in scores]
+    all_a = [s[1] for s in scores]
+    avg_h = sum(all_h) / len(scores)
+    avg_a = sum(all_a) / len(scores)
+
+    # 网格搜索最大化对数似然
+    best_rho = DC_RHO
+    best_ll = -float("inf")
+    rho = rho_min
+    while rho <= rho_max:
+        ll = 0.0
+        for h, a in scores:
+            p = dixon_coles_pmf(h, a, avg_h, avg_a, rho)
+            if p > 1e-10:
+                ll += math.log(p)
+        if ll > best_ll:
+            best_ll = ll
+            best_rho = rho
+        rho += step
+
+    log(f"ρ fit: {len(scores)} matches, λ_h={avg_h:.2f} λ_a={avg_a:.2f}, ρ={best_rho:.3f} (LL={best_ll:.1f})")
+    return round(best_rho, 3)
 
 
 # ─── Onside 4 信号模型 ─────────────────────────
@@ -1130,7 +1193,8 @@ def parse_events(events, now_utc=None):
 
 # ─── 主预测函数（Onside 4 信号 + Dixon-Coles） ──
 def calculate_prediction(match, weights=None, calibration_offset=None,
-                         fifa_rankings=None, host_country=None, use_dixon_coles=True):
+                         fifa_rankings=None, host_country=None, use_dixon_coles=True,
+                         dc_rho=DC_RHO):
     """
     Onside 4 信号 + Dixon-Coles 预测 → 方向 + 信心 + 比分预测 + 95% CI
     
@@ -1259,7 +1323,7 @@ def calculate_prediction(match, weights=None, calibration_offset=None,
     
     # ── Dixon-Coles 或独立泊松比分预测 ──
     if use_dixon_coles:
-        dc_result = dixon_coles_match_probs(lambda_home, lambda_away, rho=DC_RHO)
+        dc_result = dixon_coles_match_probs(lambda_home, lambda_away, rho=dc_rho)
         top3 = [(s[0], s[1], round(s[2], 4)) for s in dc_result["score_probs"][:3]]
         predicted_score = f"{top3[0][0]}-{top3[0][1]}"
         
@@ -1305,7 +1369,7 @@ def calculate_prediction(match, weights=None, calibration_offset=None,
         "over_under": f"{ou} @ {match.get('total_over_close','')}" if match.get('total_over_close','') else f"{ou}",
         "btts": "Yes" if btts_prob > 0.5 else "No",
         "dixon_coles_used": use_dixon_coles,
-        "dixon_coles_rho": DC_RHO if use_dixon_coles else None,
+        "dixon_coles_rho": dc_rho if use_dixon_coles else None,
         "onside_signals": onside,
         "reasoning_factors": {
             "home_ml_true_prob": round(hp, 3),
@@ -1798,6 +1862,12 @@ def main():
     
     # ── 预测 ──────────────────────────────────────
     predictions = []
+
+    # ── Dixon-Coles ρ 拟合 ──
+    fitted_rho = fit_dc_rho(historical_past if len(historical_past) >= 20 else past)
+    log(f"Dixon-Coles ρ: fitted={fitted_rho:.3f} (hardcoded={DC_RHO})")
+    if use_dc and fitted_rho != DC_RHO:
+        log(f"  → Using fitted ρ={fitted_rho} (differs from default {DC_RHO})")
     for m in sorted(future, key=lambda x: x.get("time_to_kickoff_h", 0))[:5]:
         if -24 <= m.get("time_to_kickoff_h", 24) <= 24:
             pred = calculate_prediction(
@@ -1806,6 +1876,7 @@ def main():
                 fifa_rankings=fifa_rankings,
                 host_country=host_country,
                 use_dixon_coles=use_dc,
+                dc_rho=fitted_rho,
             )
             predictions.append({
                 "match": m["name"],
@@ -1860,7 +1931,7 @@ def main():
         "tournament_type": tournament_type,
         "data_source": data_source,
         "dixon_coles_enabled": use_dc,
-        "dixon_coles_rho": DC_RHO if use_dc else None,
+        "dixon_coles_rho": fitted_rho if use_dc else None,
         "calibration": calibration,
         "calibration_offset": calibration_offset,
         "past_matches": past,
