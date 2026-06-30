@@ -22,7 +22,7 @@ v3.0 改进（2026-06-30）：
 输出: JSON 写入 predictions/prediction_YYYY-MM-DD_HH.json
 """
 import json, urllib.request, gzip, os, sys, time, math, random
-import numpy as np
+
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -77,18 +77,18 @@ DYNAMIC_WEIGHTS_TEMPLATES = {
 
 
 # ── P4 淘汰赛阶段检测 ──────────────────────────────
-def adjust_for_stage(draw_prob, match_info):
+def adjust_for_stage(draw_strength, match_info):
     """淘汰赛阶段降低平局概率（含加时/点球）"""
     stage = match_info.get('stage', '')
     if stage in KNOCKOUT_STAGES:
-        return draw_prob * 0.7
-    return draw_prob
+        return draw_strength * 0.7
+    return draw_strength
 
 
 # ── P5 动态权重调整 ────────────────────────────────
 def compute_dynamic_weights(match):
     """根据可用数据动态调整权重"""
-    has_odds = match.get('home_ml_implied') is not None
+    has_odds = match.get('home_ml_implied') is not None or match.get('draw_implied') is not None
     has_form = bool(match.get('home_form') or match.get('away_form'))
     has_record = bool(match.get('home_record') or match.get('away_record'))
     
@@ -281,8 +281,8 @@ def compute_calibration_offset(past_matches):
     # P2: 使用市场隐含概率均值做基准（≥10场赔率数据时）
     matches_with_odds = [m for m in past_matches if m.get('home_ml_implied') is not None and m.get('draw_implied') is not None]
     if len(matches_with_odds) >= 10:
-        baseline_home = np.mean([m['home_ml_implied'] for m in matches_with_odds])
-        baseline_draw = np.mean([m['draw_implied'] for m in matches_with_odds])
+        baseline_home = sum(m['home_ml_implied'] for m in matches_with_odds) / len(matches_with_odds)
+        baseline_draw = sum(m['draw_implied'] for m in matches_with_odds) / len(matches_with_odds)
         baseline_away = 1 - baseline_home - baseline_draw
         calibration_market_baseline = True
         log(f"Calibration: using market implied baseline (n={len(matches_with_odds)} odds)")
@@ -649,28 +649,6 @@ def dixon_coles_match_probs(lambda_h, lambda_a, rho=DC_RHO, max_goals=8):
         "score_probs": score_probs[:12],  # top 12 scores
     }
 
-
-# ─── Dixon-Coles ρ 校准（简化 Brier score 网格搜索） ────────
-def calibrate_rho(past_matches, lambda_home_default=1.3, lambda_away_default=1.1):
-    """用历史数据网格搜索最优 ρ ∈ [0.05, 0.35]"""
-    from itertools import product
-    best_rho, best_error = 0.2, float('inf')
-    for rho in [round(x * 0.01, 2) for x in range(5, 36, 1)]:
-        error = 0
-        count = 0
-        for m in past_matches:
-            if not m.get('score'): continue
-            try:
-                hs, aws = map(int, m['score'].split('-'))
-                lam_h = m.get('lambda_home', lambda_home_default)
-                lam_a = m.get('lambda_away', lambda_away_default)
-                pred = dixon_coles_pmf(hs, aws, lam_h, lam_a, rho)
-                error += (1 - pred) ** 2  # 简化 Brier score
-                count += 1
-            except: pass
-        if count >= 5 and error / count < best_error:
-            best_error, best_rho = error / count, rho
-    return best_rho
 
 
 # ─── Dixon-Coles ρ 拟合（从历史比分） ────────
@@ -1236,6 +1214,25 @@ def parse_events(events, now_utc=None):
         h_rs = record_to_score(home_records)
         a_rs = record_to_score(away_records)
         
+        # ── 提取 stage（小组赛/淘汰赛） ──
+        stage_raw = comps.get("stage", "") or ev.get("stage", "") or ev.get("season", {}).get("type", "")
+        # ESPN API 返回的 stage 可能是整数 ID（如 13801），需要映射
+        ESPN_STAGE_MAP = {
+            13800: "group", 13801: "group", 13802: "group",
+            20000: "Round of 16", 20001: "Quarter-final", 20002: "Semi-final",
+            20003: "Third-place", 20004: "Final",
+            "GROUP_STAGE": "group", "KNOCKOUT_STAGE": "Round of 16",
+            "ROUND_OF_16": "Round of 16", "QUARTER_FINALS": "Quarter-final",
+            "SEMI_FINALS": "Semi-final", "FINAL": "Final", "THIRD_PLACE": "Third-place",
+        }
+        stage = ESPN_STAGE_MAP.get(stage_raw, "")
+        if not stage:
+            # 推断：非 schedule 且已过中场时间的比赛可能是淘汰赛
+            if completed and time_to < 0 and "SCHEDULE" not in status:
+                stage = "group"  # 默认小组赛
+            else:
+                stage = "group"
+        
         rec = {
             "name": name,
             "status": status,
@@ -1264,6 +1261,7 @@ def parse_events(events, now_utc=None):
             "home_true_prob": round(home_true, 4) if home_true else None,
             "draw_true_prob": round(draw_true, 4) if draw_true else None,
             "away_true_prob": round(away_true, 4) if away_true else None,
+            "stage": stage,
             "spread_home_line": spread_h_line,
             "spread_home_close_odds": spread_h_odds,
             "spread_movement_score": round(spread_move, 3),
@@ -1978,11 +1976,7 @@ def main():
     if use_dc and fitted_rho != DC_RHO:
         log(f"  → Using fitted ρ={fitted_rho} (differs from default {DC_RHO})")
     
-    # P3: calibrate_rho — 用 Brier score 网格搜索最优 ρ
-    calibrated_rho = calibrate_rho(historical_past if len(historical_past) >= 5 else past)
-    log(f"Dixon-Coles ρ (calibrated): {calibrated_rho}")
-    # 取两者均值作为最终 ρ
-    final_rho = round((fitted_rho + calibrated_rho) / 2, 3) if use_dc else DC_RHO
+    final_rho = fitted_rho
     log(f"Dixon-Coles ρ (final): {final_rho}")
     for m in sorted(future, key=lambda x: x.get("time_to_kickoff_h", 0))[:5]:
         if -24 <= m.get("time_to_kickoff_h", 24) <= 24:
@@ -2000,6 +1994,7 @@ def main():
                 "away": m["away"],
                 "kickoff_utc": m["kickoff_utc"],
                 "time_to_kickoff_h": m["time_to_kickoff_h"],
+                "stage": m.get("stage", "group"),
                 **pred
             })
     

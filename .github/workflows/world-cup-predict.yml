@@ -21,7 +21,7 @@ jobs:
           cache: 'pip'
 
       - name: Install dependencies
-        run: pip install requests
+        run: echo "No external dependencies needed (stdlib only)"
 
       - name: Cleanup old predictions (retain 7 days)
         run: python3 scripts/predict_wc.py --cleanup
