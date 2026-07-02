@@ -1148,8 +1148,12 @@ def parse_events(events, now_utc=None):
     for ev in events:
         en_name = ev.get("name", "")
         if " at " in en_name:
+            # ESPN: "Away at Home" → 显示 "主队 vs 客队"
             away_en, home_en = en_name.split(" at ", 1)
-            name = f"{to_cn(away_en)} vs {to_cn(home_en)}"
+            name = f"{to_cn(home_en)} vs {to_cn(away_en)}"
+        elif " vs " in en_name:
+            # 偶尔出现 "Home vs Away" 格式
+            name = to_cn(en_name)
         else:
             name = to_cn(en_name)
         comps = ev.get("competitions", [{}])[0]
