@@ -22,7 +22,6 @@ v3.0 改进（2026-06-30）：
 输出: JSON 写入 predictions/prediction_YYYY-MM-DD_HH.json
 """
 import json, urllib.request, gzip, os, sys, time, math, random
-
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -54,55 +53,6 @@ ONSIDE_WEIGHTS = {
     "host_advantage":  0.15,  # 东道主优势
     "confederation":   0.20,  # 足联实力
 }
-
-# ── P4 淘汰赛配置 ──────────────────────────────────
-KNOCKOUT_STAGES = {'Round of 16', 'Quarter-final', 'Semi-final', 'Final', 'Third-place'}
-
-# ── P5 动态权重模板 ────────────────────────────────
-DYNAMIC_WEIGHTS_TEMPLATES = {
-    "full": {
-        "home_ml_implied": 0.30, "draw_ml_implied": 0.25, 
-        "home_form": 0.12, "away_form": 0.08,
-        "home_record": 0.08, "away_record": 0.07, "spread_move": 0.10
-    },
-    "form_record": {
-        "home_form": 0.30, "away_form": 0.20, 
-        "home_record": 0.25, "away_record": 0.25
-    },
-    "single": {
-        # filled dynamically based on whether form or record is available
-    },
-    "fallback": {"home_form": 0.5, "away_form": 0.5}
-}
-
-
-# ── P4 淘汰赛阶段检测 ──────────────────────────────
-def adjust_for_stage(draw_strength, match_info):
-    """淘汰赛阶段降低平局概率（含加时/点球）"""
-    stage = match_info.get('stage', '')
-    if stage in KNOCKOUT_STAGES:
-        return draw_strength * 0.7
-    return draw_strength
-
-
-# ── P5 动态权重调整 ────────────────────────────────
-def compute_dynamic_weights(match):
-    """根据可用数据动态调整权重"""
-    has_odds = match.get('home_ml_implied') is not None or match.get('draw_implied') is not None
-    has_form = bool(match.get('home_form') or match.get('away_form'))
-    has_record = bool(match.get('home_record') or match.get('away_record'))
-    
-    if has_odds:
-        return dict(DYNAMIC_WEIGHTS_TEMPLATES["full"])
-    elif has_form and has_record:
-        return dict(DYNAMIC_WEIGHTS_TEMPLATES["form_record"])
-    elif has_form or has_record:
-        key = "home_form" if has_form else "home_record"
-        key2 = "away_form" if has_form else "away_record"
-        return {key: 0.5, key2: 0.5}
-    else:
-        return dict(DYNAMIC_WEIGHTS_TEMPLATES["fallback"])
-
 
 # ── 足联实力系数 ──────────────────────────────
 CONFEDERATION_STRENGTH = {
@@ -247,7 +197,7 @@ def load_historical_past_matches(days=30):
 def compute_calibration_offset(past_matches):
     """
     从累积 past_matches 计算 calibration 修正因子。
-    用实际赛果分布 vs 市场隐含概率均值(≥10场)或均匀分布(1/3)做软修正。
+    用实际赛果分布 vs 均匀分布(1/3)的比率做软修正。
     返回 dict 或 None（样本不足时）。
     """
     if len(past_matches) < 5:
@@ -278,37 +228,20 @@ def compute_calibration_offset(past_matches):
     actual_draw_rate = draws / total
     actual_away_rate = away_wins / total
 
-    # P2: 使用市场隐含概率均值做基准（≥10场赔率数据时）
-    matches_with_odds = [m for m in past_matches if m.get('home_ml_implied') is not None and m.get('draw_implied') is not None]
-    if len(matches_with_odds) >= 10:
-        baseline_home = sum(m['home_ml_implied'] for m in matches_with_odds) / len(matches_with_odds)
-        baseline_draw = sum(m['draw_implied'] for m in matches_with_odds) / len(matches_with_odds)
-        baseline_away = 1 - baseline_home - baseline_draw
-        calibration_market_baseline = True
-        log(f"Calibration: using market implied baseline (n={len(matches_with_odds)} odds)")
-    else:
-        baseline_home = baseline_draw = baseline_away = 1/3
-        calibration_market_baseline = False
-        log(f"Calibration: using uniform 1/3 baseline (only {len(matches_with_odds)} odds data)")
-
-    # 修正因子：实际分布 vs baseline 的比率，限制在 [0.5, 2.0] 避免极端
-    home_correction = max(0.5, min(2.0, actual_home_rate / baseline_home)) if baseline_home > 0 else 1.0
-    draw_correction = max(0.5, min(2.0, actual_draw_rate / baseline_draw)) if baseline_draw > 0 else 1.0
-    away_correction = max(0.5, min(2.0, actual_away_rate / baseline_away)) if baseline_away > 0 else 1.0
+    # 修正因子：实际分布 vs 均匀分布(1/3)的比率
+    # 限制在 [0.5, 2.0] 避免极端
+    home_correction = max(0.5, min(2.0, actual_home_rate / (1/3)))
+    draw_correction = max(0.5, min(2.0, actual_draw_rate / (1/3)))
+    away_correction = max(0.5, min(2.0, actual_away_rate / (1/3)))
 
     return {
         "home_correction": round(home_correction, 3),
         "draw_correction": round(draw_correction, 3),
         "away_correction": round(away_correction, 3),
         "sample_size": total,
-        "odds_sample_size": len(matches_with_odds),
-        "calibration_market_baseline": calibration_market_baseline,
         "actual_home_rate": round(actual_home_rate, 3),
         "actual_draw_rate": round(actual_draw_rate, 3),
         "actual_away_rate": round(actual_away_rate, 3),
-        "baseline_home": round(baseline_home, 3),
-        "baseline_draw": round(baseline_draw, 3),
-        "baseline_away": round(baseline_away, 3),
     }
 
 
@@ -648,7 +581,6 @@ def dixon_coles_match_probs(lambda_h, lambda_a, rho=DC_RHO, max_goals=8):
         "away_win": round(away_win_p, 4),
         "score_probs": score_probs[:12],  # top 12 scores
     }
-
 
 
 # ─── Dixon-Coles ρ 拟合（从历史比分） ────────
@@ -1148,12 +1080,9 @@ def parse_events(events, now_utc=None):
     for ev in events:
         en_name = ev.get("name", "")
         if " at " in en_name:
-            # ESPN: "Away at Home" → 显示 "主队 vs 客队"
+            # ESPN: "Away at Home" → display "主队 vs 客队"
             away_en, home_en = en_name.split(" at ", 1)
             name = f"{to_cn(home_en)} vs {to_cn(away_en)}"
-        elif " vs " in en_name:
-            # 偶尔出现 "Home vs Away" 格式
-            name = to_cn(en_name)
         else:
             name = to_cn(en_name)
         comps = ev.get("competitions", [{}])[0]
@@ -1179,7 +1108,7 @@ def parse_events(events, now_utc=None):
         away_score = away.get("score", "0") if away else "0"
         
         home_form = home.get("form", "") if home else ""
-        away_form = away.get("form", "") if away else ""
+        away_form = away.get("form", "") if home else ""
         home_records = home.get("records", []) if home else []
         away_records = away.get("records", []) if away else []
         
@@ -1218,25 +1147,6 @@ def parse_events(events, now_utc=None):
         h_rs = record_to_score(home_records)
         a_rs = record_to_score(away_records)
         
-        # ── 提取 stage（小组赛/淘汰赛） ──
-        stage_raw = comps.get("stage", "") or ev.get("stage", "") or ev.get("season", {}).get("type", "")
-        # ESPN API 返回的 stage 可能是整数 ID（如 13801），需要映射
-        ESPN_STAGE_MAP = {
-            13800: "group", 13801: "group", 13802: "group",
-            20000: "Round of 16", 20001: "Quarter-final", 20002: "Semi-final",
-            20003: "Third-place", 20004: "Final",
-            "GROUP_STAGE": "group", "KNOCKOUT_STAGE": "Round of 16",
-            "ROUND_OF_16": "Round of 16", "QUARTER_FINALS": "Quarter-final",
-            "SEMI_FINALS": "Semi-final", "FINAL": "Final", "THIRD_PLACE": "Third-place",
-        }
-        stage = ESPN_STAGE_MAP.get(stage_raw, "")
-        if not stage:
-            # 推断：非 schedule 且已过中场时间的比赛可能是淘汰赛
-            if completed and time_to < 0 and "SCHEDULE" not in status:
-                stage = "group"  # 默认小组赛
-            else:
-                stage = "group"
-        
         rec = {
             "name": name,
             "status": status,
@@ -1265,7 +1175,6 @@ def parse_events(events, now_utc=None):
             "home_true_prob": round(home_true, 4) if home_true else None,
             "draw_true_prob": round(draw_true, 4) if draw_true else None,
             "away_true_prob": round(away_true, 4) if away_true else None,
-            "stage": stage,
             "spread_home_line": spread_h_line,
             "spread_home_close_odds": spread_h_odds,
             "spread_movement_score": round(spread_move, 3),
@@ -1299,11 +1208,7 @@ def calculate_prediction(match, weights=None, calibration_offset=None,
         use_dixon_coles: 是否使用 Dixon-Coles 模型
     """
     if weights is None:
-        # P5: 动态权重调整
-        weights = compute_dynamic_weights(match)
-        dynamic_weights_used = True
-    else:
-        dynamic_weights_used = False
+        weights = ONSIDE_WEIGHTS
     
     hp = match.get("home_true_prob") or 0.5
     dp = match.get("draw_true_prob") or 0.25
@@ -1348,42 +1253,28 @@ def calculate_prediction(match, weights=None, calibration_offset=None,
     
     sm_capped = max(-0.15, min(0.15, sm))
     
-    # ── 综合评分 ──
+    # ── Onside 4 信号加权评分 ──
+    # 市场信号 (20%): 盘口隐含概率
     market_home = hp
     market_draw = dp
     market_away = ap
-    market_odds_weight = weights.get("market_odds", None)
-    onside_weight = weights.get("fifa_ranking", None) or 0.8  # Onside 信号占比
     
-    if market_odds_weight is not None:
-        # 有赔率数据：市场信号 + Onside信号
-        home_strength = (
-            market_home * market_odds_weight
-            + home_onside * onside_weight
-            + sm_capped * 0.5
-        )
-        away_strength = (
-            market_away * market_odds_weight
-            + away_onside * onside_weight
-            + (-sm_capped) * 0.5
-        )
-        draw_strength = max(0, market_draw * market_odds_weight + 0.15)
-    else:
-        # 无赔率数据：form + record 加权
-        fw_home = weights.get("home_form", 0.25)
-        fw_away = weights.get("away_form", 0.25)
-        frw_home = weights.get("home_record", 0.25)
-        frw_away = weights.get("away_record", 0.25)
-        home_strength = hfs * fw_home + hrs * frw_home + sm_capped * 0.5
-        away_strength = afs * fw_away + ars * frw_away + (-sm_capped) * 0.5
-        draw_strength = max(0, (hrs + ars) * 0.1)
+    # 综合评分 = 市场信号×20% + Onside信号×80%
+    home_strength = (
+        market_home * weights["market_odds"]
+        + home_onside * (1 - weights["market_odds"])
+        + sm_capped * 0.5
+    )
+    away_strength = (
+        market_away * weights["market_odds"]
+        + away_onside * (1 - weights["market_odds"])
+        + (-sm_capped) * 0.5
+    )
+    draw_strength = max(0, market_draw * weights["market_odds"] + 0.15)
     
     # 东道主额外加成
     if host_country and home_en == host_country:
         home_strength += HOST_ADVANTAGE_BOOST
-    
-    # P4: 淘汰赛阶段降低平局概率
-    draw_strength = adjust_for_stage(draw_strength, match)
     
     total = max(home_strength + draw_strength + away_strength, 0.05)
     home_prob = home_strength / total
@@ -1478,7 +1369,6 @@ def calculate_prediction(match, weights=None, calibration_offset=None,
         "lambda_away_ci95": ci_away,
         "over_under": f"{ou} @ {match.get('total_over_close','')}" if match.get('total_over_close','') else f"{ou}",
         "btts": "Yes" if btts_prob > 0.5 else "No",
-        "dynamic_weights_used": dynamic_weights_used,
         "dixon_coles_used": use_dixon_coles,
         "dixon_coles_rho": dc_rho if use_dixon_coles else None,
         "onside_signals": onside,
@@ -1979,9 +1869,6 @@ def main():
     log(f"Dixon-Coles ρ: fitted={fitted_rho:.3f} (hardcoded={DC_RHO})")
     if use_dc and fitted_rho != DC_RHO:
         log(f"  → Using fitted ρ={fitted_rho} (differs from default {DC_RHO})")
-    
-    final_rho = fitted_rho
-    log(f"Dixon-Coles ρ (final): {final_rho}")
     for m in sorted(future, key=lambda x: x.get("time_to_kickoff_h", 0))[:5]:
         if -24 <= m.get("time_to_kickoff_h", 24) <= 24:
             pred = calculate_prediction(
@@ -1990,7 +1877,7 @@ def main():
                 fifa_rankings=fifa_rankings,
                 host_country=host_country,
                 use_dixon_coles=use_dc,
-                dc_rho=final_rho,
+                dc_rho=fitted_rho,
             )
             predictions.append({
                 "match": m["name"],
@@ -1998,7 +1885,6 @@ def main():
                 "away": m["away"],
                 "kickoff_utc": m["kickoff_utc"],
                 "time_to_kickoff_h": m["time_to_kickoff_h"],
-                "stage": m.get("stage", "group"),
                 **pred
             })
     
@@ -2046,7 +1932,7 @@ def main():
         "tournament_type": tournament_type,
         "data_source": data_source,
         "dixon_coles_enabled": use_dc,
-        "dixon_coles_rho": final_rho if use_dc else None,
+        "dixon_coles_rho": fitted_rho if use_dc else None,
         "calibration": calibration,
         "calibration_offset": calibration_offset,
         "past_matches": past,

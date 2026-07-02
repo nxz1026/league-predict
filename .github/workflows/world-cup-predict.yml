@@ -98,28 +98,65 @@ jobs:
                       lines_out.append(f'   {p.get("over_under","")} | BTTS {p.get("btts","")}')
                       lines_out.append('')
 
+          # ── 回填结果（过去24h已结束比赛） ────────────
+          pm = data.get('past_matches', [])
+          if pm:
+              lines_out.append('')
+              lines_out.append(f'📋 回填：{len(pm)} 场')
+              for m in pm:
+                  display = m.get('name', f"{m.get('away','?')} vs {m.get('home','?')}")
+                  sc = m.get('score', '?')
+                  lines_out.append(f'   {display} → {sc}')
+
+          # ── 累积校准信息 ────────────────────────────
+          co = data.get('calibration_offset')
+          if co:
+              lines_out.append('')
+              lines_out.append(f'🔧 累积校准(n={co["sample_size"]}): 主×{co["home_correction"]} 平×{co["draw_correction"]} 客×{co["away_correction"]}')
+              lines_out.append(f'   实际分布: 主 {co["actual_home_rate"]} | 平 {co["actual_draw_rate"]} | 客 {co["actual_away_rate"]}')
+
           email_body = '\n'.join(lines_out)
 
+          # 保存到文件供 webhook 使用
+          with open('/tmp/email_body.txt', 'w') as f:
+              f.write(email_body)
+
+          # 同时输出到 GitHub Actions 日志
+          print(email_body)
+
+          # 设置输出变量
           github_output = os.environ.get('GITHUB_OUTPUT', '/tmp/github_output.txt')
           with open(github_output, 'a') as f:
-              subject = f'⚽ 世界杯预测 {datetime.now(timezone(timedelta(hours=8))).strftime("%m/%d")}'
-              f.write(f'subject={subject}\n')
-              f.write(f'body<<EOF\n{email_body}\nEOF\n')
-
-          print(email_body)
+              day = datetime.now(timezone(timedelta(hours=8))).strftime('%m/%d')
+              f.write(f'subject={day}\n')
           PYEOF
 
-      - name: Send email
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: ${{ secrets.SMTP_HOST }}
-          server_port: ${{ secrets.SMTP_PORT }}
-          username: ${{ secrets.SMTP_USER }}
-          password: ${{ secrets.SMTP_PASSWORD }}
-          subject: "⚽ 世界杯预测 ${{ steps.format.outputs.subject }}"
-          to: ${{ secrets.EMAIL_TO }}
-          from: ${{ secrets.SMTP_USER }}
-          html_body: |
-            <pre style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
-            ${{ steps.format.outputs.body }}
-            </pre>
+      - name: Send webhook
+        shell: bash
+        run: |
+          python3 << 'PYEOF'
+          import json, urllib.request
+
+          body = open('/tmp/email_body.txt').read()
+
+          payload = {
+              "msg_type": "text",
+              "content": {
+                  "text": body
+              }
+          }
+
+          req = urllib.request.Request(
+              'https://open.feishu.cn/open-apis/bot/v2/hook/f9aef5b3-7f08-42e6-84ea-6f980202d6ef',
+              data=json.dumps(payload).encode(),
+              headers={'Content-Type': 'application/json'},
+              method='POST'
+          )
+          resp = urllib.request.urlopen(req)
+          result = json.loads(resp.read())
+          print(f"Webhook response: {result}")
+          if result.get('code') != 0:
+              print(f"Webhook failed: {result.get('msg')}")
+              exit(1)
+          print("Webhook sent successfully")
+          PYEOF
