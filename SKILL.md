@@ -84,6 +84,8 @@ python3 /root/.hermes/scripts/predict_wc.py
 | 平局 ML 赔率 | `odds[0].drawOdds.moneyLine` (如 265) | 三向去水计算 |
 | 亚盘盘口线 | `pointSpread.home.close.line` (如 -0.5) | 区分碾压 vs 接近 |
 | 亚盘水位变化 | `pointSpread.home.open/close.odds` | spread_movement_factor 量化 |
+| 盘口可用性 | `odds_data_available` (bool) | 标记本场是否有 ESPN odds 数据 |
+| 信心度备注 | `confidence_note` (str) | 无盘口时提示"仅基本面参考" |
 
 ### P2 算法：三向加权评分
 
@@ -213,17 +215,20 @@ GET https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?d
 **信心度规则修正**：
 - 信心 ⭐⭐⭐⭐ 及以上 → **必须有 spread 和 total 双信号支持**，缺一不可
 - 盘口模糊（spread open/close 差异 < 10%）→ 最高给 ⭐⭐
+- **无盘口数据（`odds_data_available=false`）→ 信心度 -0.25，并输出 `confidence_note="无盘口数据，仅基本面参考"`**
 - 比分预测改为 Poisson 分布（见步骤 4），输出 top-3 最可能比分 + 概率
 
-#### 输出（5 项）
+#### 输出（7 项）
 
 | 项目 | 说明 | 示例 |
 |------|------|------|
-| 方向+信心 | 推荐方向 + 1-5 星 | Spain 胜 ⭐⭐ |
+| 方向+信心 | 推荐方向 + 1-5 星，无盘口时自动降级 | Spain 胜 ⭐⭐ |
+| 盘口标记 | `odds_data_available` + `confidence_note` | true / 无盘口数据，仅基本面参考 |
 | 比分 top-3 | Poisson 三向最可能比分 + 概率 | 2-1 (18%) / 1-1 (15%) / 3-1 (12%) |
 | 期望进球 λ | 主+客 Poisson λ 之和（0.1 精度） | λ=4.2 |
 | 大小球+线 | Over/Under | Over 2.5 |
 | 双方进球 | Yes/No | No |
+| 复盘备注 | calibration applied / 无盘口提示 | calibration applied (n=66, ...) |
 
 #### 存档
 

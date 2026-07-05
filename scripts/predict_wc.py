@@ -1180,6 +1180,7 @@ def parse_events(events, now_utc=None):
             "spread_movement_score": round(spread_move, 3),
             "total_over_close": tot_o_close.get("odds",""),
             "total_under_close": tot_u_close.get("odds",""),
+            "odds_data_available": bool(odds_raw),
         }
         
         if status in ("STATUS_FULL_TIME", "STATUS_FINAL_PEN", "STATUS_FINAL_ET"):
@@ -1303,6 +1304,14 @@ def calculate_prediction(match, weights=None, calibration_offset=None,
             confidence_raw = (draw_prob_calc - 0.33) * 3
     
     confidence_raw = min(max(confidence_raw, 0.0), 1.0)
+    
+    # ── 盘口数据缺失降级 ──
+    if not match.get("odds_data_available", False):
+        confidence_raw = max(confidence_raw - 0.25, 0.0)
+        confidence_note = "无盘口数据，仅基本面参考"
+    else:
+        confidence_note = None
+    
     if confidence_raw >= 0.90:
         stars = "⭐⭐⭐⭐⭐"
     elif confidence_raw >= 0.72:
@@ -1372,6 +1381,8 @@ def calculate_prediction(match, weights=None, calibration_offset=None,
         "dixon_coles_used": use_dixon_coles,
         "dixon_coles_rho": dc_rho if use_dixon_coles else None,
         "onside_signals": onside,
+        "confidence_note": confidence_note,
+        "odds_data_available": match.get("odds_data_available", False),
         "reasoning_factors": {
             "home_ml_true_prob": round(hp, 3),
             "draw_true_prob": round(dp, 3),
