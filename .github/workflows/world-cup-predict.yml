@@ -92,6 +92,9 @@ jobs:
                       ci_away = p.get('lambda_away_ci95', (0, 0))
                       lines_out.append(f'🏟 {p["match"]}')
                       lines_out.append(f'   方向：{p["direction"]} {p["stars"]}')
+                      lines_out.append(f'   盘口：odds_data_available={p.get("odds_data_available")} | spread_home_line={p.get("spread_home_line")} | total_over_close={p.get("total_over_close")}')
+                      if p.get("confidence_note"):
+                          lines_out.append(f'   ⚠️ {p["confidence_note"]}')
                       if poisson_str:
                           lines_out.append(f'   比分：{poisson_str}')
                       lines_out.append(f'   xG：{lambda_home if (lambda_home := p.get("lambda_home",0)) else 0} [{ci_home[0]}-{ci_home[1]}] / {lambda_away if (lambda_away := p.get("lambda_away",0)) else 0} [{ci_away[0]}-{ci_away[1]}]')
