@@ -263,6 +263,111 @@ def cleanup_old_files(days=7):
     return removed
 
 
+# ─── 赛果留存 ────────────────────────────────────
+def save_results(past_matches):
+    """将已结束比赛结果保存到 results/ 目录，每天一份。"""
+    scored = [m for m in past_matches if m.get("score") and "-" in m.get("score","")]
+    if not scored:
+        return
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    path = RESULTS_DIR / f"result_{today}.json"
+    if path.exists():
+        return  # 当天已存
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        matches = []
+        for m in scored:
+            parts = m["score"].split("-")
+            if len(parts) == 2:
+                matches.append({
+                    "id": m.get("name",""),
+                    "kickoff_utc": m.get("kickoff_utc",""),
+                    "home": m.get("home_en", m.get("home","")),
+                    "away": m.get("away_en", m.get("away","")),
+                    "home_score": int(parts[0]),
+                    "away_score": int(parts[1]),
+                    "status": m.get("status",""),
+                })
+        with open(path, "w") as f:
+            json.dump({"date": today, "matches": matches}, f, indent=2, ensure_ascii=False)
+        log(f"Saved results: {path} ({len(matches)} matches)")
+    except Exception as e:
+        log(f"save_results error: {e}")
+
+
+# ─── 预测回测 ────────────────────────────────────
+def reconcile_predictions(past_matches, days=7):
+    """将历史预测文件中的预测与当前实际赛果比对，返回回测统计。"""
+    # 建立赛果查找表 keyed by match name (Chinese)
+    actuals = {}
+    for m in past_matches:
+        name = m.get("name", "")
+        score = m.get("score", "")
+        if name and score and "-" in score:
+            try:
+                h, a = score.split("-")
+                actuals[name] = (int(h), int(a))
+            except (ValueError, IndexError):
+                pass
+    if not actuals:
+        return None
+
+    cutoff = time.time() - days * 86400
+    correct_dir = correct_score = correct_ou = total = 0
+    details = []
+
+    for f in sorted(PREDICTIONS_DIR.glob("prediction_*.json")):
+        if f.stat().st_mtime < cutoff:
+            continue
+        try:
+            data = json.load(open(f))
+        except Exception:
+            continue
+        for p in data.get("predictions", []):
+            r = actuals.get(p.get("match", ""))
+            if not r:
+                continue
+            h_act, a_act = r
+            total += 1
+            # 方向
+            d = p.get("direction", "")
+            if ("胜" in d and h_act > a_act) or \
+               ("平" in d and h_act == a_act) or \
+               ("胜" not in d and "平" not in d and h_act < a_act):
+                correct_dir += 1
+                dir_ok = True
+            else:
+                dir_ok = False
+            # 比分
+            if p.get("predicted_score", "") == f"{h_act}-{a_act}":
+                correct_score += 1
+            # Over/Under
+            ou = p.get("over_under", "")
+            if "Over" in ou and h_act + a_act > 2.5:
+                correct_ou += 1
+            elif "Under" in ou and h_act + a_act < 2.5:
+                correct_ou += 1
+            details.append({
+                "match": p.get("match",""),
+                "predicted": p.get("predicted_score",""),
+                "actual": f"{h_act}-{a_act}",
+                "direction_correct": dir_ok,
+            })
+
+    if total == 0:
+        return None
+    return {
+        "reconciled": total,
+        "correct_direction": correct_dir,
+        "correct_score": correct_score,
+        "correct_over_under": correct_ou,
+        "direction_accuracy": round(correct_dir / total, 3),
+        "score_accuracy": round(correct_score / total, 3),
+        "over_under_accuracy": round(correct_ou / total, 3),
+        "details": details,
+    }
+
+
 # ── ML 解析 ────────────────────────────────────
 def parse_american_odds(odds_str):
     """解析美式赔率 → 隐含概率 (含 vig)"""
@@ -1190,9 +1295,9 @@ def parse_events(events, now_utc=None):
             "spread_home_line": spread_h_line,
             "spread_home_close_odds": spread_h_odds,
             "spread_movement_score": round(spread_move, 3),
-            "total_over_close": tot_o_close.get("odds",""),
-            "total_under_close": tot_u_close.get("odds",""),
-            "odds_data_available": bool(odds_raw),
+            "total_over_close": tot_o_close.get("line",""),
+            "total_under_close": tot_u_close.get("line",""),
+            "odds_data_available": bool(odds.get("details") or odds.get("drawOdds") or odds.get("pointSpread") or odds.get("total")),
         }
         
         if status in ("STATUS_FULL_TIME", "STATUS_FINAL_PEN", "STATUS_FINAL_ET"):
@@ -1409,7 +1514,7 @@ def calculate_prediction(match, weights=None, calibration_offset=None,
         "lambda_away": round(lambda_away, 2),
         "lambda_home_ci95": ci_home,
         "lambda_away_ci95": ci_away,
-        "over_under": f"{ou} @ {match.get('total_over_close','')}" if match.get('total_over_close','') else f"{ou}",
+        "over_under": f"{ou}",
         "btts": "Yes" if btts_prob > 0.5 else "No",
         "dixon_coles_used": use_dixon_coles,
         "dixon_coles_rho": dc_rho if use_dixon_coles else None,
@@ -1849,6 +1954,7 @@ def main():
     
     past, future, in_prog = parse_events(events, now_utc)
     log(f"Past: {len(past)}, Future: {len(future)}, In progress: {len(in_prog)}")
+    save_results(past)
     
     # ─── FIFA 排名 ─────────────────────────────────
     fifa_rankings = fetch_fifa_rankings()
@@ -1885,6 +1991,9 @@ def main():
             "past_matches": past,
             "predictions": [],
         }
+        reconciliation = reconcile_predictions(past)
+        if reconciliation:
+            output["reconciliation"] = reconciliation
         print(json.dumps(output, indent=2, ensure_ascii=False))
         
         # 仍然保存快照
@@ -1992,6 +2101,10 @@ def main():
         "past_matches": past,
         "predictions": predictions,
     }
+
+    reconciliation = reconcile_predictions(past)
+    if reconciliation:
+        output["reconciliation"] = reconciliation
     
     if monte_carlo_result:
         output["monte_carlo"] = monte_carlo_result
