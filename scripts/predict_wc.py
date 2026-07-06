@@ -1497,6 +1497,7 @@ def calculate_prediction(match, weights=None, calibration_offset=None,
     ci_away = poisson_confidence_interval(lambda_away)
     
     ou_total = match.get("total_over_close", "2.5")
+    ou_total = ou_total.lstrip("ou")
     if over_25_prob > 0.5:
         ou = f"Over {ou_total}"
     else:
