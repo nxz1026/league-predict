@@ -416,15 +416,21 @@ def record_to_score(records):
 
 
 # ── 亚盘 movement 分析 ───────────────────────
-def spread_movement_factor(away_close):
-    """用 away spread close 的 line 判断 market 方向."""
-    if not away_close:
+def spread_movement_factor(away_open, away_close):
+    """用 away spread open→close 的 line movement 判断 market 方向。
+
+    正值 = 盘口向主队移动（away spread open < close，away 弱势加深）
+    负值 = 盘口向客队移动（away spread open > close，away 被看好）
+    """
+    if not away_open or not away_close:
         return 0.0
-    line = away_close.get("line", None)
-    if line is None:
+    open_line = away_open.get("line", None)
+    close_line = away_close.get("line", None)
+    if open_line is None or close_line is None:
         return 0.0
     try:
-        return max(-1.0, min(1.0, float(line) / 3.0))
+        movement = float(close_line) - float(open_line)
+        return max(-1.0, min(1.0, movement / 3.0))
     except (ValueError, TypeError):
         return 0.0
 
@@ -610,15 +616,21 @@ def fit_dc_rho(past_matches, rho_min=-0.3, rho_max=0.5, step=0.005):
         except (ValueError, IndexError):
             continue
 
-    if len(scores) < 20:
-        log(f"ρ fit: only {len(scores)} matches with scores (need 20+), using default DC_RHO={DC_RHO}")
+    n = len(scores)
+    if n < 20:
+        log(f"ρ fit: only {n} matches with scores (need 20+), using default DC_RHO={DC_RHO}")
         return DC_RHO
+
+    # ponytail: scale step by sqrt(100/n) — fewer matches = coarser grid, more = finer
+    adaptive_step = step * math.sqrt(100.0 / n)
 
     # 用总体均值估算 λ 参数
     all_h = [s[0] for s in scores]
     all_a = [s[1] for s in scores]
-    avg_h = sum(all_h) / len(scores)
-    avg_a = sum(all_a) / len(scores)
+    avg_h = sum(all_h) / n
+    avg_a = sum(all_a) / n
+
+    log(f"ρ fit: {n} matches, step={adaptive_step:.5f} (~{int((rho_max-rho_min)/adaptive_step)} candidates)")
 
     # 网格搜索最大化对数似然
     best_rho = DC_RHO
@@ -633,9 +645,9 @@ def fit_dc_rho(past_matches, rho_min=-0.3, rho_max=0.5, step=0.005):
         if ll > best_ll:
             best_ll = ll
             best_rho = rho
-        rho += step
+        rho += adaptive_step
 
-    log(f"ρ fit: {len(scores)} matches, λ_h={avg_h:.2f} λ_a={avg_a:.2f}, ρ={best_rho:.3f} (LL={best_ll:.1f})")
+    log(f"ρ fit: {n} matches, λ_h={avg_h:.2f} λ_a={avg_a:.2f}, ρ={best_rho:.3f} (LL={best_ll:.1f})")
     return round(best_rho, 3)
 
 
@@ -1140,7 +1152,7 @@ def parse_events(events, now_utc=None):
         
         home_true, draw_true, away_true = remove_vig(home_ml_implied, draw_implied)
         
-        spread_move = spread_movement_factor(spread_a_close)
+        spread_move = spread_movement_factor(spread_a_open, spread_a_close)
         
         h_fs = form_to_score(home_form)
         a_fs = form_to_score(away_form)
@@ -1230,15 +1242,15 @@ def calculate_prediction(match, weights=None, calibration_offset=None,
     onside = compute_onside_signals(home_en, away_en, fifa_rankings, host_country)
     home_onside = onside["home"]["onside_score"]
     away_onside = onside["away"]["onside_score"]
-    
+
     # ── 应用 calibration offset 修正隐含概率 ──
     calibration_note = None
     if calibration_offset:
         hc = calibration_offset.get("home_correction", 1.0)
         dc = calibration_offset.get("draw_correction", 1.0)
         ac = calibration_offset.get("away_correction", 1.0)
-        
-        # 修正：乘以 offset 后重新归一化
+
+        # 修正 market odds：乘以 offset 后重新归一化
         hp_corrected = hp * hc
         dp_corrected = dp * dc
         ap_corrected = ap * ac
@@ -1247,7 +1259,15 @@ def calculate_prediction(match, weights=None, calibration_offset=None,
             hp = hp_corrected / total_corrected
             dp = dp_corrected / total_corrected
             ap = ap_corrected / total_corrected
-        
+
+        # 修正 Onside 4 信号：同方向校正后归一化（ponytail: 单向线性，误差累积超出 ±50% 再考虑分层）
+        onside_h = home_onside * hc
+        onside_a = away_onside * ac
+        total_on = onside_h + onside_a
+        if total_on > 0:
+            home_onside = onside_h / total_on
+            away_onside = onside_a / total_on
+
         calibration_note = f"calibration applied (n={calibration_offset.get('sample_size','?')}, " \
                            f"home×{hc}/draw×{dc}/away×{ac})"
         log(calibration_note)
@@ -1803,7 +1823,10 @@ def main():
     
     # ─── 获取数据 ──────────────────────────────────
     if skip_fetch:
-        with open("/tmp/espn_wc.json") as f:
+        fallback = "/tmp/espn_wc.json"
+        if not os.path.exists(fallback):
+            fallback = str(FOOTBALL_DIR / "references" / "espn_wc_fallback.json")
+        with open(fallback) as f:
             data = json.load(f)
         events = data.get("events", [])
     else:
@@ -1880,7 +1903,10 @@ def main():
     log(f"Dixon-Coles ρ: fitted={fitted_rho:.3f} (hardcoded={DC_RHO})")
     if use_dc and fitted_rho != DC_RHO:
         log(f"  → Using fitted ρ={fitted_rho} (differs from default {DC_RHO})")
-    for m in sorted(future, key=lambda x: x.get("time_to_kickoff_h", 0))[:5]:
+    future_sorted = sorted(future, key=lambda x: x.get("time_to_kickoff_h", 0))
+    if len(future_sorted) > 5:
+        log(f"⚠  {len(future_sorted)} future matches found, only predicting nearest 5 (rest truncated)")
+    for m in future_sorted[:5]:
         if -24 <= m.get("time_to_kickoff_h", 24) <= 24:
             pred = calculate_prediction(
                 m, 
@@ -1904,16 +1930,20 @@ def main():
     if run_monte_carlo and len(future) >= 2:
         log(f"Running Monte Carlo simulation ({n_simulations} iterations)...")
         
-        # 构建队伍实力字典
+        # 构建队伍实力字典 — 从预测 λ 值提取（ponytail: 代替硬编码 1.5/1.2）
         team_strengths = {}
-        for m in future:
-            home_en = m.get("home_en", m.get("home", ""))
-            away_en = m.get("away_en", m.get("away", ""))
-            
-            if home_en not in team_strengths:
-                team_strengths[home_en] = {"lambda_home": 1.5, "lambda_away": 1.2}
-            if away_en not in team_strengths:
-                team_strengths[away_en] = {"lambda_home": 1.5, "lambda_away": 1.2}
+        home_lams, away_lams = {}, {}
+        for p in predictions:
+            ht, at = p.get("home", ""), p.get("away", "")
+            lh, la = p.get("lambda_home"), p.get("lambda_away")
+            if ht and lh: home_lams.setdefault(ht, []).append(lh)
+            if at and la: away_lams.setdefault(at, []).append(la)
+        for team in set(home_lams) | set(away_lams):
+            hl, al = home_lams.get(team, []), away_lams.get(team, [])
+            team_strengths[team] = {
+                "lambda_home": sum(hl)/len(hl) if hl else 1.5,
+                "lambda_away": sum(al)/len(al) if al else 1.2,
+            }
         
         # 构建赛程
         mc_fixtures = []
@@ -1928,7 +1958,7 @@ def main():
         monte_carlo_result = monte_carlo_champion(
             mc_fixtures, team_strengths, 
             n_simulations=n_simulations,
-            rho=DC_RHO,
+            rho=fitted_rho,
             tournament_type=tournament_type,
         )
         

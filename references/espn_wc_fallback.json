@@ -1,0 +1,101 @@
+{
+  "events": [
+    {
+      "id": "wc-future-1",
+      "date": "2026-07-06T20:00:00Z",
+      "name": "France at Argentina",
+      "competitions": [
+        {
+          "id": "wc-comp-1",
+          "type": {
+            "id": "0",
+            "type": "Game"
+          },
+          "status": {
+            "type": {
+              "name": "STATUS_SCHEDULED",
+              "completed": false
+            }
+          },
+          "venue": {
+            "fullName": "Estadio Azteca"
+          },
+          "competitors": [
+            {
+              "team": {
+                "id": "1",
+                "displayName": "Argentina",
+                "abbreviation": "ARG"
+              },
+              "homeAway": "home",
+              "form": "WWWDW",
+              "records": [
+                {
+                  "summary": "5-0-0"
+                }
+              ]
+            },
+            {
+              "team": {
+                "id": "2",
+                "displayName": "France",
+                "abbreviation": "FRA"
+              },
+              "homeAway": "away",
+              "form": "LDWWL",
+              "records": [
+                {
+                  "summary": "3-1-1"
+                }
+              ]
+            }
+          ],
+          "odds": [
+            {
+              "details": "Argentina -125",
+              "drawOdds": {
+                "moneyLine": "+220"
+              },
+              "pointSpread": {
+                "home": {
+                  "open": {
+                    "line": "+0.5",
+                    "odds": "-110"
+                  },
+                  "close": {
+                    "line": "+0.5",
+                    "odds": "-115"
+                  }
+                },
+                "away": {
+                  "open": {
+                    "line": "-0.5",
+                    "odds": "-110"
+                  },
+                  "close": {
+                    "line": "-0.5",
+                    "odds": "-105"
+                  }
+                }
+              },
+              "total": {
+                "over": {
+                  "close": {
+                    "odds": "-110",
+                    "line": "2.5"
+                  }
+                },
+                "under": {
+                  "close": {
+                    "odds": "-110",
+                    "line": "2.5"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
