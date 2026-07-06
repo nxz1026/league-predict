@@ -1344,35 +1344,48 @@ def calculate_prediction(match, weights=None, calibration_offset=None,
         stars = "⭐"
     
     # ── 期望进球计算 ──
-    LAMBDA_MULTIPLIER = 4.5
+    # ponytail: M=2.8 maps raw strength (0-1 scale) to realistic λ range (~0.5-2.0)
+    # Removed shared draw inflation which pushed both λ values up equally → 1-1 stuck
+    LAMBDA_MULTIPLIER = 2.8
     raw_home = hp * 0.40 + hfs * 0.20 + hrs * 0.15 + sm * 0.25
     raw_away = ap * 0.40 + afs * 0.20 + ars * 0.15 + (-sm) * 0.25
-    raw_draw = dp * 0.50
-    lambda_home = max((raw_home + 0.5 * raw_draw) * LAMBDA_MULTIPLIER, 0.3)
-    lambda_away = max((raw_away + 0.5 * raw_draw) * LAMBDA_MULTIPLIER, 0.3)
+    lambda_home = max(raw_home * LAMBDA_MULTIPLIER, 0.3)
+    lambda_away = max(raw_away * LAMBDA_MULTIPLIER, 0.3)
     
     # ── Dixon-Coles 或独立泊松比分预测 ──
     if use_dixon_coles:
         dc_result = dixon_coles_match_probs(lambda_home, lambda_away, rho=dc_rho)
-        top3 = [(s[0], s[1], round(s[2], 4)) for s in dc_result["score_probs"][:3]]
+        all_scores = dc_result["score_probs"]
+        top3 = [(s[0], s[1], round(s[2], 4)) for s in all_scores[:3]]
         predicted_score = f"{top3[0][0]}-{top3[0][1]}"
         
         # 从 DC 模型计算 BTTS 和 Over/2.5
-        btts_prob = sum(s[2] for s in dc_result["score_probs"] if s[0] > 0 and s[1] > 0)
-        over_25_prob = sum(s[2] for s in dc_result["score_probs"] if s[0] + s[1] > 2)
+        btts_prob = sum(s[2] for s in all_scores if s[0] > 0 and s[1] > 0)
+        over_25_prob = sum(s[2] for s in all_scores if s[0] + s[1] > 2)
     else:
-        probs = []
+        all_scores = []
         for h in range(9):
             for a in range(9):
                 p = poisson_pmf(h, lambda_home) * poisson_pmf(a, lambda_away)
                 if p >= 0.001:
-                    probs.append((h, a, p))
-        probs.sort(key=lambda x: -x[2])
-        top3 = probs[:3]
+                    all_scores.append((h, a, p))
+        all_scores.sort(key=lambda x: -x[2])
+        top3 = all_scores[:3]
         predicted_score = f"{top3[0][0]}-{top3[0][1]}"
         
-        btts_prob = sum(p[2] for p in probs if p[0] > 0 and p[1] > 0)
-        over_25_prob = sum(p[2] for p in probs if p[0] + p[1] > 2)
+        btts_prob = sum(p[2] for p in all_scores if p[0] > 0 and p[1] > 0)
+        over_25_prob = sum(p[2] for p in all_scores if p[0] + p[1] > 2)
+    
+    # ── 方向一致性检查（ponytail: 避免 "X 胜" 但 predicted_score 为平局） ──
+    if "胜" in direction:
+        predicted_h = int(predicted_score.split("-")[0])
+        predicted_a = int(predicted_score.split("-")[1])
+        if predicted_h == predicted_a:
+            is_home_win = direction.startswith(match.get("home", ""))
+            for h, a, p in all_scores:
+                if (is_home_win and h > a) or (not is_home_win and a > h):
+                    predicted_score = f"{h}-{a}"
+                    break
     
     # 95% 置信区间
     ci_home = poisson_confidence_interval(lambda_home)
