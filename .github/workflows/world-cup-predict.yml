@@ -90,6 +90,10 @@ jobs:
                       poisson_str = ' / '.join(f'{t["score"]}({t["prob"]*100:.0f}%)' for t in top3)
                       ci_home = p.get('lambda_home_ci95', (0, 0))
                       ci_away = p.get('lambda_away_ci95', (0, 0))
+                      rf = p.get('reasoning_factors', {})
+                      ps = p.get('prediction_summary', {})
+                      on_home = p.get('onside_signals', {}).get('home', {}).get('onside_score')
+                      on_away = p.get('onside_signals', {}).get('away', {}).get('onside_score')
                       lines_out.append(f'🏟 {p["match"]}')
                       lines_out.append(f'   方向：{p["direction"]} {p["stars"]}')
                       lines_out.append(f'   盘口：odds_data_available={p.get("odds_data_available")} | spread_home_line={p.get("spread_home_line")} | total_over_close={p.get("total_over_close")}')
@@ -99,6 +103,14 @@ jobs:
                           lines_out.append(f'   比分：{poisson_str}')
                       lines_out.append(f'   xG：{lambda_home if (lambda_home := p.get("lambda_home",0)) else 0} [{ci_home[0]}-{ci_home[1]}] / {lambda_away if (lambda_away := p.get("lambda_away",0)) else 0} [{ci_away[0]}-{ci_away[1]}]')
                       lines_out.append(f'   {p.get("over_under","")} | BTTS {p.get("btts","")}')
+                      if rf:
+                          lines_out.append(f'   概率：主{rf.get("home_prob_weighted",0):.3f} 平{rf.get("draw_prob_weighted",0):.3f} 客{rf.get("away_prob_weighted",0):.3f} | 市场主{rf.get("home_ml_true_prob",0):.3f} 平{rf.get("draw_true_prob",0):.3f} 客{rf.get("away_ml_true_prob",0):.3f}')
+                          lines_out.append(f'   状态：主形态{rf.get("home_form_score",0):.3f} 客形态{rf.get("away_form_score",0):.3f} | 主记录{rf.get("home_record_score",0):.3f} 客记录{rf.get("away_record_score",0):.3f} | spread_movement={rf.get("spread_movement",0):.3f}')
+                      if on_home is not None and on_away is not None:
+                          lines_out.append(f'   Onside：主{on_home:.3f} 客{on_away:.3f}')
+                      sb = ps.get('signal_breakdown', {})
+                      if sb:
+                          lines_out.append(f'   信号：市场{sb.get("market_component",0)} | Onside{sb.get("onside_component",0)} | spread调整{sb.get("spread_adjustment",0)} | 总强度{sb.get("total_strength",0)}')
                       lines_out.append('')
 
           # ── 回填结果（过去24h已结束比赛） ────────────
