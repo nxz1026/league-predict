@@ -45,15 +45,13 @@ DC_RHO = 0.2  # 国际足球典型相关系数
 DEFAULT_N_SIMULATIONS = 10000
 
 # ── Onside 4 信号权重 ──────────────────────────
-# 市场信号 30% + 4个Onside信号 70%
-# ponytail: P1-1 提高 market_odds 权重到 0.30（原 0.20），让盘口信号有实际影响力
-# 4个onside权重归一化到和=1.0，fusion时×(1-market_odds_weight)=×0.70
+# 市场信号 20% + 4个Onside信号 80%
 ONSIDE_WEIGHTS = {
-    "market_odds":     0.30,  # 盘口隐含概率（P1: 0.20→0.30）
-    "fifa_ranking":    0.3125,  # 0.25/0.80 → 归一化
-    "league_footprint": 0.2500,  # 0.20/0.80 → 归一化
-    "host_advantage":  0.1875,  # 0.15/0.80 → 归一化
-    "confederation":   0.2500,  # 0.20/0.80 → 归一化
+    "market_odds":     0.20,  # 盘口隐含概率（市场信号）
+    "fifa_ranking":    0.25,  # FIFA排名分
+    "league_footprint": 0.20,  # 联赛球员占比/分档
+    "host_advantage":  0.15,  # 东道主优势
+    "confederation":   0.20,  # 足联实力
 }
 
 # ── 足联实力系数 ──────────────────────────────
@@ -298,7 +296,7 @@ def save_results(past_matches):
 
 
 # ─── 预测回测 ────────────────────────────────────
-def reconcile_predictions(past_matches, days=30):
+def reconcile_predictions(past_matches, days=7):
     """将历史预测文件中的预测与当前实际赛果比对，返回回测统计。"""
     # 建立赛果查找表 keyed by match name (Chinese)
     actuals = {}
@@ -494,16 +492,15 @@ def to_cn(name):
     return COUNTRY_CN.get(name, COUNTRY_CN.get(name.replace("'", ""), name))
 
 
-def form_to_score(form_str, decay_rate=0.5):
-    """'DWDDW' → 0-1, W=3, D=1, L=0，带指数时间衰减（最近比赛权重更高）"""
+def form_to_score(form_str):
+    """'DWDDW' → 0-1, W=3, D=1, L=0，带时间衰减（最近比赛权重更高）"""
     if not form_str:
         return 0.5
     total_weight = 0
     weighted_sum = 0
-    # 时间衰减：从左到右（最老→最新），指数衰减 exp(-decay_rate * i)
-    # ponytail: P1-2 指数衰减替代线性衰减，更符合业界实践
+    # 时间衰减：从左到右（最老→最新），最新权重最高
     for i, c in enumerate(form_str):
-        w = math.exp(-decay_rate * (len(form_str) - 1 - i))  # 最新场 i=len-1 → exp(0)=1.0
+        w = 1.0 + 0.3 * i  # 最后一场权重 = 1.0 + 0.3*4 = 2.2
         score = 3 if c == 'W' else 1 if c == 'D' else 0
         weighted_sum += score * w
         total_weight += w * 3
@@ -545,7 +542,7 @@ def spread_movement_factor(away_open, away_close):
 
 # ── vig 去除 ──────────────────────────────────
 def remove_vig(home_p, draw_p, away_p=None, default_margin=1.07):
-    """三向去水。ponytail: P1-3 Shin 去水替代比例法。"""
+    """三向去水"""
     if draw_p is None:
         return None, None, None
     if home_p is None and away_p is None:
@@ -561,20 +558,6 @@ def remove_vig(home_p, draw_p, away_p=None, default_margin=1.07):
     total = home_p + draw_p + away_p
     if total <= 0:
         return home_p / default_margin, draw_p / default_margin, away_p / default_margin
-    
-    # ponytail: P1-3 Shin method — 用 margin 作为约束优化
-    # 比例法：home_p/total 会低估热门方，Shin 方法用迭代法求解
-    # 简化版：用 geometric mean 去水（Shin 2010 的近似）
-    margin = total / default_margin  # 隐含 margin
-    if margin <= 1.0:
-        margin = 1.0
-    # 几何平均去水（Shin 近似，penaltyblog 实现）
-    home_shin = home_p / (margin ** (1.0/3.0))
-    draw_shin = draw_p / (margin ** (1.0/3.0))
-    away_shin = away_p / (margin ** (1.0/3.0))
-    total_shin = home_shin + draw_shin + away_shin
-    if total_shin > 0:
-        return home_shin / total_shin, draw_shin / total_shin, away_shin / total_shin
     return home_p / total, draw_p / total, away_p / total
 
 
@@ -746,29 +729,22 @@ def fit_dc_rho(past_matches, rho_min=-0.3, rho_max=0.5, step=0.005):
     # ponytail: scale step by sqrt(100/n) — fewer matches = coarser grid, more = finer
     adaptive_step = step * math.sqrt(100.0 / n)
 
-    # ponytail: 修复 — 用 per-match λ 替代全局均值
-    # 旧版：所有比赛用 avg_h/avg_a，导致巴西5-0和意大利1-0的τ修正一样
-    # 新版：每场比赛用该场实际总进球/2 作为近似 λ
+    # 用总体均值估算 λ 参数
     all_h = [s[0] for s in scores]
     all_a = [s[1] for s in scores]
-    global_avg = (sum(all_h) + sum(all_a)) / (2 * n)  # 总体平均进球
-    per_match_lambdas = []
-    for h, a in scores:
-        # 近似：主队 λ ≈ 主场进球 / 2（退而求其次，无球队级数据）
-        lam_h = max(h / 2.0, 0.5)
-        lam_a = max(a / 2.0, 0.5)
-        per_match_lambdas.append((h, a, lam_h, lam_a))
+    avg_h = sum(all_h) / n
+    avg_a = sum(all_a) / n
 
-    log(f"ρ fit: {n} matches, avg_goals={global_avg:.2f}, step={adaptive_step:.5f} (~{int((rho_max-rho_min)/adaptive_step)} candidates)")
+    log(f"ρ fit: {n} matches, step={adaptive_step:.5f} (~{int((rho_max-rho_min)/adaptive_step)} candidates)")
 
-    # 网格搜索最大化对数似然（per-match λ）
+    # 网格搜索最大化对数似然
     best_rho = DC_RHO
     best_ll = -float("inf")
     rho = rho_min
     while rho <= rho_max:
         ll = 0.0
-        for h, a, lam_h, lam_a in per_match_lambdas:
-            p = dixon_coles_pmf(h, a, lam_h, lam_a, rho)
+        for h, a in scores:
+            p = dixon_coles_pmf(h, a, avg_h, avg_a, rho)
             if p > 1e-10:
                 ll += math.log(p)
         if ll > best_ll:
@@ -776,7 +752,7 @@ def fit_dc_rho(past_matches, rho_min=-0.3, rho_max=0.5, step=0.005):
             best_rho = rho
         rho += adaptive_step
 
-    log(f"ρ fit: {n} matches, avg_goals={global_avg:.2f}, ρ={best_rho:.3f} (LL={best_ll:.1f})")
+    log(f"ρ fit: {n} matches, λ_h={avg_h:.2f} λ_a={avg_a:.2f}, ρ={best_rho:.3f} (LL={best_ll:.1f})")
     return round(best_rho, 3)
 
 
@@ -817,69 +793,6 @@ def fifa_rank_to_score(rank, max_rank=200):
     rank = min(rank, max_rank)
     score = math.exp(-3.0 * (rank - 1) / max_rank)
     return max(0.0, min(1.0, score))
-
-
-# ─── ELO 评分系统（ponytail: P1-4 补充 FIFA 排名） ───
-class EloCalculator:
-    """简易 ELO 评分系统，从历史比赛结果自算 Elo 分。
-    纯 stdlib 实现，~50 行。初始分 1500, K=32, 主客因子 60."""
-    
-    def __init__(self, initial_rating=1500, k_factor=32, home_advantage=60):
-        self.ratings = {}  # {team_name: rating}
-        self.k_factor = k_factor
-        self.home_advantage = home_advantage
-        self.initial_rating = initial_rating
-    
-    def get_rating(self, team_name):
-        if team_name not in self.ratings:
-            self.ratings[team_name] = self.initial_rating
-        return self.ratings[team_name]
-    
-    def expected_score(self, rating_a, rating_b):
-        """计算 A 队预期得分（0-1）"""
-        return 1.0 / (1.0 + math.pow(10, (rating_b - rating_a) / 400.0))
-    
-    def update(self, home_team, away_team, home_score, away_score):
-        """更新 ELO 评分。返回 (home_change, away_change)"""
-        r_home = self.get_rating(home_team) + self.home_advantage
-        r_away = self.get_rating(away_team)
-        
-        e_home = self.expected_score(r_home, r_away)
-        actual_home = 1.0 if home_score > away_score else (0.5 if home_score == away_score else 0.0)
-        actual_away = 1.0 - actual_home
-        
-        delta_home = self.k_factor * (actual_home - e_home)
-        delta_away = self.k_factor * (actual_away - (1.0 - e_home))
-        
-        self.ratings[home_team] += delta_home
-        self.ratings[away_team] += delta_away
-        
-        return delta_home, delta_away
-    
-    def rating_to_score(self, rating, max_rating=2500):
-        """将 ELO 分映射为 0-1 分数（类似 FIFA 排名映射）"""
-        if rating <= 0:
-            return 0.5
-        score = math.exp(-3.0 * (max_rating - rating) / max_rating)
-        return max(0.0, min(1.0, score))
-
-
-def build_elo_from_past_matches(past_matches):
-    """从历史比赛结果构建 ELO 计算器"""
-    calc = EloCalculator(initial_rating=1500, k_factor=32, home_advantage=60)
-    for m in past_matches:
-        home = m.get("home_en", "")
-        away = m.get("away_en", "")
-        score = m.get("score", "")
-        if not home or not away or not score or "-" not in score:
-            continue
-        try:
-            hs, aws = score.split("-")
-            if hs.isdigit() and aws.isdigit():
-                calc.update(home, away, int(hs), int(aws))
-        except (ValueError, IndexError):
-            continue
-    return calc
 
 
 def get_confederation(country_name):
@@ -940,19 +853,18 @@ def host_advantage_score(country_name, host_country):
     return 0.5
 
 
-def compute_onside_signals(home_team, away_team, fifa_rankings, host_country=None, elo_calc=None):
+def compute_onside_signals(home_team, away_team, fifa_rankings, host_country=None):
     """
-    计算 Onside 4+1 信号评分（+ELO）。
+    计算 Onside 4 信号评分。
     
     Args:
         home_team: 主队名（英文）
         away_team: 客队名（英文）
         fifa_rankings: FIFA 排名字典 {country: rank}
         host_country: 东道主国家（可选）
-        elo_calc: EloCalculator 实例（可选，None 时跳过 ELO）
     
     Returns:
-        dict: 包含 5 个信号分数和综合评分
+        dict: 包含 4 个信号分数和综合评分
     """
     home_rank = fifa_rankings.get(home_team, 100)
     away_rank = fifa_rankings.get(away_team, 100)
@@ -973,28 +885,19 @@ def compute_onside_signals(home_team, away_team, fifa_rankings, host_country=Non
     home_conf = confederation_score(home_team)
     away_conf = confederation_score(away_team)
     
-    # 信号5: ELO 评分（ponytail: P1-4）
-    home_elo = 0.5
-    away_elo = 0.5
-    if elo_calc:
-        home_elo = elo_calc.rating_to_score(elo_calc.get_rating(home_team))
-        away_elo = elo_calc.rating_to_score(elo_calc.get_rating(away_team))
-    
-    # 综合评分（加权）— 5 个信号
+    # 综合评分（加权）
     w = ONSIDE_WEIGHTS
     home_onside = (
         home_fifa * w["fifa_ranking"]
         + home_league * w["league_footprint"]
         + home_host * w["host_advantage"]
         + home_conf * w["confederation"]
-        + home_elo * w.get("elo_rating", 0.0)  # 新增 ELO 信号
     )
     away_onside = (
         away_fifa * w["fifa_ranking"]
         + away_league * w["league_footprint"]
         + away_host * w["host_advantage"]
         + away_conf * w["confederation"]
-        + away_elo * w.get("elo_rating", 0.0)
     )
     
     return {
@@ -1004,7 +907,6 @@ def compute_onside_signals(home_team, away_team, fifa_rankings, host_country=Non
             "league_footprint": round(home_league, 3),
             "host_advantage": round(home_host, 3),
             "confederation": round(home_conf, 3),
-            "elo_score": round(home_elo, 3),
             "onside_score": round(home_onside, 3),
         },
         "away": {
@@ -1013,7 +915,6 @@ def compute_onside_signals(home_team, away_team, fifa_rankings, host_country=Non
             "league_footprint": round(away_league, 3),
             "host_advantage": round(away_host, 3),
             "confederation": round(away_conf, 3),
-            "elo_score": round(away_elo, 3),
             "onside_score": round(away_onside, 3),
         }
     }
@@ -1409,12 +1310,12 @@ def parse_events(events, now_utc=None):
     return past, future, in_progress
 
 
-# ─── 主预测函数（Onside 4+1 信号 + Dixon-Coles） ──
+# ─── 主预测函数（Onside 4 信号 + Dixon-Coles） ──
 def calculate_prediction(match, weights=None, calibration_offset=None,
                          fifa_rankings=None, host_country=None, use_dixon_coles=True,
-                         dc_rho=DC_RHO, elo_calc=None):
+                         dc_rho=DC_RHO):
     """
-    Onside 4+1 信号 + Dixon-Coles 预测 → 方向 + 信心 + 比分预测 + 95% CI
+    Onside 4 信号 + Dixon-Coles 预测 → 方向 + 信心 + 比分预测 + 95% CI
     
     Args:
         match: 比赛数据字典
@@ -1423,7 +1324,6 @@ def calculate_prediction(match, weights=None, calibration_offset=None,
         fifa_rankings: FIFA 排名字典
         host_country: 东道主国家
         use_dixon_coles: 是否使用 Dixon-Coles 模型
-        elo_calc: EloCalculator 实例（可选，None 时跳过 ELO）
     """
     if weights is None:
         weights = ONSIDE_WEIGHTS
@@ -1437,14 +1337,14 @@ def calculate_prediction(match, weights=None, calibration_offset=None,
     ars = match.get("away_record_score", 0.5)
     sm = match.get("spread_movement_score", 0)
     
-    # ── Onside 4+1 信号 ──
+    # ── Onside 4 信号 ──
     home_en = match.get("home_en", match.get("home", ""))
     away_en = match.get("away_en", match.get("away", ""))
     
     if fifa_rankings is None:
         fifa_rankings = fetch_fifa_rankings()
     
-    onside = compute_onside_signals(home_en, away_en, fifa_rankings, host_country, elo_calc=elo_calc)
+    onside = compute_onside_signals(home_en, away_en, fifa_rankings, host_country)
     home_onside = onside["home"]["onside_score"]
     away_onside = onside["away"]["onside_score"]
 
@@ -1507,22 +1407,14 @@ def calculate_prediction(match, weights=None, calibration_offset=None,
     draw_prob_calc = draw_strength / total
     away_prob = away_strength / total
     
-    # ── 方向判断（ponytail: P3-3 阈值调优） ──
-    # 原阈值：home_prob > 0.45, away_prob > 0.45, draw_prob > 0.40
-    # 调优：降低强队判定阈值（0.45→0.40），提高平局敏感度（0.40→0.35）
-    # 理由：世界杯级别比赛更接近，强队优势不如联赛明显
-    HOME_THRESHOLD = 0.40
-    AWAY_THRESHOLD = 0.40
-    DRAW_THRESHOLD = 0.35
-    RATIO_THRESHOLD = 1.2  # 原 1.3 → 1.2，降低倍数要求
-    
-    if home_prob > HOME_THRESHOLD and home_prob > away_prob * RATIO_THRESHOLD:
+    # ── 方向判断 ──
+    if home_prob > 0.45 and home_prob > away_prob * 1.3:
         direction = f"{match['home']} 胜"
         confidence_raw = (home_prob - 0.25) * 2
-    elif away_prob > AWAY_THRESHOLD and away_prob > home_prob * RATIO_THRESHOLD:
+    elif away_prob > 0.45 and away_prob > home_prob * 1.3:
         direction = f"{match['away']} 胜"
         confidence_raw = (away_prob - 0.25) * 2
-    elif draw_prob_calc > DRAW_THRESHOLD:
+    elif draw_prob_calc > 0.40:
         direction = "平局"
         confidence_raw = (draw_prob_calc - 0.25) * 2
     else:
@@ -1557,15 +1449,11 @@ def calculate_prediction(match, weights=None, calibration_offset=None,
         stars = "⭐"
     
     # ── 期望进球计算 ──
-    # ponytail: λ 复用 onside 信号，与方向预测保持一致
-    # 旧版：raw_home = hp*0.4 + hfs*0.2 + hrs*0.15 + sm*0.25（与 strength 权重体系不一致）
-    # 新版：从 home_strength 中提取 onside 分量（减去 sm_capped*0.5），再乘以 LAMBDA_MULTIPLIER
+    # ponytail: M=2.8 maps raw strength (0-1 scale) to realistic λ range (~0.5-2.0)
+    # Removed shared draw inflation which pushed both λ values up equally → 1-1 stuck
     LAMBDA_MULTIPLIER = 2.8
-    # 从 home_strength 反推 onside 分量：home_strength = market*0.2 + onside*0.8 + sm_capped*0.5
-    # onside_component = (home_strength - market_home*weights["market_odds"] - sm_capped*0.5) / (1 - weights["market_odds"])
-    # 简化：直接用 onside 信号 + 市场信号做 λ
-    raw_home = home_onside * 0.80 + hp * 0.20 + sm * 0.25
-    raw_away = away_onside * 0.80 + ap * 0.20 + (-sm) * 0.25
+    raw_home = hp * 0.40 + hfs * 0.20 + hrs * 0.15 + sm * 0.25
+    raw_away = ap * 0.40 + afs * 0.20 + ars * 0.15 + (-sm) * 0.25
     lambda_home = max(raw_home * LAMBDA_MULTIPLIER, 0.3)
     lambda_away = max(raw_away * LAMBDA_MULTIPLIER, 0.3)
     
@@ -1648,36 +1536,6 @@ def calculate_prediction(match, weights=None, calibration_offset=None,
             "home_prob_weighted": round(home_prob, 3),
             "draw_prob_weighted": round(draw_prob_calc, 3),
             "away_prob_weighted": round(away_prob, 3),
-        },
-        # ponytail: P3-1 预测摘要 — 数据来源 + 分析结果
-        "prediction_summary": {
-            "data_sources": {
-                "market_odds": "ESPN moneyline (去水后)" if match.get("odds_data_available") else "无盘口数据",
-                "fifa_ranking": "fifa_rankings.json",
-                "form": "ESPN 近期5场 W/D/L",
-                "record": "ESPN 赛季记录 W-D-L",
-                "spread_movement": "ESPN point spread open→close" if match.get("spread_movement_score") != 0 else "无盘口变动数据",
-                "elo_rating": f"{len(elo_calc.ratings) if elo_calc else 0} teams" if elo_calc else "未启用",
-            },
-            "signal_breakdown": {
-                "market_component": f"{round(hp * ONSIDE_WEIGHTS['market_odds'], 3)}" if hp else "N/A",
-                "onside_component": f"{round(home_onside * (1 - ONSIDE_WEIGHTS['market_odds']), 3)}",
-                "spread_adjustment": f"{round(sm * 0.5, 3)}",
-                "total_strength": round(home_strength, 3),
-            },
-            "model_params": {
-                "lambda_multiplier": LAMBDA_MULTIPLIER,
-                "dixon_coles_rho": dc_rho,
-                "home_lambda": round(lambda_home, 2),
-                "away_lambda": round(lambda_away, 2),
-                "home_95ci": ci_home,
-                "away_95ci": ci_away,
-            },
-            "analysis_note": (
-                f"市场隐含概率: 主{hp*100:.0f}% 平{dp*100:.0f}% 客{ap*100:.0f}% | "
-                f"Onside评分: 主{home_onside:.2f} 客{away_onside:.2f} | "
-                f"λ: {lambda_home:.2f}/{lambda_away:.2f} (DC ρ={dc_rho})"
-            ),
         }
     }
 
@@ -2163,10 +2021,6 @@ def main():
     # ── 预测 ──────────────────────────────────────
     predictions = []
 
-    # ── ELO 评分构建（ponytail: P1-4） ──
-    elo_calc = build_elo_from_past_matches(historical_past if len(historical_past) >= 20 else past)
-    log(f"ELO ratings built: {len(elo_calc.ratings)} teams")
-
     # ── Dixon-Coles ρ 拟合 ──
     fitted_rho = fit_dc_rho(historical_past if len(historical_past) >= 20 else past)
     log(f"Dixon-Coles ρ: fitted={fitted_rho:.3f} (hardcoded={DC_RHO})")
@@ -2184,48 +2038,7 @@ def main():
                 host_country=host_country,
                 use_dixon_coles=use_dc,
                 dc_rho=fitted_rho,
-                elo_calc=elo_calc,
             )
-            
-            # ponytail: P2-3 集成多 λ/ρ 投票
-            # 用 3 组不同参数做投票，提升鲁棒性
-            ensemble_preds = [pred]  # 主预测
-            if use_dc:
-                for rho_alt in [0.15, 0.25]:
-                    if rho_alt != fitted_rho:
-                        alt_pred = calculate_prediction(
-                            m, 
-                            calibration_offset=calibration_offset,
-                            fifa_rankings=fifa_rankings,
-                            host_country=host_country,
-                            use_dixon_coles=use_dc,
-                            dc_rho=rho_alt,
-                            elo_calc=elo_calc,
-                        )
-                        ensemble_preds.append(alt_pred)
-            
-            # 投票决定最终方向和比分
-            if len(ensemble_preds) > 1:
-                dir_votes = {}
-                score_votes = {}
-                for ep in ensemble_preds:
-                    d = ep.get("direction", "")
-                    dir_votes[d] = dir_votes.get(d, 0) + 1
-                    s = ep.get("predicted_score", "")
-                    score_votes[s] = score_votes.get(s, 0) + 1
-                
-                # 多数投票
-                best_dir = max(dir_votes, key=lambda k: dir_votes[k])
-                best_score = max(score_votes, key=lambda k: score_votes[k])
-                
-                # 更新 pred 为投票结果
-                pred["direction"] = best_dir
-                pred["predicted_score"] = best_score
-                pred["ensemble_size"] = len(ensemble_preds)
-                pred["ensemble_dirs"] = dir_votes
-                pred["ensemble_scores"] = score_votes
-                log(f"  Ensemble vote ({len(ensemble_preds)} configs): dir={best_dir} score={best_score}")
-            
             predictions.append({
                 "match": m["name"],
                 "home": m["home"],
@@ -2320,25 +2133,12 @@ def main():
         print(f"🔧 累积校准: 数据不足（<5场），跳过校准", file=sys.stderr)
     print(f"🔥 待预测: {len(predictions)} 场", file=sys.stderr)
     for p in predictions:
-        # ponytail: P3-1 详细摘要输出
-        ps = p.get('prediction_summary', {})
-        analysis = ps.get('analysis_note', '')
-        ds = ps.get('data_sources', {})
-        sig = ps.get('signal_breakdown', {})
-        mp = ps.get('model_params', {})
-        print(f"\n  📋 {p['match']} ({p.get('time_to_kickoff_h',0):+.1f}h)", file=sys.stderr)
-        print(f"     方向: {p['direction']} {p['stars']}", file=sys.stderr)
-        print(f"     比分: {p['predicted_score']} | BTTS: {p.get('btts','-')} | O/U: {p.get('over_under','-')}", file=sys.stderr)
-        print(f"     数据: odds={ds.get('market_odds','N/A')}, form={ds.get('form','N/A')}, elo={ds.get('elo_rating','N/A')}", file=sys.stderr)
-        print(f"     信号: 市场={sig.get('market_component','?')} Onside={sig.get('onside_component','?')} spread={sig.get('spread_adjustment','?')} 强度={sig.get('total_strength','?')}", file=sys.stderr)
-        print(f"     模型: λ={mp.get('home_lambda','?')}/{mp.get('away_lambda','?')} (CI: {mp.get('home_95ci','?')}/{mp.get('away_95ci','?')}) ρ={mp.get('dixon_coles_rho','?')}", file=sys.stderr)
-        print(f"     分析: {analysis}", file=sys.stderr)
-        ens = p.get('ensemble_dirs', {})
-        if ens:
-            print(f"     Ensemble: {ens} → 比分 {p.get('ensemble_scores',{})}", file=sys.stderr)
         poisson_str = " / ".join(f"{t['score']}({t['prob']:.0%})" for t in p.get('poisson_top3', [])[:3])
-        if poisson_str:
-            print(f"     Top3: {poisson_str}", file=sys.stderr)
+        ci_home = p.get('lambda_home_ci95', (0,0))
+        ci_away = p.get('lambda_away_ci95', (0,0))
+        cal = ' 📐cal' if calibration_offset else ''
+        dc = ' 🎯DC' if p.get('dixon_coles_used') else ''
+        print(f"  {p['match']} | {p['direction']} {p['stars']}{cal}{dc} | {p['predicted_score']} | λ={p.get('lambda_home',0)}[{ci_home[0]}-{ci_home[1]}]/{p.get('lambda_away',0)}[{ci_away[0]}-{ci_away[1]}] | {poisson_str}", file=sys.stderr)
     
     if monte_carlo_result:
         print(f"\n🏆 蒙特卡洛冠军预测 (n={n_simulations}):", file=sys.stderr)
