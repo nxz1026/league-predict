@@ -1005,9 +1005,8 @@ def fetch_football_data(dates_str, config):
         return convert_football_data_to_espn_format(data, config)
     except Exception as e:
         log(f"football-data.org fetch failed: {e}")
-        # 降级到 ESPN
-        log("Falling back to ESPN...")
-        return fetch_espn(dates_str, config.get("espn_slug", "epl"))
+        # 不再静默降级到 ESPN，避免掩盖真实错误
+        raise
 
 
 def fetch_api_football(dates_str, config):
@@ -1042,8 +1041,7 @@ def fetch_api_football(dates_str, config):
         return convert_api_football_to_espn_format(data, config)
     except Exception as e:
         log(f"API-Football fetch failed: {e}")
-        log("Falling back to ESPN...")
-        return fetch_espn(dates_str, config.get("espn_slug", "epl"))
+        raise
 
 
 def convert_football_data_to_espn_format(data, config):
@@ -1140,6 +1138,112 @@ def backtest_from_source(prediction_file):
                     winner = None
             if home and away and winner:
                 actual_index[(home, away)] = {"winner": winner, "score": score}
+
+    rows = []
+    for pred in pred_data.get("predictions", []):
+        home = pred.get("home", "")
+        away = pred.get("away", "")
+        actual = actual_index.get((home, away))
+        if not actual:
+            continue
+        predicted = None
+        score = pred.get("predicted_score") or ""
+        if "-" in score:
+            try:
+                h, a = [int(x.strip()) for x in score.split("-", 1)]
+            except Exception:
+                h = a = None
+            if h is not None:
+                predicted = "home" if h > a else "away" if a > h else "draw"
+        if predicted is None:
+            continue
+        rows.append({
+            "home": home,
+            "away": away,
+            "predicted": predicted,
+            "actual": actual["winner"],
+            "correct": predicted == actual["winner"],
+            "predicted_score": score,
+            "actual_score": actual.get("score", ""),
+        })
+
+    if not rows:
+        return {"status": "no_evaluable_matches", "matched_matches": 0}
+    correct = sum(1 for r in rows if r["correct"])
+    return {
+        "status": "ok",
+        "matched_matches": len(rows),
+        "correct": correct,
+        "accuracy": correct / len(rows),
+        "rows": rows,
+    }
+
+
+def backtest_with_live_results(prediction_file):
+    """Auto-fetch actual results from football-data.org for the prediction window."""
+    import json
+    from datetime import datetime, timezone, timedelta
+
+    try:
+        pred_data = json.loads(Path(prediction_file).read_text())
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+    league = pred_data.get("league", "epl")
+    league_config = LEAGUE_CONFIG.get(league, LEAGUE_CONFIG["epl"])
+    if league_config.get("data_source") != "football-data":
+        return {"status": "skip", "reason": "only football-data source supported for live backtest"}
+
+    api_key = os.environ.get("FOOTBALL_DATA_API_KEY", "")
+    if not api_key:
+        return {"status": "skip", "reason": "FOOTBALL_DATA_API_KEY not set"}
+
+    data_window = pred_data.get("data_window", "")
+    if "-" in data_window:
+        start_raw, end_raw = data_window.split("-", 1)
+    else:
+        start_raw = end_raw = data_window
+
+    def normalize_date(s):
+        s = s.strip()
+        if len(s) == 8 and s.isdigit():
+            return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+        if len(s) == 10 and s[4] == '-' and s[7] == '-':
+            return s
+        return s
+
+    start_date = normalize_date(start_raw)
+    end_date = normalize_date(end_raw)
+    league_id = league_config["league_id"]
+    url = f"https://api.football-data.org/v4/competitions/{league_id}/matches?dateFrom={start_date}&dateTo={end_date}"
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "WorldCupPredict/3.0",
+        "X-Auth-Token": api_key,
+    })
+    try:
+        resp = urllib.request.urlopen(req, timeout=ESPN_TIMEOUT_SECONDS)
+        data = json.loads(resp.read())
+    except Exception as e:
+        return {"status": "error", "error": f"fetch failed: {e}"}
+
+    actual_index = {}
+    for m in data.get("matches", []):
+        home_name = m.get("homeTeam", {}).get("name", "")
+        away_name = m.get("awayTeam", {}).get("name", "")
+        score = m.get("score", {})
+        home_goals = score.get("winner") or score.get("fullTime", {}).get("home")
+        away_goals = score.get("winner") or score.get("fullTime", {}).get("away")
+        status = m.get("status", "")
+        if status != "FINISHED" or home_goals is None or away_goals is None:
+            continue
+        try:
+            h, a = int(home_goals), int(away_goals)
+        except Exception:
+            continue
+        actual_index[(home_name, away_name)] = {
+            "winner": "home" if h > a else "away" if a > h else "draw",
+            "score": f"{h}-{a}",
+        }
 
     rows = []
     for pred in pred_data.get("predictions", []):
@@ -1987,6 +2091,10 @@ def main():
         if arg.startswith("--n-simulations="):
             n_simulations = int(arg.split("=")[1])
     
+    # Backtest
+    run_backtest = "--backtest" in sys.argv
+    output_file = None
+
     # Dixon-Coles
     use_dc = "--no-dc" not in sys.argv  # 默认启用
     
@@ -2051,7 +2159,7 @@ def main():
         print(json.dumps(output, indent=2, ensure_ascii=False))
         return
     
-    if not future:
+    if not future and not run_backtest:
         log("No future matches to predict — outputting calibration only")
         calibration = build_calibration(past, future)
         output = {
@@ -2077,6 +2185,7 @@ def main():
         with open(pred_file, "w") as f:
             json.dump(output, f, indent=2, ensure_ascii=False)
         log(f"Saved (no predictions): {pred_file}")
+        output_file = str(pred_file)
         return
     
     # ─── 正常预测流程 ──────────────────────────────
@@ -2103,8 +2212,12 @@ def main():
     if len(future_sorted) > 5:
         log(f"⚠  {len(future_sorted)} future matches found, only predicting nearest 5 (rest truncated)")
     prediction_window = 336 if tournament_type == "league" else 24  # 联赛14天 / 杯赛24小时
-    for m in future_sorted[:5]:
-        if -prediction_window <= m.get("time_to_kickoff_h", prediction_window) <= prediction_window:
+    predict_set = future_sorted[:5]
+    # ponytail: backtest mode should also evaluate past matches that have actual results
+    if run_backtest and past:
+        predict_set = (past + future_sorted)[:10]
+    for m in predict_set:
+        if run_backtest or (-prediction_window <= m.get("time_to_kickoff_h", prediction_window) <= prediction_window):
             pred = calculate_prediction(
                 m, 
                 calibration_offset=calibration_offset,
@@ -2121,6 +2234,37 @@ def main():
                 "time_to_kickoff_h": m["time_to_kickoff_h"],
                 **pred
             })
+    
+    # ponytail: backtest mode needs winner on past matches for evaluation
+    if run_backtest:
+        for pm in past:
+            score = pm.get("score", "")
+            if "-" in score:
+                try:
+                    h, a = [int(x.strip()) for x in score.split("-", 1)]
+                    pm["winner"] = "home" if h > a else "away" if a > h else "draw"
+                except Exception:
+                    pass
+        # If no predictions were generated, baseline-evaluate past matches anyway
+        if not predictions and past:
+            log(f"Backtest baseline: generating predictions for {len(past)} past matches")
+            for pm in past:
+                pred = calculate_prediction(
+                    pm,
+                    calibration_offset=calibration_offset,
+                    fifa_rankings=fifa_rankings,
+                    host_country=host_country,
+                    use_dixon_coles=use_dc,
+                    dc_rho=fitted_rho,
+                )
+                predictions.append({
+                    "match": pm["name"],
+                    "home": pm["home"],
+                    "away": pm["away"],
+                    "kickoff_utc": pm["kickoff_utc"],
+                    "time_to_kickoff_h": pm.get("time_to_kickoff_h", 0),
+                    **pred,
+                })
     
     # ── 蒙特卡洛模拟 ──────────────────────────────
     monte_carlo_result = None
@@ -2184,14 +2328,21 @@ def main():
     if monte_carlo_result:
         output["monte_carlo"] = monte_carlo_result
     
+    if run_backtest:
+        bt = backtest_with_live_results(output_file)
+        output["backtest"] = bt
+        log(f"Backtest: {bt.get('status')} matched={bt.get('matched_matches')} acc={bt.get('accuracy')}")
+    
     print(json.dumps(output, indent=2, ensure_ascii=False))
     
     ts = now_utc.strftime("%Y-%m-%d_%H")
     pred_file = PREDICTIONS_DIR / f"prediction_{ts}.json"
+    output_file = str(pred_file)
     PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
     with open(pred_file, "w") as f:
         json.dump(output, f, indent=2, ensure_ascii=False)
     log(f"Saved: {pred_file}")
+    output_file = str(pred_file)
     
     with open("/tmp/pred_calibration.json", "w") as f:
         json.dump(calibration, f, indent=2)
