@@ -1,9 +1,9 @@
 ---
-name: world-cup-predict
-description: 2026 世界杯预测 + 自动回填 + 复盘一体化。支持 Hermes cron（飞书推送）和 GitHub Actions（邮件推送）双模式。Python 引擎 scripts/predict_wc.py 跑 P0 全字段 + P2 三向加权评分 + Poisson 比分分布算法。GHA 版已实测通过（2026-06-29），每日 16:35 BJT 自动推送邮件。
+name: league-predict
+description: 联赛预测 + 自动回填 + 复盘一体化。支持 Hermes cron（飞书推送）和 GitHub Actions（邮件推送）双模式。Python 引擎 scripts/predict_wc.py 跑 P0 全字段 + P2 三向加权评分 + Poisson 比分分布算法。
 ---
 
-# World Cup Predict — 一体化版
+# League Predict — 一体化版
 
 每日 10:30 BJT 跑一次（cron `30 2 * * *` UTC，或 GitHub Actions schedule `4 8 * * *`），覆盖未来 24h 比赛，产出预测 + 自动回填前 24h 结果 + 复盘摘要。
 
@@ -182,7 +182,7 @@ calibration.odds_accuracy = ML favorites that actually won / total ML-favored ma
 **ESPN API**（自带 DraftKings 赔率）— 唯一数据源，不需要 API Key。
 
 ```
-GET https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=YYYYMMDD-YYYYMMDD&limit=50
+GET https://site.api.espn.com/apis/site/v2/sports/soccer/{league_slug}/scoreboard?dates=YYYYMMDD-YYYYMMDD&limit=50
 ```
 
 **日期窗口**：`dates={today-1}-{today+1}`（3 天），避免边界漏场。
