@@ -1231,8 +1231,8 @@ def backtest_with_live_results(prediction_file):
         home_name = m.get("homeTeam", {}).get("name", "")
         away_name = m.get("awayTeam", {}).get("name", "")
         score = m.get("score", {})
-        home_goals = score.get("winner") or score.get("fullTime", {}).get("home")
-        away_goals = score.get("winner") or score.get("fullTime", {}).get("away")
+        home_goals = score.get("fullTime", {}).get("home")
+        away_goals = score.get("fullTime", {}).get("away")
         status = m.get("status", "")
         if status != "FINISHED" or home_goals is None or away_goals is None:
             continue
@@ -2093,7 +2093,6 @@ def main():
     
     # Backtest
     run_backtest = "--backtest" in sys.argv
-    output_file = None
 
     # Dixon-Coles
     use_dc = "--no-dc" not in sys.argv  # 默认启用
@@ -2185,7 +2184,6 @@ def main():
         with open(pred_file, "w") as f:
             json.dump(output, f, indent=2, ensure_ascii=False)
         log(f"Saved (no predictions): {pred_file}")
-        output_file = str(pred_file)
         return
     
     # ─── 正常预测流程 ──────────────────────────────
@@ -2329,7 +2327,13 @@ def main():
         output["monte_carlo"] = monte_carlo_result
     
     if run_backtest:
-        bt = backtest_with_live_results(output_file)
+        ts = now_utc.strftime("%Y-%m-%d_%H")
+        pred_file = PREDICTIONS_DIR / f"prediction_{ts}.json"
+        PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
+        with open(pred_file, "w") as f:
+            json.dump(output, f, indent=2, ensure_ascii=False)
+        log(f"Saved: {pred_file}")
+        bt = backtest_with_live_results(str(pred_file))
         output["backtest"] = bt
         log(f"Backtest: {bt.get('status')} matched={bt.get('matched_matches')} acc={bt.get('accuracy')}")
     
