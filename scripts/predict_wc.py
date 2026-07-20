@@ -2030,8 +2030,9 @@ def main():
     future_sorted = sorted(future, key=lambda x: x.get("time_to_kickoff_h", 0))
     if len(future_sorted) > 5:
         log(f"⚠  {len(future_sorted)} future matches found, only predicting nearest 5 (rest truncated)")
+    prediction_window = 336 if tournament_type == "league" else 24  # 联赛14天 / 杯赛24小时
     for m in future_sorted[:5]:
-        if -24 <= m.get("time_to_kickoff_h", 24) <= 24:
+        if -prediction_window <= m.get("time_to_kickoff_h", prediction_window) <= prediction_window:
             pred = calculate_prediction(
                 m, 
                 calibration_offset=calibration_offset,
