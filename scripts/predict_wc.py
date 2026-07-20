@@ -1109,6 +1109,78 @@ def convert_football_data_to_espn_format(data, config):
     return events
 
 
+def backtest_from_source(prediction_file):
+    """Compare predictions against actual results from football-data.org."""
+    import json
+    from datetime import datetime, timezone
+
+    try:
+        pred_data = json.loads(Path(prediction_file).read_text())
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+    league = pred_data.get("league", "epl")
+    league_config = LEAGUE_CONFIG.get(league, LEAGUE_CONFIG["epl"])
+    if league_config.get("data_source") != "football-data":
+        return {"status": "skip", "reason": "only football-data source supported for auto backtest"}
+
+    # Build lookup from past_matches in the same prediction file
+    actual_index = {}
+    for m in pred_data.get("past_matches", []):
+        if m.get("status") == "STATUS_FULL_TIME" or m.get("completed"):
+            home = m.get("home", "")
+            away = m.get("away", "")
+            score = m.get("score", "")
+            winner = m.get("winner")
+            if not winner and "-" in (score or ""):
+                try:
+                    h, a = [int(x.strip()) for x in score.split("-", 1)]
+                    winner = "home" if h > a else "away" if a > h else "draw"
+                except Exception:
+                    winner = None
+            if home and away and winner:
+                actual_index[(home, away)] = {"winner": winner, "score": score}
+
+    rows = []
+    for pred in pred_data.get("predictions", []):
+        home = pred.get("home", "")
+        away = pred.get("away", "")
+        actual = actual_index.get((home, away))
+        if not actual:
+            continue
+        predicted = None
+        score = pred.get("predicted_score") or ""
+        if "-" in score:
+            try:
+                h, a = [int(x.strip()) for x in score.split("-", 1)]
+            except Exception:
+                h = a = None
+            if h is not None:
+                predicted = "home" if h > a else "away" if a > h else "draw"
+        if predicted is None:
+            continue
+        rows.append({
+            "home": home,
+            "away": away,
+            "predicted": predicted,
+            "actual": actual["winner"],
+            "correct": predicted == actual["winner"],
+            "predicted_score": score,
+            "actual_score": actual.get("score", ""),
+        })
+
+    if not rows:
+        return {"status": "no_evaluable_matches", "matched_matches": 0}
+    correct = sum(1 for r in rows if r["correct"])
+    return {
+        "status": "ok",
+        "matched_matches": len(rows),
+        "correct": correct,
+        "accuracy": correct / len(rows),
+        "rows": rows,
+    }
+
+
 def convert_api_football_to_espn_format(data, config):
     """将 API-Football 格式转换为 ESPN 兼容格式"""
     events = []
