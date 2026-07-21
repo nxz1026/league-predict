@@ -97,7 +97,40 @@ def monte_carlo_champion(
         "simulation_count": n_simulations,
         "model": "dixon_coles",
         "rho": rho,
+        # P2-C 新增: 收敛性诊断 — 标准误估计
+        "convergence_diagnostics": _compute_se(champion_counts, n_simulations),
     }
+
+
+def _compute_se(champion_counts: dict[str, int], n_simulations: int) -> dict[str, Any]:
+    """计算每个队伍冠军概率的标准误（P2-C）。
+
+    SE = sqrt(p_hat * (1 - p_hat) / n)
+    用于判断模拟次数是否足够（SE < 0.01 为理想精度）。
+    """
+    import math as _math
+    diagnostics: dict[str, Any] = {}
+    for team, count in champion_counts.items():
+        p_hat = count / n_simulations
+        se = _math.sqrt(p_hat * (1 - p_hat) / n_simulations)
+        ci_lo = max(0.0, p_hat - 1.96 * se)
+        ci_hi = min(1.0, p_hat + 1.96 * se)
+        diagnostics[team] = {
+            "count": count,
+            "probability": round(p_hat, 4),
+            "std_error": round(se, 5),
+            "ci_95_lower": round(ci_lo, 4),
+            "ci_95_upper": round(ci_hi, 4),
+        }
+    # 全局收敛指标
+    all_se = [d["std_error"] for d in diagnostics.values()]
+    diagnostics["_summary"] = {
+        "max_std_error": round(max(all_se), 5) if all_se else 0.0,
+        "avg_std_error": round(sum(all_se) / len(all_se), 5) if all_se else 0.0,
+        "teams_with_se_above_1pct": sum(1 for s in all_se if s > 0.01),
+        "n_simulations": n_simulations,
+    }
+    return diagnostics
 
 
 def simulate_world_cup(fixtures: list[dict[str, Any]], team_strengths: dict[str, dict[str, float]], rho: float) -> dict[str, Any]:

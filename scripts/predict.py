@@ -35,7 +35,7 @@ from core.calibration import build_calibration, compute_calibration_offset, load
 from core.backtest import reconcile_predictions, backtest_with_live_results
 from core.output import cleanup_old_files, save_results
 from core.predictor import calculate_prediction
-from core.elo import init_ratings_from_fifa, process_match_result
+from core.elo import get_or_init_elo_ratings, process_match_result, save_elo_ratings
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -61,6 +61,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except AttributeError:
+        pass
     parser = build_parser()
     args = parser.parse_args()
 
@@ -109,8 +113,8 @@ def main() -> None:
     fifa_rankings = fetch_fifa_rankings()
     logger.info(f"FIFA rankings loaded: {len(fifa_rankings)} teams")
 
-    # ── ELO 评分初始化 ──
-    elo_ratings = init_ratings_from_fifa(fifa_rankings)
+    # ── ELO 评分初始化（优先加载持久化，冷启动则从 FIFA 初始化）──
+    elo_ratings = get_or_init_elo_ratings(fifa_rankings)
     for m in past:
         try:
             home_goals = int(m.get("score", "0-0").split("-")[0])
@@ -118,7 +122,8 @@ def main() -> None:
             process_match_result(m.get("home_en", ""), m.get("away_en", ""), home_goals, away_goals, elo_ratings)
         except (ValueError, IndexError):
             pass
-    logger.info(f"ELO ratings initialized: {len(elo_ratings)} teams")
+    save_elo_ratings(elo_ratings)
+    logger.info(f"ELO ratings: {len(elo_ratings)} teams")
 
     if not future and not past:
         logger.info("No matches found in window")

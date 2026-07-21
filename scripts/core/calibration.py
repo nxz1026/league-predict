@@ -10,6 +10,10 @@ from core.config import PREDICTIONS_DIR, FOOTBALL_DIR
 from core.log import logger
 
 
+# ── P0-1: Calibration 持久化路径 ────────────────────────
+_CALIBRATION_CACHE_FILE = FOOTBALL_DIR / "references" / ".calibration_state.json"
+
+
 def _try_load_json(path) -> dict | None:
     """尝试用多种编码加载 JSON 文件（兼容 Windows gbk 历史文件）"""
     for enc in ("utf-8", "gbk", "gb18030"):
@@ -19,6 +23,32 @@ def _try_load_json(path) -> dict | None:
         except (UnicodeDecodeError, json.JSONDecodeError, OSError):
             continue
     return None
+
+
+def _load_prev_offset() -> dict | None:
+    """从持久化文件加载上一次校准偏移（P0-1 修复）"""
+    try:
+        if _CALIBRATION_CACHE_FILE.exists():
+            data = _try_load_json(_CALIBRATION_CACHE_FILE)
+            if data and isinstance(data, dict):
+                logger.info(f"Loaded previous calibration offset (sample_size={data.get('sample_size', '?')})")
+                return data
+    except Exception as e:
+        logger.warning(f"Failed to load previous calibration offset: {e}")
+    return None
+
+
+def _save_offset(offset: dict) -> None:
+    """持久化校准偏移到文件（P0-1 修复）"""
+    try:
+        _CALIBRATION_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        # 保存时附带时间戳，便于调试
+        offset["_saved_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        with open(_CALIBRATION_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(offset, f, ensure_ascii=False, indent=2)
+        logger.debug(f"Saved calibration offset to {_CALIBRATION_CACHE_FILE}")
+    except Exception as e:
+        logger.warning(f"Failed to save calibration offset: {e}")
 
 
 def load_historical_past_matches(days: int = 30) -> list[dict[str, Any]]:
@@ -58,6 +88,8 @@ def compute_calibration_offset(past_matches: list[dict[str, Any]]) -> dict[str, 
     """
     从累积 past_matches 计算 calibration 修正因子。
     用实际赛果分布 vs 均匀分布(1/3)的比率做软修正。
+    
+    P0-1 修复: 指数平滑现在会真正执行，通过 _load_prev_offset / _save_offset 持久化。
     """
     if len(past_matches) < 5:
         return None
@@ -101,23 +133,20 @@ def compute_calibration_offset(past_matches: list[dict[str, Any]]) -> dict[str, 
     draw_correction = max(_clamp_lo, min(_clamp_hi, actual_draw_rate / _baseline_draw))
     away_correction = max(_clamp_lo, min(_clamp_hi, actual_away_rate / _baseline_away))
 
-    # 指数平滑：新旧修正值加权融合，防止跳变（P1-1）
+    # ── P0-1 修复: 指数平滑现在真正生效 ──
     _smooth = 0.7
-    prev_offset = None  # TODO: 从持久化文件加载上一次 offset
+    prev_offset = _load_prev_offset()  # 从文件加载上一次值
     if prev_offset:
         home_correction = _smooth * prev_offset.get("home_correction", home_correction) + (1 - _smooth) * home_correction
         draw_correction = _smooth * prev_offset.get("draw_correction", draw_correction) + (1 - _smooth) * draw_correction
         away_correction = _smooth * prev_offset.get("away_correction", away_correction) + (1 - _smooth) * away_correction
+        logger.info(f"Exponential smoothing applied (α={_smooth})")
 
-    # 对 Onside signal 的修正幅度减半（P1-1：避免双修正误差放大）
+    # 对 Onside signal 的修正幅度减半（避免双修正误差放大）
     onside_home_correction = 1.0 + (home_correction - 1.0) * sample_weight * 0.5
     onside_away_correction = 1.0 + (away_correction - 1.0) * sample_weight * 0.5
 
-    logger.info(f"Calibration offset(n={total}, weight={sample_weight:.2f}): "
-                f"home×{home_correction:.3f} draw×{draw_correction:.3f} away×{away_correction:.3f} | "
-                f"onside_home×{onside_home_correction:.3f} onside_away×{onside_away_correction:.3f}")
-
-    return {
+    result = {
         "home_correction": round(home_correction, 3),
         "draw_correction": round(draw_correction, 3),
         "away_correction": round(away_correction, 3),
@@ -129,6 +158,15 @@ def compute_calibration_offset(past_matches: list[dict[str, Any]]) -> dict[str, 
         "actual_draw_rate": round(actual_draw_rate, 3),
         "actual_away_rate": round(actual_away_rate, 3),
     }
+
+    # ── P0-1 修复: 持久化当前校准值 ──
+    _save_offset(result)
+
+    logger.info(f"Calibration offset(n={total}, weight={sample_weight:.2f}): "
+                f"home×{home_correction:.3f} draw×{draw_correction:.3f} away×{away_correction:.3f} | "
+                f"onside_home×{onside_home_correction:.3f} onside_away×{onside_away_correction:.3f}")
+
+    return result
 
 
 def _parse_score(score_str: str | None) -> tuple[int, int] | None:

@@ -43,14 +43,18 @@ def to_cn(name: str | None) -> str:
 
 
 def form_to_score(form_str: str | None) -> float:
-    """'DWDDW' → 0-1, W=3, D=1, L=0，带时间衰减（最近比赛权重更高）"""
+    """'DWDDW' → 0-1, W=3, D=1, L=0，带指数时间衰减（最近比赛权重更高）
+
+    P1-A 修复: 衰减系数从线性 0.3 升级为指数 2^i，
+    最新一场权重是最老的 16 倍，更符合足球状态敏感性。
+    """
     if not form_str:
         return 0.5
     total_weight = 0
     weighted_sum = 0
-    # 时间衰减：从左到右（最老→最新），最新权重最高
+    # 指数时间衰减：从左到右（最老→最新），最新权重最高
     for i, c in enumerate(form_str):
-        w = 1.0 + 0.3 * i  # 最后一场权重 = 1.0 + 0.3*4 = 2.2
+        w = 2.0 ** i  # 最后一场权重 = 2^4 = 16x（5场时）
         score = 3 if c == 'W' else 1 if c == 'D' else 0
         weighted_sum += score * w
         total_weight += w * 3
@@ -70,23 +74,50 @@ def record_to_score(records: list) -> float:
     return 0.5
 
 
-def spread_movement_factor(away_open: dict | None, away_close: dict | None) -> float:
-    """用 away spread open→close 的 line movement 判断 market 方向。
+def spread_movement_factor(away_open: dict | None, away_close: dict | None,
+                          home_open: dict | None = None, home_close: dict | None = None) -> float:
+    """综合主客场盘口 line + odds 变化判断 market 方向。
 
-    正值 = 盘口向主队移动（away spread open < close，away 弱势加深）
-    负值 = 盘口向客队移动（away spread open > close，away 被看好）
+    P1-B 升级: 原版仅用 away spread line 差值，
+    现在加入 home spread + 双方 odds 变化作为辅助信号。
+
+    正值 = 盘口向主队移动（利好主队）
+    负值 = 盘口向客队移动（利好客队）
     """
-    if not away_open or not away_close:
-        return 0.0
-    open_line = away_open.get("line", None)
-    close_line = away_close.get("line", None)
-    if open_line is None or close_line is None:
-        return 0.0
-    try:
-        movement = float(close_line) - float(open_line)
-        return max(-1.0, min(1.0, movement / 3.0))
-    except (ValueError, TypeError):
-        return 0.0
+    signal = 0.0
+
+    # Away spread line 变化
+    if away_open and away_close:
+        ol = away_open.get("line")
+        cl = away_close.get("line")
+        if ol is not None and cl is not None:
+            try:
+                signal += (float(cl) - float(ol)) / 3.0
+            except (ValueError, TypeError):
+                pass
+
+    # Home spread line 变化（方向相反：home line 升高 = 客队被看好）
+    if home_open and home_close:
+        ol = home_open.get("line")
+        cl = home_close.get("line")
+        if ol is not None and cl is not None:
+            try:
+                signal += (float(ol) - float(cl)) / 3.0
+            except (ValueError, TypeError):
+                pass
+
+    # Away odds 变化辅助信号（赔率下降 = 被看好）
+    if away_open and away_close:
+        oo = away_open.get("odds")
+        co = away_close.get("odds")
+        if oo and co:
+            try:
+                odds_shift = (float(oo) - float(co)) / 100.0
+                signal += odds_shift * 0.3
+            except (ValueError, TypeError):
+                pass
+
+    return max(-1.0, min(1.0, signal))
 
 
 def decimal_to_american(decimal_odds: str | float | None) -> str | None:
@@ -105,20 +136,41 @@ def decimal_to_american(decimal_odds: str | float | None) -> str | None:
         return None
 
 
-def remove_vig(home_p: float | None, draw_p: float | None, away_p: float | None = None) -> tuple[float | None, float | None, float | None]:
-    """三向去水（比例法）"""
+def remove_vig(home_p: float | None, draw_p: float | None, away_p: float | None = None,
+              method: str = "logit") -> tuple[float | None, float | None, float | None]:
+    """三向去水。
+
+    P1-D 升级: 支持两种去水方法：
+    - "logit"（默认）: 对数比例法 (Shen & Steinberg, 1994)，更准确处理热门方高抽水
+    - "proportional": 简单比例法（向后兼容）
+    """
     from core.config import BOOKMAKER_MARGIN, MIN_IMPLIED_PROB
+    import math
 
     if draw_p is None:
         return None, None, None
     if home_p is None and away_p is None:
         return None, None, None
-    # 当某项缺失时，用 1.0 反算（更稳健的默认值）
     _margin = BOOKMAKER_MARGIN
     if away_p is None:
         away_p = max(MIN_IMPLIED_PROB, 1.0 - home_p - draw_p)
     if home_p is None:
         home_p = max(MIN_IMPLIED_PROB, 1.0 - draw_p - away_p)
+
+    if method == "logit":
+        # 对数比例法：对隐含概率取对数 → 减均值 → 指数化 → 归一化
+        probs = [home_p, draw_p, away_p]
+        try:
+            log_probs = [math.log(max(p, 1e-10)) for p in probs]
+            mean_log = sum(log_probs) / len(log_probs)
+            shifted = [math.exp(lp - mean_log) for lp in log_probs]
+            total = sum(shifted)
+            if total > 0:
+                return (shifted[0] / total, shifted[1] / total, shifted[2] / total)
+        except (ValueError, OverflowError, ZeroDivisionError):
+            pass  # fallback to proportional
+
+    # 比例法兜底
     total = home_p + draw_p + away_p
     if total <= 0:
         return home_p / _margin, draw_p / _margin, away_p / _margin

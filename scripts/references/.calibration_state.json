@@ -1,0 +1,13 @@
+{
+  "home_correction": 1.176,
+  "draw_correction": 0.947,
+  "away_correction": 0.966,
+  "onside_home_correction": 1.011,
+  "onside_away_correction": 0.998,
+  "sample_size": 6,
+  "sample_weight": 0.12,
+  "actual_home_rate": 0.333,
+  "actual_draw_rate": 0.333,
+  "actual_away_rate": 0.333,
+  "_saved_at": "2026-07-21T13:22:00Z"
+}

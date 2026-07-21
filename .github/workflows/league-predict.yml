@@ -149,9 +149,11 @@ jobs:
 
       - name: Send webhook (with retry)
         shell: bash
+        env:
+          FEISHU_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
         run: |
           python3 << 'PYEOF'
-          import json, urllib.request, time
+          import json, os, urllib.request, time
 
           body = open('/tmp/email_body.txt').read()
 
@@ -162,8 +164,8 @@ jobs:
               }
           }
 
-          url = '${{ secrets.FEISHU_WEBHOOK_URL }}'
-          if not url or url.startswith('${{'):
+          url = os.environ.get('FEISHU_URL', '')
+          if not url:
               print('ERROR: FEISHU_WEBHOOK_URL secret not configured')
               exit(1)
           max_retries = 3

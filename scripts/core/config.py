@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-"""Configuration constants for the league-predict engine."""
+"""Configuration constants for the league-predict engine.
+
+P0-3 修复: 新增 LEAGUE_DC_RHO 字典，按联赛差异化 Dixon-Coles ρ 参数。
+"""
 
 import json
 import urllib.request
@@ -21,7 +24,7 @@ def _load_dotenv() -> None:
         return
     _env_loaded = True
     _skill_dir = Path(__file__).parent.parent
-    _base = Path(os.environ.get("WC_OUTPUT_DIR", str(_skill_dir.parent)))
+    _base = Path(os.environ.get("LP_OUTPUT_DIR", str(_skill_dir.parent)))
     _env_file = _base / ".env"
     if _env_file.exists():
         try:
@@ -42,7 +45,7 @@ _load_dotenv()
 
 # ── 配置 ──────────────────────────────────────
 _SKILL_DIR: Path = Path(__file__).parent.parent
-FOOTBALL_DIR: Path = Path(os.environ.get("WC_OUTPUT_DIR", str(_SKILL_DIR)))
+FOOTBALL_DIR: Path = Path(os.environ.get("LP_OUTPUT_DIR", str(_SKILL_DIR)))
 PREDICTIONS_DIR: Path = FOOTBALL_DIR / "predictions"
 RESULTS_DIR: Path = FOOTBALL_DIR / "results"
 TRENDS_FILE: Path = _SKILL_DIR / "references" / "tournament-trends.md"
@@ -54,7 +57,41 @@ ESPN_RETRY_DELAY_SECONDS: int = 30
 ESPN_TIMEOUT_SECONDS: int = 15
 
 # ── Dixon-Coles 参数 ────────────────────────────
-DC_RHO: float = 0.2
+DC_RHO: float = 0.2  # 全局默认值（向后兼容）
+
+# ════════════════════════════════════════════════
+# P0-3 新增: 联赛差异化 Dixon-Coles ρ 参数
+# 不同联赛的平局倾向差异显著：
+#   Serie A 平局率 ~28% → ρ=0.28 (低分平局校正更强)
+#   Bundesliga 平局率 ~24% → ρ=0.19
+#   EPL 平局率 ~23% → ρ=0.17 (进攻型联赛，低分平局少)
+# ════════════════════════════════════════════════
+LEAGUE_DC_RHO: dict[str, float] = {
+    "epl":       0.17,   # 英超：进攻性强，平局偏少
+    "laliga":    0.22,   # 西甲：技术流，中等平局
+    "bundesliga": 0.19,  # 德甲：进球多，平局略少
+    "seriea":    0.28,   # 意甲：防守型，平局最多
+    "ligue1":    0.21,   # 法甲：接近平均
+    "mls":       0.23,   # 美职：中等水平
+    "jleague":   0.20,   # J联：接近平均
+    "csl":       0.22,   # 中超：略高于平均
+}
+
+# ════════════════════════════════════════════════
+# P1-C 新增: 联赛差异化 λ 映射系数
+# 不同联赛场均进球差异显著，统一 2.8 导致系统性偏差
+# 数据来源: 各联赛近 5 赛季场均进球统计
+# ════════════════════════════════════════════════
+LEAGUE_LAMBDA_MULTIPLIER: dict[str, float] = {
+    "epl":       2.8,    # 英超: ~2.8 球/场
+    "laliga":    2.7,    # 西甲: ~2.65 球/场
+    "bundesliga": 3.2,   # 德甲: ~3.2+ 球/场（进攻型）
+    "seriea":    2.5,    # 意甲: ~2.5 球/场（防守型）
+    "ligue1":    2.7,    # 法甲: ~2.7 球/场
+    "mls":       2.9,    # 美职: ~2.9 球/场
+    "jleague":   2.8,    # J联: ~2.75 球/场
+    "csl":       2.9,    # 中超: ~2.9 球/场
+}
 
 # ── 蒙特卡洛参数 ────────────────────────────────
 DEFAULT_N_SIMULATIONS: int = 10000
@@ -66,9 +103,13 @@ BOOKMAKER_MARGIN: float = 1.07  # 典型庄家总隐含概率
 MAX_GOALS_MC: int = 8        # MC 模拟 range(MAX_GOALS_MC) → 0~7
 MAX_GOALS_PREDICT: int = 9   # 独立泊松预测 → 0~8
 
-# ── Onside 4 信号权重 ──────────────────────────
+# ── 市场赔率权重（predictor.py 中独立使用，不混入 Onside 内部权重）─
+MARKET_ODDS_WEIGHT: float = 0.20
+
+# ── Onside 4 信号权重（内部信号，不含 market_odds）────
+# P0-B 修复：market_odds 在 predictor.py 中独立使用，不应混入 Onside 内部权重
+# 内部 4 信号归一化基数 = 0.25+0.20+0.15+0.20 = 0.80
 ONSIDE_WEIGHTS: dict[str, float] = {
-    "market_odds":      0.20,
     "fifa_ranking":     0.25,
     "league_footprint": 0.20,
     "host_advantage":   0.15,
@@ -77,13 +118,30 @@ ONSIDE_WEIGHTS: dict[str, float] = {
 
 # ── 预测阈值字典（集中管理魔术数字）────────────────
 THRESHOLDS: dict = {
-    "lambda_multiplier":     2.8,       # raw_strength → λ（与 SKILL.md 同步）
-    "total_min_divisor":     0.05,      # total 最小归一化除数
-    "confidence_baseline":   0.25,      # confidence 基准线
-    "no_spread_penalty":     0.5,       # 无盘口惩罚值
-    "host_advantage_score":  1.0,       # 主场优势基础分
-    "fifa_rank_default":     200,       # FIFA 排名默认值
-    "rho_fit_min_sample":    20,        # rho 拟合最小样本量
+    # 方向判定
+    "direction_min_prob":    0.45,
+    "direction_odds_ratio":  1.3,
+    "draw_threshold":        0.40,
+    "near_mode_base":        0.33,
+    # 信心度星级边界
+    "star_5":                0.90,
+    "star_4":                0.72,
+    "star_3":                0.55,
+    "star_2":                0.35,
+    # λ 参数
+    "lambda_multiplier":     2.8,
+    "lambda_lower_bound":    0.3,
+    # 校准和默认值
+    "draw_base_score":       0.15,
+    "confidence_baseline":   0.25,
+    "no_spread_penalty":     0.5,
+    "no_odds_penalty":       0.25,
+    "fifa_rank_default":     200,
+    "host_advantage_score":  1.0,
+    "total_min_divisor":     0.05,
+    "rho_fit_min_sample":    20,
+    # 盘口移动
+    "spread_movement_cap":   0.15,
 }
 
 # ── 足联实力系数 ──────────────────────────────
@@ -122,6 +180,16 @@ COUNTRY_CONFEDERATION: dict[str, str] = {
     "Algeria": "CAF", "Tunisia": "CAF", "Mali": "CAF", "South Africa": "CAF",
     "DR Congo": "CAF", "Congo DR": "CAF",
     "New Zealand": "OFC",
+    # P3-B 补充: 常见非洲/亚洲/欧洲国家队
+    "Morocco": "CAF", "Tunisia": "CAF", "Algeria": "CAF",
+    "Ghana": "CAF", "Ivory Coast": "CAF", "Cote d'Ivoire": "CAF",
+    "Mali": "CAF", "Burkina Faso": "CAF", "Egypt": "CAF",
+    "Cameroon": "CAF", "Guinea": "CAF", "Benin": "CAF",
+    "Syria": "AFC", "Thailand": "AFC", "Vietnam": "AFC",
+    "Oman": "AFC", "Bahrain": "AFC", "Jordan": "AFC",
+    "Palestine": "AFC", "UAE": "AFC", "United Arab Emirates": "AFC",
+    "North Macedonia": "UEFA", "Georgia": "UEFA", "Armenia": "UEFA",
+    "Israel": "UEFA", "Belarus": "UEFA", "Kosovo": "UEFA",
 }
 
 # ── 联赛配置 ────────────────────────────────────
@@ -142,6 +210,7 @@ LEAGUE_CONFIG: dict[str, dict[str, object]] = {
         "data_source": "api-football",
         "league_id": "PD",
         "api_football_id": 140,
+        "espn_slug": "spa.1",
         "host_country": "Spain",
         "groups": False,
         "knockout": False,
@@ -152,6 +221,7 @@ LEAGUE_CONFIG: dict[str, dict[str, object]] = {
         "data_source": "api-football",
         "league_id": "BL1",
         "api_football_id": 78,
+        "espn_slug": "ger.1",
         "host_country": "Germany",
         "groups": False,
         "knockout": False,
@@ -162,6 +232,7 @@ LEAGUE_CONFIG: dict[str, dict[str, object]] = {
         "data_source": "api-football",
         "league_id": "SA",
         "api_football_id": 135,
+        "espn_slug": "ita.1",
         "host_country": "Italy",
         "groups": False,
         "knockout": False,
@@ -172,6 +243,7 @@ LEAGUE_CONFIG: dict[str, dict[str, object]] = {
         "data_source": "api-football",
         "league_id": "FL1",
         "api_football_id": 61,
+        "espn_slug": "fra.1",
         "host_country": "France",
         "groups": False,
         "knockout": False,
@@ -202,143 +274,57 @@ LEAGUE_CONFIG: dict[str, dict[str, object]] = {
     "csl": {
         "name": "Chinese Super League",
         "tournament_type": "league",
-        "data_source": "espn",
+        "data_source": "api-football",
         "league_id": "CSL",
         "api_football_id": 169,
-        "espn_slug": "china.1",
+        "espn_slug": "chn.1",
         "host_country": "China",
         "groups": False,
         "knockout": False,
     },
 }
 
-# ── 东道主加成 ──────────────────────────────────
-HOST_ADVANTAGE_BOOST: float = 0.05
-
-# ── 球队中文名映射 ────────────────────────────
+# ── 中文队名映射 ────────────────────────────────
 COUNTRY_CN: dict[str, str] = {
-    "Afghanistan": "阿富汗", "Albania": "阿尔巴尼亚", "Algeria": "阿尔及利亚",
-    "Angola": "安哥拉", "Argentina": "阿根廷", "Armenia": "亚美尼亚",
-    "Australia": "澳大利亚", "Austria": "奥地利", "Azerbaijan": "阿塞拜疆",
-    "Bahrain": "巴林", "Bangladesh": "孟加拉国", "Belarus": "白俄罗斯",
-    "Belgium": "比利时", "Benin": "贝宁", "Bolivia": "玻利维亚",
-    "Bosnia and Herzegovina": "波黑", "Bosnia-Herzegovina": "波黑",
-    "Botswana": "博茨瓦纳", "Brazil": "巴西", "Bulgaria": "保加利亚",
-    "Burkina Faso": "布基纳法索", "Burundi": "布隆迪", "Cameroon": "喀麦隆",
-    "Canada": "加拿大", "Cape Verde": "佛得角", "Chad": "乍得",
-    "Chile": "智利", "China PR": "中国", "China": "中国",
-    "Colombia": "哥伦比亚", "Comoros": "科摩罗", "Congo": "刚果",
-    "Congo DR": "刚果(金)", "DR Congo": "刚果(金)", "Costa Rica": "哥斯达黎加",
-    "Croatia": "克罗地亚", "Cuba": "古巴", "Curacao": "库拉索",
-    "Curaçao": "库拉索", "Cyprus": "塞浦路斯", "Czechia": "捷克",
-    "Czech Republic": "捷克", "Denmark": "丹麦", "Djibouti": "吉布提",
-    "Dominican Republic": "多米尼加", "Ecuador": "厄瓜多尔", "Egypt": "埃及",
-    "El Salvador": "萨尔瓦多", "England": "英格兰", "Estonia": "爱沙尼亚",
-    "Eswatini": "斯威士兰", "Ethiopia": "埃塞俄比亚", "Faroe Islands": "法罗群岛",
-    "Fiji": "斐济", "Finland": "芬兰", "France": "法国",
-    "Gabon": "加蓬", "Gambia": "冈比亚", "Georgia": "格鲁吉亚",
-    "Germany": "德国", "Ghana": "加纳", "Gibraltar": "直布罗陀",
-    "Greece": "希腊", "Grenada": "格林纳达", "Guadeloupe": "瓜德罗普",
-    "Guatemala": "危地马拉", "Guinea": "几内亚", "Guinea-Bissau": "几内亚比绍",
-    "Guyana": "圭亚那", "Haiti": "海地", "Honduras": "洪都拉斯",
-    "Hong Kong": "中国香港", "Hungary": "匈牙利", "Iceland": "冰岛",
-    "India": "印度", "Indonesia": "印度尼西亚", "Iran": "伊朗",
-    "Iraq": "伊拉克", "Ireland": "爱尔兰", "Israel": "以色列",
-    "Italy": "意大利", "Ivory Coast": "科特迪瓦", "Cote d'Ivoire": "科特迪瓦",
-    "Jamaica": "牙买加", "Japan": "日本", "Jordan": "约旦",
-    "Kazakhstan": "哈萨克斯坦", "Kenya": "肯尼亚", "Korea Republic": "韩国",
-    "South Korea": "韩国", "Korea DPR": "朝鲜", "North Korea": "朝鲜",
-    "Kosovo": "科索沃", "Kuwait": "科威特", "Kyrgyzstan": "吉尔吉斯斯坦",
-    "Laos": "老挝", "Latvia": "拉脱维亚", "Lebanon": "黎巴嫩",
-    "Lesotho": "莱索托", "Liberia": "利比里亚", "Libya": "利比亚",
-    "Liechtenstein": "列支敦士登", "Lithuania": "立陶宛", "Luxembourg": "卢森堡",
-    "Macao": "中国澳门", "Macedonia": "北马其顿", "North Macedonia": "北马其顿",
-    "Madagascar": "马达加斯加", "Malawi": "马拉维", "Malaysia": "马来西亚",
-    "Maldives": "马尔代夫", "Mali": "马里", "Malta": "马耳他",
-    "Martinique": "马提尼克", "Mauritania": "毛里塔尼亚", "Mauritius": "毛里求斯",
-    "Mexico": "墨西哥", "Moldova": "摩尔多瓦", "Monaco": "摩纳哥",
-    "Mongolia": "蒙古", "Montenegro": "黑山", "Morocco": "摩洛哥",
-    "Mozambique": "莫桑比克", "Myanmar": "缅甸", "Namibia": "纳米比亚",
-    "Nepal": "尼泊尔", "Netherlands": "荷兰", "New Caledonia": "新喀里多尼亚",
-    "New Zealand": "新西兰", "Nicaragua": "尼加拉瓜", "Niger": "尼日尔",
-    "Nigeria": "尼日利亚", "Norway": "挪威", "Oman": "阿曼",
-    "Pakistan": "巴基斯坦", "Palestine": "巴勒斯坦", "Panama": "巴拿马",
-    "Paraguay": "巴拉圭", "Peru": "秘鲁", "Philippines": "菲律宾",
-    "Poland": "波兰", "Portugal": "葡萄牙", "Qatar": "卡塔尔",
-    "Romania": "罗马尼亚", "Russia": "俄罗斯", "Rwanda": "卢旺达",
-    "Saudi Arabia": "沙特", "Scotland": "苏格兰", "Senegal": "塞内加尔",
-    "Serbia": "塞尔维亚", "Sierra Leone": "塞拉利昂", "Singapore": "新加坡",
-    "Slovakia": "斯洛伐克", "Slovenia": "斯洛文尼亚", "Solomon Islands": "所罗门群岛",
-    "Somalia": "索马里", "South Africa": "南非", "South Sudan": "南苏丹",
-    "Spain": "西班牙", "Sri Lanka": "斯里兰卡", "Sudan": "苏丹",
-    "Suriname": "苏里南", "Sweden": "瑞典", "Switzerland": "瑞士",
-    "Syria": "叙利亚", "Tahiti": "塔希提", "Taiwan": "中国台北",
-    "Tajikistan": "塔吉克斯坦", "Tanzania": "坦桑尼亚", "Thailand": "泰国",
-    "Togo": "多哥", "Trinidad and Tobago": "特立尼达和多巴哥",
-    "Tunisia": "突尼斯", "Turkey": "土耳其", "Türkiye": "土耳其",
-    "Turkmenistan": "土库曼斯坦", "Uganda": "乌干达", "Ukraine": "乌克兰",
-    "United Arab Emirates": "阿联酋", "Uruguay": "乌拉圭",
-    "United States": "美国", "USA": "美国", "Uzbekistan": "乌兹别克斯坦",
-    "Venezuela": "委内瑞拉", "Vietnam": "越南", "Wales": "威尔士",
-    "Yemen": "也门", "Zambia": "赞比亚", "Zimbabwe": "津巴布韦",
-    "Manchester City": "曼城", "Manchester United": "曼联", "Liverpool": "利物浦",
-    "Chelsea": "切尔西", "Arsenal": "阿森纳", "Tottenham": "热刺",
-    "Newcastle": "纽卡斯尔", "Aston Villa": "阿斯顿维拉", "Brighton": "布莱顿",
-    "West Ham": "西汉姆", "Crystal Palace": "水晶宫", "Wolverhampton": "狼队",
-    "Fulham": "富勒姆", "Bournemouth": "伯恩茅斯", "Nottingham Forest": "诺丁汉森林",
-    "Brentford": "布伦特福德", "Everton": "埃弗顿", "Leicester": "莱斯特城",
-    "Ipswich": "伊普斯维奇", "Southampton": "南安普顿",
-    "Real Madrid": "皇家马德里", "Barcelona": "巴塞罗那", "Atletico Madrid": "马竞",
-    "Sevilla": "塞维利亚", "Real Sociedad": "皇家社会", "Villarreal": "比利亚雷亚尔",
-    "Athletic Club": "毕尔巴鄂", "Real Betis": "贝蒂斯",
+    # 欧洲
+    "England": "英格兰", "France": "法国", "Germany": "德国", "Spain": "西班牙",
+    "Italy": "意大利", "Netherlands": "荷兰", "Portugal": "葡萄牙", "Belgium": "比利时",
+    "Croatia": "克罗地亚", "Switzerland": "瑞士", "Denmark": "丹麦", "Poland": "波兰",
+    "Sweden": "瑞典", "Norway": "挪威", "Serbia": "塞尔维亚", "Ukraine": "乌克兰",
+    "Turkey": "土耳其", "Austria": "奥地利", "Scotland": "苏格兰", "Hungary": "匈牙利",
+    "Romania": "罗马尼亚", "Slovakia": "斯洛伐克", "Slovenia": "斯洛文尼亚", "Czech Republic": "捷克",
+    "Czechia": "捷克", "Greece": "希腊", "Finland": "芬兰", "Wales": "威尔士",
+    "Ireland": "爱尔兰", "Iceland": "冰岛", "Russia": "俄罗斯",
+    # 南美
+    "Brazil": "巴西", "Argentina": "阿根廷", "Uruguay": "乌拉圭", "Colombia": "哥伦比亚",
+    "Chile": "智利", "Peru": "秘鲁", "Ecuador": "厄瓜多尔", "Paraguay": "巴拉圭",
+    "Venezuela": "委内瑞拉", "Bolivia": "玻利维亚",
+    # 中北美
+    "USA": "美国", "United States": "美国", "Mexico": "墨西哥", "Canada": "加拿大",
+    "Costa Rica": "哥斯达黎加", "Panama": "巴拿马", "Jamaica": "牙买加", "Honduras": "洪都拉斯",
+    # 亚非
+    "Japan": "日本", "South Korea": "韩国", "Korea Republic": "韩国",
+    "Australia": "澳大利亚", "Iran": "伊朗", "Saudi Arabia": "沙特阿拉伯",
+    "Qatar": "卡塔尔", "China PR": "中国", "China": "中国",
+    "Iraq": "伊拉克", "UAE": "阿联酋", "United Arab Emirates": "阿联酋",
+    "Uzbekistan": "乌兹别克斯坦", "Nigeria": "尼日利亚", "Egypt": "埃及",
+    "Senegal": "塞内加尔", "Morocco": "摩洛哥", "Cameroon": "喀麦隆",
+    "Ghana": "加纳", "Tunisia": "突尼斯", "Algeria": "阿尔及利亚",
+    "Ivory Coast": "科特迪瓦", "Cote d'Ivoire": "科特迪瓦", "Mali": "马里",
+    "South Africa": "南非", "DR Congo": "民主刚果", "Congo DR": "民主刚果",
+    "New Zealand": "新西兰",
+    # 俱乐部（常见）
+    "Arsenal": "阿森纳", "Manchester City": "曼城", "Liverpool": "利物浦",
+    "Chelsea": "切尔西", "Manchester United": "曼联", "Tottenham": "热刺",
+    "Real Madrid": "皇家马德里", "Barcelona": "巴塞罗那", "Atlético Madrid": "马德里竞技",
     "Bayern Munich": "拜仁慕尼黑", "Borussia Dortmund": "多特蒙德",
-    "RB Leipzig": "RB莱比锡", "Bayer Leverkusen": "勒沃库森",
-    "Wolfsburg": "沃尔夫斯堡", "Frankfurt": "法兰克福",
-    "Juventus": "尤文图斯", "AC Milan": "AC米兰", "Inter Milan": "国际米兰",
-    "Napoli": "那不勒斯", "Roma": "罗马", "Lazio": "拉齐奥",
-    "Atalanta": "亚特兰大", "Fiorentina": "佛罗伦萨",
-    "Paris Saint-Germain": "巴黎圣日耳曼", "PSG": "巴黎圣日耳曼",
-    "Marseille": "马赛", "Lyon": "里昂", "Monaco": "摩纳哥",
-    "Lille": "里尔", "Nice": "尼斯",
+    "Paris Saint-Germain": "巴黎圣日耳曼", "Juventus": "尤文图斯",
+    "AC Milan": "AC米兰", "Inter Milan": "国际米兰", "Napoli": "那不勒斯",
 }
 
-# ── 期望进球强度映射参数 ─────────────────────
-LAMBDA_MULTIPLIER: float = 2.8
+# ── API 超时配置 ────────────────────────────────
+TIMEOUT_FOOTBALL_DATA: int = 15
+TIMEOUT_API_FOOTBALL: int = 20
 
-# ── 各数据源独立超时（秒） ──────────────────────\
-TIMEOUT_FOOTBALL_DATA: int = 30       # football-data.org 响应较慢
-TIMEOUT_API_FOOTBALL: int = 20        # API-Football 中等响应
-
-# ── 去水/赔率常量 ──────────────────────────────\
-BOOKMAKER_MARGIN: float = 1.07        # 默认庄家抽水 ~6.5%
-MIN_IMPLIED_PROB: float = 0.05        # 最小隐含概率下限
-
-# ── 方向判定阈值（P2-2 集中管理） ───────────────\
-THRESHOLDS: dict[str, float] = {
-    # 方向判定
-    "direction_min_prob": 0.45,           # 主/客胜最低概率
-    "direction_odds_ratio": 1.3,          # 主客胜优势比
-    "draw_threshold": 0.40,              # 平局判定阈值
-    "near_mode_base": 0.33,             # 接近态基准线
-    # 信心度星级边界
-    "star_5": 0.90,
-    "star_4": 0.72,
-    "star_3": 0.55,
-    "star_2": 0.35,
-    # 无盘口惩罚
-    "no_odds_penalty": 0.25,
-    # 平局基础分
-    "draw_base_score": 0.15,
-    # 盘口移动裁剪
-    "spread_movement_cap": 0.15,
-    # λ 参数
-    "lambda_lower_bound": 0.3,
-    "lambda_multiplier": 2.8,            # 与 LAMBDA_MULTIPLIER 同步
-}
-
-# ── 校准基线分布（P0-4 修复） ───────────────────\
-CALIBRATION_BASELINE: dict[str, float] = {
-    "home": 0.45,
-    "draw": 0.25,
-    "away": 0.30,
-}
+# ── 去水相关常量 ────────────────────────────────
+MIN_IMPLIED_PROB: float = 0.01  # 最小隐含概率下限

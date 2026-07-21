@@ -4,10 +4,8 @@ __version__ = "4.1.0"
 
 from core.config import (
     ONSIDE_WEIGHTS,
-    HOST_ADVANTAGE_BOOST,
     DC_RHO,
     THRESHOLDS,
-    CALIBRATION_BASELINE,
 )
 from core.predictor import calculate_prediction
 from core.model.onside import compute_onside_signals
@@ -28,8 +26,8 @@ __all__ = [
     "load_historical_past_matches",
     "reconcile_predictions",
     "ONSIDE_WEIGHTS",
-    "HOST_ADVANTAGE_BOOST",
+
     "DC_RHO",
     "THRESHOLDS",
-    "CALIBRATION_BASELINE",
+
 ]

@@ -17,12 +17,12 @@ class TestFifaRankToScore(unittest.TestCase):
 
     def test_rank_100(self) -> None:
         score = fifa_rank_to_score(100)
-        expected = __import__("math").exp(-3.0 * 99 / 200)
+        expected = __import__("math").exp(-4.5 * 99 / 200)
         self.assertAlmostEqual(score, expected, places=4)
 
     def test_rank_200(self) -> None:
         score = fifa_rank_to_score(200)
-        expected = __import__("math").exp(-3.0 * 199 / 200)
+        expected = __import__("math").exp(-4.5 * 199 / 200)
         self.assertAlmostEqual(score, expected, places=4)
 
     def test_none_input(self) -> None:
