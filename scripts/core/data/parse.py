@@ -89,6 +89,22 @@ def spread_movement_factor(away_open: dict | None, away_close: dict | None) -> f
         return 0.0
 
 
+def decimal_to_american(decimal_odds: str | float | None) -> str | None:
+    """Convert decimal odds to American format (API-Football uses decimal)."""
+    if decimal_odds is None:
+        return None
+    try:
+        dec = float(decimal_odds)
+        if dec <= 1.0:
+            return None
+        if dec >= 2.0:
+            return f"+{round((dec - 1) * 100)}"
+        else:
+            return str(round(-100 / (dec - 1)))
+    except (ValueError, TypeError):
+        return None
+
+
 def remove_vig(home_p: float | None, draw_p: float | None, away_p: float | None = None) -> tuple[float | None, float | None, float | None]:
     """三向去水（比例法）"""
     from core.config import BOOKMAKER_MARGIN, MIN_IMPLIED_PROB
@@ -97,17 +113,15 @@ def remove_vig(home_p: float | None, draw_p: float | None, away_p: float | None 
         return None, None, None
     if home_p is None and away_p is None:
         return None, None, None
+    # 当某项缺失时，用 1.0 反算（更稳健的默认值）
+    _margin = BOOKMAKER_MARGIN
     if away_p is None:
-        away_p = BOOKMAKER_MARGIN - home_p - draw_p
-        if away_p < 0:
-            away_p = MIN_IMPLIED_PROB
+        away_p = max(MIN_IMPLIED_PROB, 1.0 - home_p - draw_p)
     if home_p is None:
-        home_p = BOOKMAKER_MARGIN - draw_p - away_p
-        if home_p < 0:
-            home_p = MIN_IMPLIED_PROB
+        home_p = max(MIN_IMPLIED_PROB, 1.0 - draw_p - away_p)
     total = home_p + draw_p + away_p
     if total <= 0:
-        return home_p / BOOKMAKER_MARGIN, draw_p / BOOKMAKER_MARGIN, away_p / BOOKMAKER_MARGIN
+        return home_p / _margin, draw_p / _margin, away_p / _margin
     return home_p / total, draw_p / total, away_p / total
 
 
@@ -159,7 +173,7 @@ def parse_events(events: list, now_utc: datetime | None = None) -> tuple[list, l
         home_records = home.get("records", []) if home else []
         away_records = away.get("records", []) if away else []
 
-        odds_raw = comps.get("odds") or []
+        odds_raw = comp.get("odds") or []
         odds = next((o for o in odds_raw if o), {}) if odds_raw else {}
 
         details = odds.get("details", "")

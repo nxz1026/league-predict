@@ -5,8 +5,11 @@ from __future__ import annotations
 import json
 from core.config import ONSIDE_WEIGHTS, HOST_ADVANTAGE_BOOST, DC_RHO, THRESHOLDS
 from core.log import logger
-from core.model.onside import compute_onside_signals, fetch_fifa_rankings
+# 统一从 core.rankings 导入（P1-3：打破循环依赖）
+from core.rankings import fetch_fifa_rankings
+from core.model.onside import compute_onside_signals
 from core.model.poisson import dixon_coles_match_probs, poisson_pmf, poisson_confidence_interval
+from core.elo import expected_score, DEFAULT_ELO
 
 
 def calculate_prediction(
@@ -17,9 +20,10 @@ def calculate_prediction(
     host_country: str | None = None,
     use_dixon_coles: bool = True,
     dc_rho: float = DC_RHO,
+    elo_ratings: dict[str, float] | None = None,
 ) -> dict:
     """
-    Onside 4 信号 + Dixon-Coles 预测 → 方向 + 信心 + 比分预测 + 95% CI
+    Onside 4 信号 + ELO + Dixon-Coles 预测 → 方向 + 信心 + 比分预测 + 95% CI
 
     Args:
         match: 比赛数据字典
@@ -28,6 +32,7 @@ def calculate_prediction(
         fifa_rankings: FIFA 排名字典
         host_country: 东道主国家
         use_dixon_coles: 是否使用 Dixon-Coles 模型
+        elo_ratings: ELO 评分表 {team: elo}，提供则加入信号融合
     """
     if weights is None:
         weights = ONSIDE_WEIGHTS
@@ -83,23 +88,40 @@ def calculate_prediction(
 
     sm_capped = max(-THRESHOLDS["spread_movement_cap"], min(THRESHOLDS["spread_movement_cap"], sm))
 
+    # ── ELO 信号（可选） ──
+    elo_home_expected = None
+    if elo_ratings:
+        home_elo = elo_ratings.get(home_en, DEFAULT_ELO)
+        away_elo = elo_ratings.get(away_en, DEFAULT_ELO)
+        elo_home_expected = expected_score(home_elo, away_elo, home_adv=True)
+        elo_away_expected = 1.0 - elo_home_expected
+    ELO_WEIGHT = 0.10  # ELO 占信号权重 10%
+
     # ── Onside 4 信号加权评分 ──
     # 市场信号 (20%): 盘口隐含概率
     market_home = hp
     market_draw = dp
     market_away = ap
 
-    # 综合评分 = 市场信号×20% + Onside信号×80%
+    # 调整 onside 权重以容纳 ELO
+    onside_weight = (1 - weights["market_odds"]) * (1 - ELO_WEIGHT if elo_ratings else 1.0)
+
     home_strength = (
         market_home * weights["market_odds"]
-        + home_onside * (1 - weights["market_odds"])
+        + home_onside * onside_weight
         + sm_capped * 0.5
     )
     away_strength = (
         market_away * weights["market_odds"]
-        + away_onside * (1 - weights["market_odds"])
+        + away_onside * onside_weight
         + (-sm_capped) * 0.5
     )
+
+    # ELO 加成
+    if elo_ratings and elo_home_expected is not None:
+        home_strength += elo_home_expected * ELO_WEIGHT
+        away_strength += elo_away_expected * ELO_WEIGHT
+
     draw_strength = max(0, market_draw * weights["market_odds"] + THRESHOLDS["draw_base_score"])
 
     # 东道主额外加成
@@ -185,14 +207,26 @@ def calculate_prediction(
         btts_prob = sum(p[2] for p in all_scores if p[0] > 0 and p[1] > 0)
         over_25_prob = sum(p[2] for p in all_scores if p[0] + p[1] > 2)
 
-    # ── 方向一致性检查（ponytail: 避免 "X 胜" 但 predicted_score 为平局） ──
+    # ── 方向一致性检查（P1-4：结构化枚举 + 主客胜全覆盖） ──
+    def _resolve_direction_winner(dir_str: str, match_ctx: dict) -> str | None:
+        """解析方向字符串 → 'home' | 'draw' | 'away' | None"""
+        if "胜" not in dir_str:
+            return None
+        home_name = match_ctx.get("home", "")
+        away_name = match_ctx.get("away", "")
+        if dir_str.startswith(home_name):
+            return "home"
+        elif dir_str.startswith(away_name):
+            return "away"
+        return None
+
     if "胜" in direction:
+        winner = _resolve_direction_winner(direction, match)
         predicted_h = int(predicted_score.split("-")[0])
         predicted_a = int(predicted_score.split("-")[1])
-        if predicted_h == predicted_a:
-            is_home_win = direction.startswith(match.get("home", ""))
+        if predicted_h == predicted_a and winner:
             for h, a, p in all_scores:
-                if (is_home_win and h > a) or (not is_home_win and a > h):
+                if (winner == "home" and h > a) or (winner == "away" and a > h):
                     predicted_score = f"{h}-{a}"
                     break
 
@@ -240,5 +274,6 @@ def calculate_prediction(
             "home_prob_weighted": round(home_prob, 3),
             "draw_prob_weighted": round(draw_prob_calc, 3),
             "away_prob_weighted": round(away_prob, 3),
+            "elo_home_expected": round(elo_home_expected, 3) if elo_ratings and elo_home_expected is not None else None,
         }
     }

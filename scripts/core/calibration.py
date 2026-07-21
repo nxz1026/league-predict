@@ -10,6 +10,17 @@ from core.config import PREDICTIONS_DIR, FOOTBALL_DIR
 from core.log import logger
 
 
+def _try_load_json(path) -> dict | None:
+    """尝试用多种编码加载 JSON 文件（兼容 Windows gbk 历史文件）"""
+    for enc in ("utf-8", "gbk", "gb18030"):
+        try:
+            with open(path, encoding=enc) as f:
+                return json.load(f)
+        except (UnicodeDecodeError, json.JSONDecodeError, OSError):
+            continue
+    return None
+
+
 def load_historical_past_matches(days: int = 30) -> list[dict[str, Any]]:
     """读取历史 predictions/ 文件中的 past_matches + references/historical_past_matches.json，去重后返回"""
     all_past: list[dict[str, Any]] = []
@@ -19,15 +30,16 @@ def load_historical_past_matches(days: int = 30) -> list[dict[str, Any]]:
         if f.stat().st_mtime < cutoff:
             continue
         try:
-            d = json.load(open(f))
-            all_past.extend(d.get("past_matches", []))
+            d = _try_load_json(f)
+            if d is not None:
+                all_past.extend(d.get("past_matches", []))
         except (json.JSONDecodeError, OSError, KeyError):
             pass
 
     hist_file = FOOTBALL_DIR / "references" / "historical_past_matches.json"
     if hist_file.exists():
         try:
-            hist_data = json.load(open(hist_file))
+            hist_data = _try_load_json(hist_file)
             all_past.extend(hist_data)
         except (json.JSONDecodeError, OSError):
             pass
@@ -69,6 +81,7 @@ def compute_calibration_offset(past_matches: list[dict[str, Any]]) -> dict[str, 
 
     total = home_wins + draws + away_wins
     if total < 5:
+        logger.debug(f"Calibration: only {total} finished matches (<5), skipping offset")
         return None
 
     actual_home_rate = home_wins / total
@@ -76,19 +89,42 @@ def compute_calibration_offset(past_matches: list[dict[str, Any]]) -> dict[str, 
     actual_away_rate = away_wins / total
 
     # 使用足球联赛实际分布作为基线（主胜~45%, 平局~25%, 客胜~30%）
-    # 而非均匀分布 1/3，避免系统性偏向修正
     _baseline_home = 0.45
     _baseline_draw = 0.25
     _baseline_away = 0.30
-    home_correction = max(0.5, min(2.0, actual_home_rate / _baseline_home))
-    draw_correction = max(0.5, min(2.0, actual_draw_rate / _baseline_draw))
-    away_correction = max(0.5, min(2.0, actual_away_rate / _baseline_away))
+
+    # 样本量加权：小样本时降低修正幅度，避免噪声放大（P1-1）
+    sample_weight = min(1.0, total / 50.0)
+    _clamp_lo, _clamp_hi = 0.5, 2.0
+
+    home_correction = max(_clamp_lo, min(_clamp_hi, actual_home_rate / _baseline_home))
+    draw_correction = max(_clamp_lo, min(_clamp_hi, actual_draw_rate / _baseline_draw))
+    away_correction = max(_clamp_lo, min(_clamp_hi, actual_away_rate / _baseline_away))
+
+    # 指数平滑：新旧修正值加权融合，防止跳变（P1-1）
+    _smooth = 0.7
+    prev_offset = None  # TODO: 从持久化文件加载上一次 offset
+    if prev_offset:
+        home_correction = _smooth * prev_offset.get("home_correction", home_correction) + (1 - _smooth) * home_correction
+        draw_correction = _smooth * prev_offset.get("draw_correction", draw_correction) + (1 - _smooth) * draw_correction
+        away_correction = _smooth * prev_offset.get("away_correction", away_correction) + (1 - _smooth) * away_correction
+
+    # 对 Onside signal 的修正幅度减半（P1-1：避免双修正误差放大）
+    onside_home_correction = 1.0 + (home_correction - 1.0) * sample_weight * 0.5
+    onside_away_correction = 1.0 + (away_correction - 1.0) * sample_weight * 0.5
+
+    logger.info(f"Calibration offset(n={total}, weight={sample_weight:.2f}): "
+                f"home×{home_correction:.3f} draw×{draw_correction:.3f} away×{away_correction:.3f} | "
+                f"onside_home×{onside_home_correction:.3f} onside_away×{onside_away_correction:.3f}")
 
     return {
         "home_correction": round(home_correction, 3),
         "draw_correction": round(draw_correction, 3),
         "away_correction": round(away_correction, 3),
+        "onside_home_correction": round(onside_home_correction, 3),
+        "onside_away_correction": round(onside_away_correction, 3),
         "sample_size": total,
+        "sample_weight": round(sample_weight, 3),
         "actual_home_rate": round(actual_home_rate, 3),
         "actual_draw_rate": round(actual_draw_rate, 3),
         "actual_away_rate": round(actual_away_rate, 3),

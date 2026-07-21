@@ -34,7 +34,7 @@ class TestCalculatePrediction(unittest.TestCase):
         match = self._make_match(home_prob=0.55, draw_prob=0.22, away_prob=0.23)
         result = calculate_prediction(match, use_dixon_coles=False)
         self.assertIn("direction", result)
-        self.assertIn("confidence", result)
+        self.assertIn("confidence_score", result)
         self.assertIn("stars", result)
         # Home favorite should predict home win or draw
         self.assertIn(result["direction"], [f"{match['home']} 胜", "平局", f"{match['home']} 胜 (接近)", "平局 (接近)"])

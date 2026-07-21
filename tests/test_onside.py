@@ -102,7 +102,7 @@ class TestComputeOnsideSignals(unittest.TestCase):
 
     def test_missing_rank_default(self) -> None:
         result = compute_onside_signals("Unknown", "Brazil", self.rankings)
-        self.assertEqual(result["home"]["fifa_rank"], 100)
+        self.assertEqual(result["home"]["fifa_rank"], 200)
 
     def test_onside_score_is_float(self) -> None:
         result = compute_onside_signals("England", "Brazil", self.rankings)

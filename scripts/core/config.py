@@ -13,6 +13,33 @@ import random
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+# ── 加载 .env（零依赖） ─────────────────────────
+_env_loaded = False
+def _load_dotenv() -> None:
+    global _env_loaded
+    if _env_loaded:
+        return
+    _env_loaded = True
+    _skill_dir = Path(__file__).parent.parent
+    _base = Path(os.environ.get("WC_OUTPUT_DIR", str(_skill_dir.parent)))
+    _env_file = _base / ".env"
+    if _env_file.exists():
+        try:
+            with open(_env_file, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    key, val = line.split("=", 1)
+                    key = key.strip()
+                    val = val.strip().strip("\"'")
+                    if key and not os.environ.get(key):
+                        os.environ[key] = val
+        except OSError:
+            pass
+
+_load_dotenv()
+
 # ── 配置 ──────────────────────────────────────
 _SKILL_DIR: Path = Path(__file__).parent.parent
 FOOTBALL_DIR: Path = Path(os.environ.get("WC_OUTPUT_DIR", str(_SKILL_DIR)))
@@ -32,6 +59,13 @@ DC_RHO: float = 0.2
 # ── 蒙特卡洛参数 ────────────────────────────────
 DEFAULT_N_SIMULATIONS: int = 10000
 
+# ── 庄家水线常量（去水用）────────────────────────
+BOOKMAKER_MARGIN: float = 1.07  # 典型庄家总隐含概率
+
+# ── Monte Carlo 统一进球范围 ─────────────────────
+MAX_GOALS_MC: int = 8        # MC 模拟 range(MAX_GOALS_MC) → 0~7
+MAX_GOALS_PREDICT: int = 9   # 独立泊松预测 → 0~8
+
 # ── Onside 4 信号权重 ──────────────────────────
 ONSIDE_WEIGHTS: dict[str, float] = {
     "market_odds":      0.20,
@@ -39,6 +73,17 @@ ONSIDE_WEIGHTS: dict[str, float] = {
     "league_footprint": 0.20,
     "host_advantage":   0.15,
     "confederation":    0.20,
+}
+
+# ── 预测阈值字典（集中管理魔术数字）────────────────
+THRESHOLDS: dict = {
+    "lambda_multiplier":     2.8,       # raw_strength → λ（与 SKILL.md 同步）
+    "total_min_divisor":     0.05,      # total 最小归一化除数
+    "confidence_baseline":   0.25,      # confidence 基准线
+    "no_spread_penalty":     0.5,       # 无盘口惩罚值
+    "host_advantage_score":  1.0,       # 主场优势基础分
+    "fifa_rank_default":     200,       # FIFA 排名默认值
+    "rho_fit_min_sample":    20,        # rho 拟合最小样本量
 }
 
 # ── 足联实力系数 ──────────────────────────────
@@ -83,8 +128,9 @@ COUNTRY_CONFEDERATION: dict[str, str] = {
 LEAGUE_CONFIG: dict[str, dict[str, object]] = {
     "epl": {
         "name": "English Premier League",
-        "data_source": "football-data",
+        "data_source": "api-football",
         "league_id": "PL",
+        "api_football_id": 39,
         "espn_slug": "eng.1",
         "host_country": "England",
         "groups": False,
@@ -93,8 +139,9 @@ LEAGUE_CONFIG: dict[str, dict[str, object]] = {
     "laliga": {
         "name": "La Liga",
         "tournament_type": "league",
-        "data_source": "football-data",
+        "data_source": "api-football",
         "league_id": "PD",
+        "api_football_id": 140,
         "host_country": "Spain",
         "groups": False,
         "knockout": False,
@@ -102,8 +149,9 @@ LEAGUE_CONFIG: dict[str, dict[str, object]] = {
     "bundesliga": {
         "name": "Bundesliga",
         "tournament_type": "league",
-        "data_source": "football-data",
+        "data_source": "api-football",
         "league_id": "BL1",
+        "api_football_id": 78,
         "host_country": "Germany",
         "groups": False,
         "knockout": False,
@@ -111,8 +159,9 @@ LEAGUE_CONFIG: dict[str, dict[str, object]] = {
     "seriea": {
         "name": "Serie A",
         "tournament_type": "league",
-        "data_source": "football-data",
+        "data_source": "api-football",
         "league_id": "SA",
+        "api_football_id": 135,
         "host_country": "Italy",
         "groups": False,
         "knockout": False,
@@ -120,9 +169,44 @@ LEAGUE_CONFIG: dict[str, dict[str, object]] = {
     "ligue1": {
         "name": "Ligue 1",
         "tournament_type": "league",
-        "data_source": "football-data",
+        "data_source": "api-football",
         "league_id": "FL1",
+        "api_football_id": 61,
         "host_country": "France",
+        "groups": False,
+        "knockout": False,
+    },
+    # ── 扩展联赛（P4-2）─────────────────────────────
+    "mls": {
+        "name": "Major League Soccer",
+        "tournament_type": "league",
+        "data_source": "espn",
+        "league_id": "MLS",
+        "api_football_id": 253,
+        "espn_slug": "usa.1",
+        "host_country": "USA",
+        "groups": False,
+        "knockout": False,
+    },
+    "jleague": {
+        "name": "J-League",
+        "tournament_type": "league",
+        "data_source": "football-data",
+        "league_id": "JL1",
+        "api_football_id": 98,
+        "espn_slug": "japan.1",
+        "host_country": "Japan",
+        "groups": False,
+        "knockout": False,
+    },
+    "csl": {
+        "name": "Chinese Super League",
+        "tournament_type": "league",
+        "data_source": "espn",
+        "league_id": "CSL",
+        "api_football_id": 169,
+        "espn_slug": "china.1",
+        "host_country": "China",
         "groups": False,
         "knockout": False,
     },

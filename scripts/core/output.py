@@ -52,7 +52,7 @@ def save_results(past_matches: list[dict[str, Any]]) -> None:
                     "away_score": int(parts[1]),
                     "status": m.get("status",""),
                 })
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump({"date": today, "matches": matches}, f, indent=2, ensure_ascii=False)
         logger.info(f"Saved results: {path} ({len(matches)} matches)")
     except Exception as e:

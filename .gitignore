@@ -1,2 +1,31 @@
-predictions/
-.skill-evolution/
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Predictions & results (generated)
+predictions/*.json
+results/*.json
+output/
+
+# Environment
+.env
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Skill artifacts (optional)
+*.bak
+SKILL.md.bak-*

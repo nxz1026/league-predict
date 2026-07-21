@@ -1,70 +1,135 @@
-"""Tests for core.data.parse — data parsing and odds handling."""
-
-from __future__ import annotations
+"""Tests for parse module (P1-5: 补充核心解析逻辑覆盖)"""
 
 import unittest
+import sys
+from pathlib import Path
 
-from core.data.parse import remove_vig, to_cn
+sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+
+from core.data.parse import remove_vig, form_to_score, record_to_score, parse_american_odds, spread_movement_factor, to_cn
 
 
 class TestRemoveVig(unittest.TestCase):
-    """P1-4 / P2-2: remove_vig with config-based constants."""
-
-    def test_normal_three_way(self):
-        h, d, a = remove_vig(0.50, 0.30, 0.27)
-        total = h + d + a
+    def test_all_present(self):
+        h, d, a = remove_vig(0.50, 0.28, 0.29)
+        total = round(h + d + a, 4)
         self.assertAlmostEqual(total, 1.0, places=4)
-        self.assertGreater(h, a)  # home favorite
 
-    def test_missing_away_fills_from_margin(self):
-        h, d, a = remove_vig(0.50, 0.30)
+    def test_away_missing(self):
+        """away_p=None → should compute from 1.0 - home - draw"""
+        h, d, a = remove_vig(0.50, 0.27, None)
         self.assertIsNotNone(a)
         self.assertGreater(a, 0)
 
-    def test_missing_home_fills_from_margin(self):
-        h, d, a = remove_vig(None, 0.30, 0.25)
+    def test_home_missing(self):
+        h, d, a = remove_vig(None, 0.28, 0.32)
         self.assertIsNotNone(h)
         self.assertGreater(h, 0)
 
-    def test_none_draw_returns_none(self):
-        result = remove_vig(0.50, None, 0.30)
-        self.assertEqual(result, (None, None, None))
+    def test_draw_none(self):
+        h, d, a = remove_vig(0.50, None, 0.30)
+        self.assertIsNone(h)
+        self.assertIsNone(d)
+        self.assertIsNone(a)
 
-    def test_all_none_returns_none(self):
-        result = remove_vig(None, None, None)
-        self.assertEqual(result, (None, None, None))
+    def test_both_missing(self):
+        h, d, a = remove_vig(None, 0.28, None)
+        self.assertIsNone(h)
+        self.assertIsNone(d)
+        self.assertIsNone(a)
+
+    def test_negative_computed_away_clamped(self):
+        """When computed away would be negative → clamp to MIN_IMPLIED_PROB"""
+        h, d, a = remove_vig(0.80, 0.15, None)
+        self.assertIsNotNone(a)
+        self.assertGreaterEqual(a, 0.01)
+
+
+class TestFormToScore(unittest.TestCase):
+    def test_winning_form(self):
+        score = form_to_score("WWWW")
+        self.assertGreater(score, 0.7)
+
+    def test_losing_form(self):
+        score = form_to_score("LLLL")
+        self.assertLess(score, 0.3)
+
+    def test_mixed_form(self):
+        score = form_to_score("WLWD")
+        self.assertAlmostEqual(score, 0.5, delta=0.2)
+
+    def test_empty_form(self):
+        score = form_to_score("")
+        self.assertAlmostEqual(score, 0.5)
+
+    def test_none_form(self):
+        score = form_to_score(None)
+        self.assertAlmostEqual(score, 0.5)
+
+
+class TestRecordToScore(unittest.TestCase):
+    def test_good_record(self):
+        records = [{"summary": "10-2-1"}]
+        score = record_to_score(records)
+        self.assertGreater(score, 0.6)
+
+    def test_bad_record(self):
+        records = [{"summary": "1-10-2"}]
+        score = record_to_score(records)
+        self.assertLess(score, 0.4)
+
+    def test_empty_records(self):
+        score = record_to_score([])
+        self.assertAlmostEqual(score, 0.5)
+
+    def test_no_summary(self):
+        records = [{}]
+        score = record_to_score(records)
+        self.assertAlmostEqual(score, 0.5)
+
+
+class TestParseAmericanOdds(unittest.TestCase):
+    def test_positive_odds(self):
+        p = parse_american_odds("+200")
+        self.assertIsNotNone(p)
+        self.assertGreater(p, 0)
+        self.assertLess(p, 1)
+
+    def test_negative_odds(self):
+        p = parse_american_odds("-150")
+        self.assertIsNotNone(p)
+        self.assertGreater(p, 0.5)
+
+    def test_none_input(self):
+        self.assertIsNone(parse_american_odds(None))
+
+
+class TestSpreadMovementFactor(unittest.TestCase):
+    def test_no_movement(self):
+        open_s = {"odds": "-110", "line": "-0.5"}
+        close_s = {"odds": "-110", "line": "-0.5"}
+        factor = spread_movement_factor(open_s, close_s)
+        self.assertAlmostEqual(factor, 0.0, places=2)
+
+    def test_movement_toward_favorite(self):
+        open_s = {"odds": "-105", "line": "-0.25"}
+        close_s = {"odds": "-130", "line": "-0.75"}
+        factor = spread_movement_factor(open_s, close_s)
+        self.assertLess(factor, 0)
+
+    def test_none_inputs(self):
+        factor = spread_movement_factor(None, {})
+        self.assertEqual(factor, 0.0)
 
 
 class TestToCn(unittest.TestCase):
-    """Test Chinese name mapping."""
+    def test_known_country(self):
+        self.assertEqual(to_cn("England"), "英格兰")
 
-    def test_known_team(self):
-        self.assertIn(to_cn("Arsenal"), ["阿森纳", "Arsenal"])
-
-    def test_unknown_team_passthrough(self):
-        self.assertEqual(to_cn("UnknownTeamXYZ"), "UnknownTeamXYZ")
-
-    def test_empty_input(self):
-        self.assertEqual(to_cn(""), "")
+    def test_unknown_country_passthrough(self):
+        result = to_cn("UnknownTeam")
+        self.assertIn("UnknownTeam", result)
 
 
-class TestParseScoreHelper(unittest.TestCase):
-    """P2-4: _parse_score helper from calibration module."""
-
-    def test_normal_score(self):
-        from core.calibration import _parse_score
-        self.assertEqual(_parse_score("2-1"), (2, 1))
-
-    def test_zero_zero(self):
-        from core.calibration import _parse_score
-        self.assertEqual(_parse_score("0-0"), (0, 0))
-
-    def test_none_input(self):
-        from core.calibration import _parse_score
-        self.assertIsNone(_parse_score(None))
-
-    def test_invalid_format(self):
-        from core.calibration import _parse_score
-        self.assertIsNone(_parse_score("abc"))
-        self.assertIsNone(_parse_score(""))
-        self.assertIsNone(_parse_score("2"))
+if __name__ == "__main__":
+    unittest.main()

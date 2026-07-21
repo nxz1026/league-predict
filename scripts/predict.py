@@ -3,7 +3,7 @@
 League Predict v4.0 — Onside 4+1 Signal Model + Dixon-Coles + Monte Carlo
 CLI entry point.
 
-Usage: python3 predict_wc.py [--league epl] [--data-source football-data] [--monte-carlo]
+Usage: python3 predict.py [--league epl] [--data-source football-data] [--monte-carlo]
        [--n-simulations 10000] [--backtest] [--cleanup] [--dates YYYYMMDD-YYYYMMDD]
        [--no-fetch] [--no-dc]
 """
@@ -13,13 +13,21 @@ import argparse
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
+
+# ── 确保脚本目录在 sys.path 中，支持从项目根目录直接运行 ──
+_SCRIPT_DIR = str(Path(__file__).parent)
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
 
 from core.config import (
     LEAGUE_CONFIG, PREDICTIONS_DIR, FOOTBALL_DIR, DC_RHO, DEFAULT_N_SIMULATIONS
 )
 from core.log import logger
-from core.data.fetch import fetch_events, fetch_fifa_rankings
+from core.data.fetch import fetch_events
+from core.rankings import fetch_fifa_rankings
 from core.data.parse import parse_events
 from core.model.poisson import fit_dc_rho
 from core.model.monte_carlo import monte_carlo_champion
@@ -27,6 +35,7 @@ from core.calibration import build_calibration, compute_calibration_offset, load
 from core.backtest import reconcile_predictions, backtest_with_live_results
 from core.output import cleanup_old_files, save_results
 from core.predictor import calculate_prediction
+from core.elo import init_ratings_from_fifa, process_match_result
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -34,11 +43,11 @@ def build_parser() -> argparse.ArgumentParser:
         description="League Predict v4.0 — Onside 4+1 Signal Model + Dixon-Coles + Monte Carlo"
     )
     parser.add_argument("--league", default="epl",
-                        choices=["epl", "laliga", "bundesliga", "seriea", "ligue1"],
+                        choices=list(LEAGUE_CONFIG.keys()),
                         help="League to predict")
-    parser.add_argument("--data-source", default="football-data",
+    parser.add_argument("--data-source", default="",
                         choices=["football-data", "espn", "api-football"],
-                        help="Data source")
+                        help="Data source (default: per-league config)")
     parser.add_argument("--monte-carlo", action="store_true", help="Run Monte Carlo simulation")
     parser.add_argument("--n-simulations", type=int, default=DEFAULT_N_SIMULATIONS,
                         help="Monte Carlo iterations")
@@ -75,6 +84,9 @@ def main() -> None:
         d2 = (now_utc + timedelta(days=1)).strftime("%Y%m%d")
         dates_str = f"{d1}-{d2}"
 
+    # ── 性能计时（P3-3）─────────────────────────────
+    _t_start = time.time()
+
     league_config = LEAGUE_CONFIG.get(league_key, LEAGUE_CONFIG["epl"])
     host_country = league_config.get("host_country")
     tournament_type = league_config.get("tournament_type", "league")
@@ -82,12 +94,8 @@ def main() -> None:
     logger.info(f"League: {league_key} ({league_config['name']}), source: {data_source}, type: {tournament_type}")
 
     if skip_fetch:
-        fallback = str(FOOTBALL_DIR / "references" / "espn_league_fallback.json")
-        if not os.path.exists(fallback):
-            fallback = str(FOOTBALL_DIR / "references" / "espn_wc_fallback.json")
-        with open(fallback) as f:
-            data = json.load(f)
-        events = data.get("events", [])
+        logger.warning("--no-fetch is deprecated, use --data-source football-data for offline mode")
+        events = []
     else:
         events = fetch_events(dates_str, league_key, data_source)
 
@@ -98,8 +106,19 @@ def main() -> None:
 
     if args.update_rankings:
         logger.info("Force-refreshing FIFA rankings from API")
-    fifa_rankings = fetch_fifa_rankings(force_refresh=args.update_rankings)
+    fifa_rankings = fetch_fifa_rankings()
     logger.info(f"FIFA rankings loaded: {len(fifa_rankings)} teams")
+
+    # ── ELO 评分初始化 ──
+    elo_ratings = init_ratings_from_fifa(fifa_rankings)
+    for m in past:
+        try:
+            home_goals = int(m.get("score", "0-0").split("-")[0])
+            away_goals = int(m.get("score", "0-0").split("-")[1])
+            process_match_result(m.get("home_en", ""), m.get("away_en", ""), home_goals, away_goals, elo_ratings)
+        except (ValueError, IndexError):
+            pass
+    logger.info(f"ELO ratings initialized: {len(elo_ratings)} teams")
 
     if not future and not past:
         logger.info("No matches found in window")
@@ -138,7 +157,7 @@ def main() -> None:
         ts = now_utc.strftime("%Y-%m-%d_%H")
         pred_file = PREDICTIONS_DIR / f"prediction_{ts}.json"
         PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
-        with open(pred_file, "w") as f:
+        with open(pred_file, "w", encoding="utf-8") as f:
             json.dump(output, f, indent=2, ensure_ascii=False)
         logger.info(f"Saved (no predictions): {pred_file}")
         return
@@ -180,6 +199,7 @@ def main() -> None:
                 host_country=host_country,
                 use_dixon_coles=use_dc,
                 dc_rho=fitted_rho,
+                elo_ratings=elo_ratings,
             )
             pred["match"] = match["name"]
             pred["home"] = match.get("home", "")
@@ -220,6 +240,10 @@ def main() -> None:
         "calibration_offset": calibration_offset,
         "past_matches": past,
         "predictions": predictions,
+        # P3-3: 性能计时
+        "timing_ms": {
+            "total": round((time.time() - _t_start) * 1000),
+        },
     }
 
     reconciliation = reconcile_predictions(past)
@@ -233,7 +257,7 @@ def main() -> None:
         ts = now_utc.strftime("%Y-%m-%d_%H")
         pred_file = PREDICTIONS_DIR / f"prediction_{ts}.json"
         PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
-        with open(pred_file, "w") as f:
+        with open(pred_file, "w", encoding="utf-8") as f:
             json.dump(output, f, indent=2, ensure_ascii=False)
         logger.info(f"Saved: {pred_file}")
         bt = backtest_with_live_results(str(pred_file))
@@ -245,13 +269,13 @@ def main() -> None:
     ts = now_utc.strftime("%Y-%m-%d_%H")
     pred_file = PREDICTIONS_DIR / f"prediction_{ts}.json"
     PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
-    with open(pred_file, "w") as f:
+    with open(pred_file, "w", encoding="utf-8") as f:
         json.dump(output, f, indent=2, ensure_ascii=False)
     logger.info(f"Saved: {pred_file}")
 
     if calibration_offset:
         cal_file = PREDICTIONS_DIR / "pred_calibration.json"
-        with open(cal_file, "w") as f:
+        with open(cal_file, "w", encoding="utf-8") as f:
             json.dump(calibration_offset, f, indent=2)
 
     print(f"\n{'='*60}", file=sys.stderr)
@@ -276,6 +300,9 @@ def main() -> None:
         for team, prob in list(monte_carlo_result["champion_probs"].items())[:5]:
             print(f"  {team}: {prob:.1%}", file=sys.stderr)
 
+    print(f"{'='*60}", file=sys.stderr)
+    _elapsed = (time.time() - _t_start) * 1000
+    print(f"Total runtime: {_elapsed:.0f}ms", file=sys.stderr)
     print(f"{'='*60}", file=sys.stderr)
 
 

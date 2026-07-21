@@ -6,6 +6,7 @@ import math
 from typing import Any
 
 from core.log import logger
+from core.config import THRESHOLDS
 
 
 def poisson_confidence_interval(lam: float, confidence: float = 0.95) -> tuple[float, float]:
@@ -118,8 +119,9 @@ def fit_dc_rho(past_matches: list[dict[str, Any]], rho_min: float = -0.3, rho_ma
             continue
 
     n = len(scores)
-    if n < 20:
-        logger.info(f"rho fit: only {n} matches with scores (need 20+), using default rho=0.2")
+    _min_sample = THRESHOLDS.get("rho_fit_min_sample", 20)
+    if n < _min_sample:
+        logger.warning(f"rho fit: only {n} matches with scores (need {_min_sample}+), using default rho=0.2")
         return 0.2
 
     adaptive_step = step * math.sqrt(100.0 / n)

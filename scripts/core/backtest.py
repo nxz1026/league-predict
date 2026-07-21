@@ -36,9 +36,12 @@ def reconcile_predictions(past_matches: list[dict[str, Any]], days: int = 7) -> 
         if f.stat().st_mtime < cutoff:
             continue
         try:
-            data = json.load(open(f))
-        except (json.JSONDecodeError, OSError):
-            continue
+            data = json.load(open(f, encoding="utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError, OSError):
+            try:
+                data = json.load(open(f, encoding="gbk"))
+            except (UnicodeDecodeError, json.JSONDecodeError, OSError):
+                continue
         for p in data.get("predictions", []):
             r = actuals.get(p.get("match", ""))
             if not r:
@@ -195,7 +198,7 @@ def backtest_with_live_results(prediction_file: str) -> dict[str, Any]:
     league_id = league_config["league_id"]
     url = f"https://api.football-data.org/v4/competitions/{league_id}/matches?dateFrom={start_date}&dateTo={end_date}"
     req = urllib.request.Request(url, headers={
-        "User-Agent": "WorldCupPredict/3.0",
+        "User-Agent": "LeaguePredict/4.1",
         "X-Auth-Token": api_key,
     })
     try:

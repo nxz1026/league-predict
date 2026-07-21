@@ -7,11 +7,11 @@ import math
 from pathlib import Path
 from typing import Any
 
-from core.config import CONFEDERATION_STRENGTH, COUNTRY_CONFEDERATION, ONSIDE_WEIGHTS
+from core.config import CONFEDERATION_STRENGTH, COUNTRY_CONFEDERATION, ONSIDE_WEIGHTS, THRESHOLDS
 from core.log import logger
 
-# 统一从 data.fetch 导入，避免两处实现漂移
-from core.data.fetch import fetch_fifa_rankings
+# 统一从 core.rankings 导入，打破 model↔data 循环依赖（P1-3）
+from core.rankings import fetch_fifa_rankings
 
 
 def fifa_rank_to_score(rank: int | None, max_rank: int = 200) -> float:
@@ -59,8 +59,8 @@ def host_advantage_score(country_name: str, host_country: str | None) -> float:
 
 
 def compute_onside_signals(home_team: str, away_team: str, fifa_rankings: dict[str, int], host_country: str | None = None) -> dict[str, Any]:
-    home_rank = fifa_rankings.get(home_team, 100)
-    away_rank = fifa_rankings.get(away_team, 100)
+    home_rank = fifa_rankings.get(home_team, THRESHOLDS.get("fifa_rank_default", 200))
+    away_rank = fifa_rankings.get(away_team, THRESHOLDS.get("fifa_rank_default", 200))
 
     home_fifa = fifa_rank_to_score(home_rank)
     away_fifa = fifa_rank_to_score(away_rank)

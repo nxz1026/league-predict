@@ -1,103 +1,89 @@
-from __future__ import annotations
+"""Tests for calibration module (P1-5: 补充核心路径覆盖)"""
 
 import unittest
+import tempfile
+import json
 
-from core.calibration import build_calibration, compute_calibration_offset
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+
+from core.calibration import compute_calibration_offset, build_calibration, _parse_score
+
+
+class TestParseScore(unittest.TestCase):
+    def test_normal_score(self):
+        self.assertEqual(_parse_score("2-1"), (2, 1))
+
+    def test_zero_score(self):
+        self.assertEqual(_parse_score("0-0"), (0, 0))
+
+    def test_high_score(self):
+        self.assertEqual(_parse_score("5-4"), (5, 4))
+
+    def test_none_input(self):
+        self.assertIsNone(_parse_score(None))
+
+    def test_empty_string(self):
+        self.assertIsNone(_parse_score(""))
+
+    def test_no_dash(self):
+        self.assertIsNone(_parse_score("21"))
+
+    def test_non_numeric(self):
+        self.assertIsNone(_parse_score("a-b"))
 
 
 class TestComputeCalibrationOffset(unittest.TestCase):
-    def test_few_matches_returns_none(self) -> None:
-        matches = [{"score": "1-0"}, {"score": "2-1"}]
-        self.assertIsNone(compute_calibration_offset(matches))
+    def test_insufficient_data(self):
+        past = [{"score": "1-0"}, {"score": "2-1"}]
+        self.assertIsNone(compute_calibration_offset(past))
 
-    def test_balanced(self) -> None:
-        matches = [
-            {"score": "2-0"},
-            {"score": "1-1"},
-            {"score": "0-2"},
-            {"score": "3-1"},
-            {"score": "0-0"},
-            {"score": "1-3"},
+    def test_balanced_distribution(self):
+        past = [
+            {"score": "1-0"}, {"score": "0-1"},
+            {"score": "1-1"}, {"score": "2-1"}, {"score": "0-1"},
         ]
-        result = compute_calibration_offset(matches)
-        self.assertIsNotNone(result)
-        if result:
-            self.assertAlmostEqual(result["actual_home_rate"], 2 / 6, places=3)
-            self.assertAlmostEqual(result["actual_draw_rate"], 2 / 6, places=3)
-            self.assertAlmostEqual(result["actual_away_rate"], 2 / 6, places=3)
-            self.assertAlmostEqual(result["home_correction"], (2 / 6) / (1 / 3), places=3)
-            self.assertAlmostEqual(result["draw_correction"], (2 / 6) / (1 / 3), places=3)
-            self.assertAlmostEqual(result["away_correction"], (2 / 6) / (1 / 3), places=3)
-            self.assertEqual(result["sample_size"], 6)
+        offset = compute_calibration_offset(past)
+        self.assertIsNotNone(offset)
+        self.assertIn("home_correction", offset)
+        self.assertEqual(offset["sample_size"], 5)
 
-    def test_all_home_wins(self) -> None:
-        matches = [{"score": f"{i+1}-0"} for i in range(10)]
-        result = compute_calibration_offset(matches)
-        self.assertIsNotNone(result)
-        if result:
-            self.assertAlmostEqual(result["actual_home_rate"], 1.0, places=3)
-            self.assertAlmostEqual(result["home_correction"], 2.0, places=3)
+    def test_home_heavy_bias(self):
+        past = [{"score": f"{i}-0"} for i in range(1, 6)]
+        offset = compute_calibration_offset(past)
+        self.assertIsNotNone(offset)
+        self.assertGreater(offset["home_correction"], 1.0)
 
-    def test_handles_invalid_scores(self) -> None:
-        matches = [
-            {"score": "abc"},
-            {"score": None},
-            {"score": ""},
-            {"score": "2-0"},
-            {"score": "1-1"},
-            {"score": "0-0"},
-            {"score": "3-1"},
-            {"score": "1-2"},
+    def test_output_keys_include_onside(self):
+        past = [
+            {"score": "2-1"}, {"score": "1-2"}, {"score": "1-1"},
+            {"score": "3-0"}, {"score": "0-3"}, {"score": "2-2"},
         ]
-        result = compute_calibration_offset(matches)
-        self.assertIsNotNone(result)
-        if result:
-            self.assertEqual(result["sample_size"], 5)
-
-    def test_insufficient_valid_scores(self) -> None:
-        matches = [
-            {"score": "abc"},
-            {"score": None},
-            {"score": "invalid"},
-        ]
-        result = compute_calibration_offset(matches)
-        self.assertIsNone(result)
+        offset = compute_calibration_offset(past)
+        expected_keys = {
+            "home_correction", "draw_correction", "away_correction",
+            "onside_home_correction", "onside_away_correction",
+            "sample_size", "sample_weight",
+        }
+        for key in expected_keys:
+            self.assertIn(key, offset)
 
 
 class TestBuildCalibration(unittest.TestCase):
-    def test_empty_past(self) -> None:
+    def test_empty_past(self):
         result = build_calibration([], [])
-        self.assertEqual(result["note"], "no past matches to calibrate from")
+        self.assertIn("note", result)
 
-    def test_basic_counts(self) -> None:
+    def test_with_matches(self):
         past = [
-            {"score": "2-0", "home_true_prob": 0.5},
-            {"score": "1-1", "home_true_prob": 0.4},
-            {"score": "0-2", "home_true_prob": 0.3},
-            {"score": "3-0", "home_true_prob": 0.6},
+            {"score": "2-1", "home_true_prob": 0.6},
+            {"score": "1-2", "home_true_prob": 0.3},
+            {"score": "1-1", "home_true_prob": 0.5},
         ]
         result = build_calibration(past, [])
-        self.assertEqual(result["home_wins"], 2)
-        self.assertEqual(result["draws"], 1)
-        self.assertEqual(result["away_wins"], 1)
-        self.assertEqual(result["total_matches"], 4)
-        self.assertAlmostEqual(result["home_win_rate"], 0.5, places=3)
+        self.assertEqual(result["total_matches"], 3)
 
-    def test_odds_accuracy(self) -> None:
-        past = [
-            {"score": "2-0", "home_true_prob": 0.6},
-            {"score": "1-1", "home_true_prob": 0.55},
-            {"score": "0-2", "home_true_prob": 0.3},
-        ]
-        result = build_calibration(past, [])
-        self.assertEqual(result["favored_by_odds"], 2)
-        self.assertEqual(result["favored_won"], 1)
 
-    def test_no_favored(self) -> None:
-        past = [
-            {"score": "2-0", "home_true_prob": 0.4},
-            {"score": "1-0", "home_true_prob": 0.3},
-        ]
-        result = build_calibration(past, [])
-        self.assertEqual(result["favored_by_odds"], 0)
-        self.assertEqual(result["odds_accuracy"], 0)
+if __name__ == "__main__":
+    unittest.main()

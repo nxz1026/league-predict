@@ -10,9 +10,14 @@ from core.model.poisson import dixon_coles_pmf
 
 
 def simulate_match_dc(lambda_h: float, lambda_a: float, rho: float = 0.2) -> tuple[int, int]:
+    """用 Dixon-Coles 联合泊松模拟单场比分"""
+    from core.model.poisson import dixon_coles_pmf
+    from core.config import MAX_GOALS_MC
+
+    _max_g = MAX_GOALS_MC  # 统一范围常量（与 poisson.py dixon_coles_match_probs 一致）
     probs: list[tuple[int, int, float]] = []
-    for h in range(8):
-        for a in range(8):
+    for h in range(_max_g):
+        for a in range(_max_g):
             p = dixon_coles_pmf(h, a, lambda_h, lambda_a, rho)
             probs.append((h, a, p))
 
