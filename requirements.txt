@@ -1,1 +1,2 @@
-requests
+# predict_wc.py 使用纯 stdlib (urllib.request, json, gzip, math, pathlib)
+# 零外部依赖，无需 pip install

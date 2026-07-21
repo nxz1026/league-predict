@@ -125,8 +125,8 @@ raw_home = home_true × 0.40 + home_form × 0.20 + home_record × 0.15 + spread_
 raw_away = away_true × 0.40 + away_form × 0.20 + away_record × 0.15 + (-spread_movement) × 0.25
 raw_draw = draw_true × 0.50
 
-λ_home = (raw_home + 0.5 × raw_draw) × 4.5    # 强队 λ ~3.0-3.5
-λ_away = (raw_away + 0.5 × raw_draw) × 4.5    # 弱队 λ ~0.3-0.8
+λ_home = raw_home × 2.8    # 强队 λ ~1.0-2.8
+λ_away = raw_away × 2.8    # 弱队 λ ~0.3-1.0
 ```
 
 **Poisson 联合概率**（遍历 0..8 球 × 0..8 球）：
@@ -141,7 +141,7 @@ P(h, a) = Pois(h; λ_home) × Pois(a; λ_away)
 3-0 (14%) / 2-0 (13%) / 4-0 (11%)
 ```
 
-**参数调整**：`LAMBDA_MULTIPLIER`（当前 4.5）提高 → 比分更激进，降低 → 更保守。
+**参数调整**：`THRESHOLDS["lambda_multiplier"]`（当前 2.8）提高 → 比分更激进，降低 → 更保守。
 
 ### 自动校准
 

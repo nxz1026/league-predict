@@ -57,8 +57,12 @@ python3 scripts/predict_wc.py --cleanup
 ```
 scripts/
 ├── predict_wc.py      # 核心引擎（零外部依赖）
-├── send_cron_card.py  # 飞书推送
-├── parse_espn.py      # ESPN 解析器
+├── core/
+│   ├── predictor.py   # 预测计算
+│   ├── data/          # 数据抓取+解析+转换
+│   ├── model/         # 泊松/Dixon-Coles/MC模型
+│   ├── calibration.py # 自动校准
+│   └── backtest.py    # 回测评估
 references/
 ├── fifa_rankings.json # FIFA 排名
 ├── tournament-trends.md
@@ -70,7 +74,8 @@ results/               # 实际赛果
 ## 技术细节
 
 - **零外部依赖**: 纯 stdlib（urllib + json + math + gzip）
-- **Dixon-Coles**: ρ 自适应拟合（网格搜索 per-match λ）
-- **ELO**: 从历史比赛自算，初始 1500, K=32, 主客因子 60
-- **Shin 去水**: 几何平均法替代比例法
-- **集成投票**: 3 组 ρ 参数（0.15/拟合值/0.25）多数决
+- **Dixon-Coles**: ρ 自适应拟合（三分搜索优化 + 网格搜索兜底）
+- **Onside 4+1 信号**: FIFA排名 + 联赛足迹 + 主场优势 + 足联强度 + 盘口移动
+- **比例去水法**: `remove_vig()` 三向概率归一化
+- **自动校准**: 基于联赛实际分布基线（主胜45%/平局25%/客胜30%）
+- **蒙特卡洛模拟**: 10000次淘汰赛模拟计算夺冠概率

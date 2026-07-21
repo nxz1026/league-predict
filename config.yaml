@@ -3,5 +3,5 @@
 # base_url / api_key 在 ~/.hermes/config.yaml 的 providers 段（不要在这里重复写密钥）
 
 llm:
-  provider: Api.openmodel.ai
+  provider: api.openmodel.ai
   model: deepseek-v4-flash
