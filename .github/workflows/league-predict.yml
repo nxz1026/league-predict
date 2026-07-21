@@ -21,7 +21,7 @@ jobs:
           cache: 'pip'
 
       - name: Install dependencies
-        run: echo "No external dependencies needed (stdlib only)"
+        run: pip install pytest
 
       - name: Run tests
         run: python -m pytest tests/ -v
