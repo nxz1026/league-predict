@@ -2,7 +2,7 @@ name: League Predict
 
 on:
   schedule:
-    - cron: '35 8 * * *'  # 16:35 BJT (08:35 UTC)
+    - cron: '0 13 * * *'  # 21:00 BJT (13:00 UTC)
   workflow_dispatch:
 
 jobs:

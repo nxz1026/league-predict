@@ -5,7 +5,7 @@ description: 联赛预测引擎。多数据源（API-Football/football-data.org/
 
 # League Predict — 联赛预测引擎
 
-每日自动预测未来 24h 比赛，回填前 24h 结果，产出复盘。支持 5 大联赛 + MLS + J 联赛 + 中超。
+每日 21:00 (BJT) 自动预测未来 24h 比赛，回填前 24h 结果，产出复盘。支持 5 大联赛 + MLS + J 联赛 + 中超。
 
 ## 架构概览
 

@@ -2,7 +2,7 @@
 
 联赛预测引擎。多数据源融合 + 信号模型 + ELO + Dixon-Coles 双变量泊松 + 蒙特卡洛模拟。
 
-零外部依赖，纯 Python stdlib。
+零外部依赖，纯 Python stdlib。每日 21:00 (BJT) 通过 GHA 自动运行。
 
 ## 架构
 
