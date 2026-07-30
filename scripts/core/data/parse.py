@@ -3,6 +3,8 @@ from __future__ import annotations
 """Event parsing and odds/statistics extraction."""
 
 import json
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 from core.config import COUNTRY_CN
 from core.log import logger
@@ -35,11 +37,35 @@ def parse_details(details_str: str | None) -> tuple[str | None, str | None, floa
     return None, None, None
 
 
+_translation_cache: dict[str, str] = {}
+
+
 def to_cn(name: str | None) -> str:
-    """英文国家名/俱乐部名 → 中文"""
+    """英文国家名/俱乐部名 → 中文（先查硬编码表，再动态翻译）"""
     if not name:
         return name
-    return COUNTRY_CN.get(name, COUNTRY_CN.get(name.replace("'", ""), name))
+    # 1. 硬编码表
+    cn = COUNTRY_CN.get(name, COUNTRY_CN.get(name.replace("'", ""), None))
+    if cn:
+        return cn
+    # 2. 缓存
+    if name in _translation_cache:
+        return _translation_cache[name]
+    # 3. 动态翻译（MyMemory 免费 API）
+    try:
+        import urllib.request
+        url = f"https://api.mymemory.translated.net/get?q={urllib.parse.quote(name)}&langpair=en|zh-CN"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read())
+        translated = data.get("responseData", {}).get("translatedText", name)
+        # MyMemory 有时会返回 "MYMEMORY WARNING: ..."，此时回退原名
+        if "WARNING" in translated or "QUOTA" in translated:
+            translated = name
+        _translation_cache[name] = translated
+        return translated
+    except Exception:
+        return name
 
 
 def form_to_score(form_str: str | None) -> float:
