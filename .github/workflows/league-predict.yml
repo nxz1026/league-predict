@@ -64,14 +64,21 @@ jobs:
           else:
               leagues = [data]
 
+          LEAGUE_CN = {
+              'epl': '英超', 'laliga': '西甲', 'bundesliga': '德甲',
+              'seriea': '意甲', 'ligue1': '法甲', 'mls': '美职联',
+              'jleague': '日职联', 'csl': '中超',
+          }
+
           bjt = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M')
           lines_out = []
-          lines_out.append(f'[League Predict] {bjt}')
+          lines_out.append(f'[联赛预测] {bjt}')
           lines_out.append('=' * 30)
           lines_out.append('')
 
           for league_data in leagues:
-              league_name = league_data.get('league', '?')
+              league_key = league_data.get('league', '?')
+              league_name = LEAGUE_CN.get(league_key, league_key)
               lines_out.append(f'=== {league_name} ===')
               
               status = league_data.get('status', 'ok')
@@ -111,21 +118,21 @@ jobs:
                           on_away = p.get('onside_signals', {}).get('away', {}).get('onside_score')
                           lines_out.append(f'[预测] {p["match"]}')
                           lines_out.append(f'  方向：{p["direction"]} {p["stars"]}')
-                          lines_out.append(f'  盘口：odds_data_available={p.get("odds_data_available")} | spread_home_line={p.get("spread_home_line")} | total_over_close={p.get("total_over_close")}')
+                          lines_out.append(f'  盘口：赔率={p.get("odds_data_available")} | 主队盘={p.get("spread_home_line")} | 大球线={p.get("total_over_close")}')
                           if p.get("confidence_note"):
                               lines_out.append(f'  ？{p["confidence_note"]}')
                           if poisson_str:
                               lines_out.append(f'  比分：{poisson_str}')
                           lines_out.append(f'  xG：{p.get("lambda_home",0):.3f} [{ci_home[0]:.3f}-{ci_home[1]:.3f}] / {p.get("lambda_away",0):.3f} [{ci_away[0]:.3f}-{ci_away[1]:.3f}]')
-                          lines_out.append(f'  {p.get("over_under","")} | BTTS {p.get("btts","")}')
+                          lines_out.append(f'  {p.get("over_under","")} | 双方进球 {p.get("btts","")}')
                           if rf:
                               lines_out.append(f'  概率：主{rf.get("home_prob_weighted",0):.3f} 平{rf.get("draw_prob_weighted",0):.3f} 客{rf.get("away_prob_weighted",0):.3f} | 市场主{rf.get("home_ml_true_prob",0):.3f} 平{rf.get("draw_true_prob",0):.3f} 客{rf.get("away_ml_true_prob",0):.3f}')
-                              lines_out.append(f'  状态：主形态{rf.get("home_form_score",0):.3f} 客形态{rf.get("away_form_score",0):.3f} | 主记录{rf.get("home_record_score",0):.3f} 客记录{rf.get("away_record_score",0):.3f} | spread_movement={rf.get("spread_movement",0):.3f}')
+                              lines_out.append(f'  状态：主形态{rf.get("home_form_score",0):.3f} 客形态{rf.get("away_form_score",0):.3f} | 主记录{rf.get("home_record_score",0):.3f} 客记录{rf.get("away_record_score",0):.3f} | 盘口移动={rf.get("spread_movement",0):.3f}')
                           if on_home is not None and on_away is not None:
                               lines_out.append(f'  Onside：主{on_home:.3f} 客{on_away:.3f}')
                           sb = ps.get('signal_breakdown', {})
                           if sb:
-                              lines_out.append(f'  信号：市场{sb.get("market_component",0)} | Onside{sb.get("onside_component",0)} | spread调整{sb.get("spread_adjustment",0)} | 总强度{sb.get("total_strength",0)}')
+                              lines_out.append(f'  信号：市场{sb.get("market_component",0)} | Onside{sb.get("onside_component",0)} | 盘口调整{sb.get("spread_adjustment",0)} | 总强度{sb.get("total_strength",0)}')
                           lines_out.append('')
 
               # 回填结果（过去24h已结束比赛）
