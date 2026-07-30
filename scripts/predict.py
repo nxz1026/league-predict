@@ -62,7 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def run_league(league_key: str, args, now_utc, dates_str) -> dict | None:
+def run_league(league_key: str, args, now_utc, dates_str, silent: bool = False) -> dict | None:
     data_source = args.data_source
     run_monte_carlo = args.monte_carlo
     n_simulations = args.n_simulations
@@ -242,7 +242,8 @@ def run_league(league_key: str, args, now_utc, dates_str) -> dict | None:
         output["backtest"] = bt
         logger.info(f"Backtest: {bt.get('status')} matched={bt.get('matched_matches')} acc={bt.get('accuracy')}")
 
-    print(json.dumps(output, indent=2, ensure_ascii=False))
+    if not silent:
+        print(json.dumps(output, indent=2, ensure_ascii=False))
 
     ts = now_utc.strftime("%Y-%m-%d_%H")
     pred_file = PREDICTIONS_DIR / f"prediction_{ts}.json"
@@ -314,7 +315,7 @@ def main() -> None:
             print(f"# LEAGUE: {league_key}", file=sys.stderr)
             print(f"{'#'*60}", file=sys.stderr)
             try:
-                result = run_league(league_key, args, now_utc, dates_str)
+                result = run_league(league_key, args, now_utc, dates_str, silent=True)
                 if result:
                     all_outputs.append(result)
             except Exception as e:
