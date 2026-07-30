@@ -45,6 +45,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--league", default="epl",
                         choices=list(LEAGUE_CONFIG.keys()),
                         help="League to predict")
+    parser.add_argument("--all", action="store_true",
+                        help="Run prediction for all supported leagues")
     parser.add_argument("--data-source", default="",
                         choices=["football-data", "espn", "api-football"],
                         help="Data source (default: per-league config)")
@@ -60,20 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
-    try:
-        sys.stdout.reconfigure(encoding='utf-8')
-    except AttributeError:
-        pass
-    parser = build_parser()
-    args = parser.parse_args()
-
-    if args.cleanup:
-        cleanup_old_files(days=7)
-        return
-
-    now_utc = datetime.now(timezone.utc)
-    league_key = args.league
+def run_league(league_key: str, args, now_utc, dates_str) -> dict | None:
     data_source = args.data_source
     run_monte_carlo = args.monte_carlo
     n_simulations = args.n_simulations
@@ -81,14 +70,6 @@ def main() -> None:
     use_dc = not args.no_dc
     skip_fetch = args.no_fetch
 
-    if args.dates:
-        dates_str = args.dates
-    else:
-        d1 = (now_utc - timedelta(days=1)).strftime("%Y%m%d")
-        d2 = (now_utc + timedelta(days=1)).strftime("%Y%m%d")
-        dates_str = f"{d1}-{d2}"
-
-    # ── 性能计时（P3-3）─────────────────────────────
     _t_start = time.time()
 
     league_config = LEAGUE_CONFIG.get(league_key, LEAGUE_CONFIG["epl"])
@@ -138,8 +119,7 @@ def main() -> None:
             "past_matches": [],
             "predictions": [],
         }
-        print(json.dumps(output, indent=2, ensure_ascii=False))
-        return
+        return output
 
     if not future and not run_backtest:
         logger.info("No future matches to predict")
@@ -158,14 +138,7 @@ def main() -> None:
         reconciliation = reconcile_predictions(past)
         if reconciliation:
             output["reconciliation"] = reconciliation
-        print(json.dumps(output, indent=2, ensure_ascii=False))
-        ts = now_utc.strftime("%Y-%m-%d_%H")
-        pred_file = PREDICTIONS_DIR / f"prediction_{ts}.json"
-        PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
-        with open(pred_file, "w", encoding="utf-8") as f:
-            json.dump(output, f, indent=2, ensure_ascii=False)
-        logger.info(f"Saved (no predictions): {pred_file}")
-        return
+        return output
 
     calibration = build_calibration(past, future)
     logger.info(f"Calibration: {json.dumps(calibration)}")
@@ -309,6 +282,47 @@ def main() -> None:
     _elapsed = (time.time() - _t_start) * 1000
     print(f"Total runtime: {_elapsed:.0f}ms", file=sys.stderr)
     print(f"{'='*60}", file=sys.stderr)
+
+    return output
+
+
+def main() -> None:
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except AttributeError:
+        pass
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if args.cleanup:
+        cleanup_old_files(days=7)
+        return
+
+    now_utc = datetime.now(timezone.utc)
+
+    if args.dates:
+        dates_str = args.dates
+    else:
+        d1 = (now_utc - timedelta(days=1)).strftime("%Y%m%d")
+        d2 = (now_utc + timedelta(days=1)).strftime("%Y%m%d")
+        dates_str = f"{d1}-{d2}"
+
+    if args.all:
+        all_outputs = []
+        for league_key in LEAGUE_CONFIG:
+            print(f"\n{'#'*60}", file=sys.stderr)
+            print(f"# LEAGUE: {league_key}", file=sys.stderr)
+            print(f"{'#'*60}", file=sys.stderr)
+            try:
+                result = run_league(league_key, args, now_utc, dates_str)
+                if result:
+                    all_outputs.append(result)
+            except Exception as e:
+                logger.error(f"Prediction failed for {league_key}: {e}")
+        # Print combined JSON array for --all mode
+        print(json.dumps(all_outputs, indent=2, ensure_ascii=False))
+    else:
+        run_league(args.league, args, now_utc, dates_str)
 
 
 if __name__ == "__main__":

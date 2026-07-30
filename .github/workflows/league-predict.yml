@@ -33,7 +33,7 @@ jobs:
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
-        run: python3 scripts/predict.py > /tmp/predict_output.txt 2>/tmp/predict_stderr.txt || (cat /tmp/predict_stderr.txt && cat /tmp/predict_output.txt && exit 1)
+        run: python3 scripts/predict.py --all > /tmp/predict_output.txt 2>/tmp/predict_stderr.txt || (cat /tmp/predict_stderr.txt && cat /tmp/predict_output.txt && exit 1)
 
       - name: Show stderr (debug)
         run: cat /tmp/predict_stderr.txt
