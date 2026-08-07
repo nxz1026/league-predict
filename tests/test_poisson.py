@@ -84,6 +84,24 @@ class TestTauCorrection(unittest.TestCase):
     def test_default_rho(self) -> None:
         self.assertAlmostEqual(tau_correction(0, 0, 1.0, 1.0), 0.8)
 
+    def test_negative_tau_clamped(self) -> None:
+        """P0-2: rho*λ_h*λ_a > 1 时 tau 应被钳位到 0，不能返回负概率。"""
+        # rho=0.2, λ_h=3.0, λ_a=3.0 → 1 - 0.2*3*3 = -0.8 → clamp to 0
+        self.assertEqual(tau_correction(1, 1, 3.0, 3.0, 0.2), 0.0)
+        # rho=1.5, (0,0) → 1 - 1.5 = -0.5 → clamp to 0
+        self.assertEqual(tau_correction(0, 0, 1.0, 1.0, 1.5), 0.0)
+
+    def test_dixon_coles_pmf_never_negative(self) -> None:
+        """P0-2: 任何参数组合下 dixon_coles_pmf 不应返回负值。"""
+        for rho in [-0.3, 0.0, 0.2, 0.5]:
+            for lam_h in [0.5, 1.5, 3.0]:
+                for lam_a in [0.5, 1.5, 3.0]:
+                    for h in range(3):
+                        for a in range(3):
+                            p = dixon_coles_pmf(h, a, lam_h, lam_a, rho)
+                            self.assertGreaterEqual(p, 0.0,
+                                f"Negative prob: h={h},a={a},λ_h={lam_h},λ_a={lam_a},ρ={rho}")
+
 
 class TestDixonColesPmf(unittest.TestCase):
     def test_basic(self) -> None:

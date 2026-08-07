@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-"""Core prediction engine: Onside 4+1 signal model combined with Dixon-Coles.
-
-P0-2 修复: 统一 λ 计算与方向预测的权重体系，消除内在矛盾。
-"""
+"""Core prediction engine: Onside 4+1 signal model combined with Dixon-Coles."""
 
 import json
 from core.config import ONSIDE_WEIGHTS, MARKET_ODDS_WEIGHT, DC_RHO, THRESHOLDS, LEAGUE_DC_RHO
@@ -86,9 +83,11 @@ def calculate_prediction(
             dp = dp_corrected / total_corrected
             ap = ap_corrected / total_corrected
 
-        # 修正 Onside 4 信号：同方向校正后归一化
-        onside_h = home_onside * hc
-        onside_a = away_onside * ac
+        # 修正 Onside 4 信号：使用专用的 onside 修正因子（已减半），避免双重修正
+        ohc = calibration_offset.get("onside_home_correction", 1.0)
+        oac = calibration_offset.get("onside_away_correction", 1.0)
+        onside_h = home_onside * ohc
+        onside_a = away_onside * oac
         total_on = onside_h + onside_a
         if total_on > 0:
             home_onside = onside_h / total_on
@@ -107,7 +106,7 @@ def calculate_prediction(
         away_elo = elo_ratings.get(away_en, DEFAULT_ELO)
         elo_home_expected = expected_score(home_elo, away_elo, home_adv=True)
         elo_away_expected = 1.0 - elo_home_expected
-    ELO_WEIGHT = 0.18  # P0-2: 从 10% 提升到 18%，ELO 信息量被低估
+    ELO_WEIGHT = THRESHOLDS.get("elo_weight", 0.18)
 
     # ══════════════════════════════════════════════════════
     # P0-2 统一权重体系：方向概率和 λ 使用同一套加权信号

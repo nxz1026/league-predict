@@ -35,15 +35,26 @@ def save_results(past_matches: list[dict[str, Any]]) -> None:
         return
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     path = RESULTS_DIR / f"result_{today}.json"
-    if path.exists():
-        return
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    # 加载已有结果（同日多次运行时合并）
+    existing: dict[str, dict[str, Any]] = {}
+    if path.exists():
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for m in data.get("matches", []):
+                key = f"{m.get('home','')}_{m.get('away','')}"
+                existing[key] = m
+        except (json.JSONDecodeError, OSError):
+            pass
+
     try:
         matches: list[dict[str, Any]] = []
         for m in scored:
             parts = m["score"].split("-")
             if len(parts) == 2:
-                matches.append({
+                match_data = {
                     "id": m.get("name",""),
                     "kickoff_utc": m.get("kickoff_utc",""),
                     "home": m.get("home_en", m.get("home","")),
@@ -51,9 +62,13 @@ def save_results(past_matches: list[dict[str, Any]]) -> None:
                     "home_score": int(parts[0]),
                     "away_score": int(parts[1]),
                     "status": m.get("status",""),
-                })
+                }
+                key = f"{match_data['home']}_{match_data['away']}"
+                existing[key] = match_data
+
+        matches = list(existing.values())
         with open(path, "w", encoding="utf-8") as f:
             json.dump({"date": today, "matches": matches}, f, indent=2, ensure_ascii=False)
-        logger.info(f"Saved results: {path} ({len(matches)} matches)")
+        logger.info(f"Saved results: {path} ({len(matches)} matches, merged)")
     except Exception as e:
         logger.info(f"save_results error: {e}")

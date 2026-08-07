@@ -62,22 +62,8 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def run_league(league_key: str, args, now_utc, dates_str, silent: bool = False) -> dict | None:
-    data_source = args.data_source
-    run_monte_carlo = args.monte_carlo
-    n_simulations = args.n_simulations
-    run_backtest = args.backtest
-    use_dc = not args.no_dc
-    skip_fetch = args.no_fetch
-
-    _t_start = time.time()
-
-    league_config = LEAGUE_CONFIG.get(league_key, LEAGUE_CONFIG["epl"])
-    host_country = league_config.get("host_country")
-    tournament_type = league_config.get("tournament_type", "league")
-
-    logger.info(f"League: {league_key} ({league_config['name']}), source: {data_source}, type: {tournament_type}")
-
+def _fetch_and_parse(league_key: str, data_source: str, dates_str: str, now_utc, skip_fetch: bool) -> tuple[list, list, list, list]:
+    """获取并解析赛事数据，返回 (events, past, future, in_prog)。"""
     if skip_fetch:
         logger.warning("--no-fetch is deprecated, use --data-source football-data for offline mode")
         events = []
@@ -88,14 +74,12 @@ def run_league(league_key: str, args, now_utc, dates_str, silent: bool = False) 
     past, future, in_prog = parse_events(events, now_utc)
     logger.info(f"Past: {len(past)}, Future: {len(future)}, In progress: {len(in_prog)}")
     save_results(past)
+    return events, past, future, in_prog
 
-    if args.update_rankings:
-        logger.info("Force-refreshing FIFA rankings from API")
-    fifa_rankings = fetch_fifa_rankings()
-    logger.info(f"FIFA rankings loaded: {len(fifa_rankings)} teams")
 
-    # ── ELO 评分初始化（优先加载持久化，冷启动则从 FIFA 初始化）──
-    elo_ratings = get_or_init_elo_ratings(fifa_rankings)
+def _update_elo(past: list, fifa_rankings: dict, force_refresh: bool = False) -> dict[str, float]:
+    """从 FIFA 排名初始化 ELO，并用已结束比赛更新，返回评分表。"""
+    elo_ratings = get_or_init_elo_ratings(fifa_rankings, force_refresh=force_refresh)
     for m in past:
         try:
             home_goals = int(m.get("score", "0-0").split("-")[0])
@@ -105,41 +89,11 @@ def run_league(league_key: str, args, now_utc, dates_str, silent: bool = False) 
             pass
     save_elo_ratings(elo_ratings)
     logger.info(f"ELO ratings: {len(elo_ratings)} teams")
+    return elo_ratings
 
-    if not future and not past:
-        logger.info("No matches found in window")
-        output = {
-            "generated_at": now_utc.isoformat(),
-            "data_window": dates_str,
-            "status": "no_matches",
-            "league": league_key,
-            "tournament_type": tournament_type,
-            "message": f"No matches in window ({dates_str})",
-            "calibration": {"note": "no data"},
-            "past_matches": [],
-            "predictions": [],
-        }
-        return output
 
-    if not future and not run_backtest:
-        logger.info("No future matches to predict")
-        calibration = build_calibration(past, future)
-        output = {
-            "generated_at": now_utc.isoformat(),
-            "data_window": dates_str,
-            "status": "no_future_matches",
-            "league": league_key,
-            "tournament_type": tournament_type,
-            "message": f"No matches to predict in window ({dates_str})",
-            "calibration": calibration,
-            "past_matches": past,
-            "predictions": [],
-        }
-        reconciliation = reconcile_predictions(past)
-        if reconciliation:
-            output["reconciliation"] = reconciliation
-        return output
-
+def _compute_calibration(past: list, future: list) -> tuple[dict, dict | None]:
+    """计算校准参数，返回 (calibration, calibration_offset)。"""
     calibration = build_calibration(past, future)
     logger.info(f"Calibration: {json.dumps(calibration)}")
 
@@ -150,7 +104,6 @@ def run_league(league_key: str, args, now_utc, dates_str, silent: bool = False) 
     else:
         logger.info("Calibration offset: insufficient historical data (<5 matches)")
 
-    # Auto-load calibration_offset from previous run
     cal_file = PREDICTIONS_DIR / "pred_calibration.json"
     if not calibration_offset and cal_file.exists():
         try:
@@ -160,13 +113,15 @@ def run_league(league_key: str, args, now_utc, dates_str, silent: bool = False) 
         except Exception as e:
             logger.info(f"Failed to load calibration offset: {e}")
 
-    fitted_rho = DC_RHO
-    if use_dc:
-        try:
-            fitted_rho = fit_dc_rho(past)
-        except Exception as e:
-            logger.info(f"DC rho fit failed: {e}, using default")
+    return calibration, calibration_offset
 
+
+def _generate_predictions(
+    future: list, calibration_offset: dict | None, fifa_rankings: dict,
+    host_country: str | None, use_dc: bool, fitted_rho: float,
+    elo_ratings: dict[str, float], league_key: str,
+) -> list[dict]:
+    """对每场未来比赛生成预测。"""
     predictions = []
     for match in future:
         try:
@@ -185,9 +140,133 @@ def run_league(league_key: str, args, now_utc, dates_str, silent: bool = False) 
             predictions.append(pred)
         except Exception as e:
             logger.error(f"Prediction failed for {match.get('name', '?')}: {e}")
-
     logger.info(f"Predicted {len(predictions)} matches")
+    return predictions
 
+
+def _save_output(output: dict, calibration_offset: dict | None, now_utc) -> Path:
+    """保存预测结果到文件，返回文件路径。"""
+    ts = now_utc.strftime("%Y-%m-%d_%H")
+    pred_file = PREDICTIONS_DIR / f"prediction_{ts}.json"
+    PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
+    with open(pred_file, "w", encoding="utf-8") as f:
+        json.dump(output, f, indent=2, ensure_ascii=False)
+    logger.info(f"Saved: {pred_file}")
+
+    if calibration_offset:
+        cal_file = PREDICTIONS_DIR / "pred_calibration.json"
+        with open(cal_file, "w", encoding="utf-8") as f:
+            json.dump(calibration_offset, f, indent=2)
+
+    return pred_file
+
+
+def _print_summary(predictions: list, calibration: dict, calibration_offset: dict | None,
+                    monte_carlo_result: dict | None, n_simulations: int) -> None:
+    """打印 stderr 摘要。"""
+    print(f"\n{'='*60}", file=sys.stderr)
+    print(f"Window calibration: {calibration.get('total_matches',0)} finished | "
+          f"home win {calibration.get('home_win_rate',0)*100:.0f}% "
+          f"draw {calibration.get('draw_rate',0)*100:.0f}% "
+          f"away win {calibration.get('away_win_rate',0)*100:.0f}%", file=sys.stderr)
+    print(f"    Odds favorite accuracy: {calibration.get('odds_accuracy',0)*100:.0f}% "
+          f"({calibration.get('favored_won',0)}/{calibration.get('favored_by_odds',0)})", file=sys.stderr)
+    if calibration_offset:
+        print(f"Calibration offset(n={calibration_offset['sample_size']}): "
+              f"home x{calibration_offset['home_correction']} "
+              f"draw x{calibration_offset['draw_correction']} "
+              f"away x{calibration_offset['away_correction']}", file=sys.stderr)
+        print(f"   Actual distribution: home {calibration_offset['actual_home_rate']} | "
+              f"draw {calibration_offset['actual_draw_rate']} | "
+              f"away {calibration_offset['actual_away_rate']}", file=sys.stderr)
+    else:
+        print(f"Calibration offset: insufficient data (<5 matches), skipping", file=sys.stderr)
+    print(f"To predict: {len(predictions)} matches", file=sys.stderr)
+    for p in predictions:
+        poisson_str = " / ".join(f"{t['score']}({t['prob']:.0%})" for t in p.get('poisson_top3', [])[:3])
+        ci_home = p.get('lambda_home_ci95', (0,0))
+        ci_away = p.get('lambda_away_ci95', (0,0))
+        cal = ' [cal]' if calibration_offset else ''
+        dc = ' [DC]' if p.get('dixon_coles_used') else ''
+        print(f"  {p['match']} | {p['direction']} {p['stars']}{cal}{dc} | "
+              f"{p['predicted_score']} | l={p.get('lambda_home',0)}[{ci_home[0]}-{ci_home[1]}]/"
+              f"{p.get('lambda_away',0)}[{ci_away[0]}-{ci_away[1]}] | {poisson_str}", file=sys.stderr)
+
+    if monte_carlo_result:
+        print(f"\nMonte Carlo champion prediction (n={n_simulations}):", file=sys.stderr)
+        for team, prob in list(monte_carlo_result["champion_probs"].items())[:5]:
+            print(f"  {team}: {prob:.1%}", file=sys.stderr)
+
+    print(f"{'='*60}", file=sys.stderr)
+
+
+def run_league(league_key: str, args, now_utc, dates_str, silent: bool = False) -> dict | None:
+    data_source = args.data_source
+    run_monte_carlo = args.monte_carlo
+    n_simulations = args.n_simulations
+    run_backtest = args.backtest
+    use_dc = not args.no_dc
+    skip_fetch = args.no_fetch
+
+    _t_start = time.time()
+
+    league_config = LEAGUE_CONFIG.get(league_key, LEAGUE_CONFIG["epl"])
+    host_country = league_config.get("host_country")
+    tournament_type = league_config.get("tournament_type", "league")
+
+    logger.info(f"League: {league_key} ({league_config['name']}), source: {data_source}, type: {tournament_type}")
+
+    # 1. 获取并解析赛事数据
+    events, past, future, in_prog = _fetch_and_parse(league_key, data_source, dates_str, now_utc, skip_fetch)
+
+    # 2. ELO 评分初始化与更新
+    fifa_rankings = fetch_fifa_rankings()
+    logger.info(f"FIFA rankings loaded: {len(fifa_rankings)} teams")
+    elo_ratings = _update_elo(past, fifa_rankings, force_refresh=args.update_rankings)
+
+    if not future and not past:
+        logger.info("No matches found in window")
+        return {
+            "generated_at": now_utc.isoformat(), "data_window": dates_str,
+            "status": "no_matches", "league": league_key,
+            "tournament_type": tournament_type,
+            "message": f"No matches in window ({dates_str})",
+            "calibration": {"note": "no data"}, "past_matches": [], "predictions": [],
+        }
+
+    if not future and not run_backtest:
+        logger.info("No future matches to predict")
+        calibration = build_calibration(past, future)
+        output = {
+            "generated_at": now_utc.isoformat(), "data_window": dates_str,
+            "status": "no_future_matches", "league": league_key,
+            "tournament_type": tournament_type,
+            "message": f"No matches to predict in window ({dates_str})",
+            "calibration": calibration, "past_matches": past, "predictions": [],
+        }
+        reconciliation = reconcile_predictions(past)
+        if reconciliation:
+            output["reconciliation"] = reconciliation
+        return output
+
+    # 3. 校准
+    calibration, calibration_offset = _compute_calibration(past, future)
+
+    # 4. Dixon-Coles ρ 拟合
+    fitted_rho = DC_RHO
+    if use_dc:
+        try:
+            fitted_rho = fit_dc_rho(past)
+        except Exception as e:
+            logger.info(f"DC rho fit failed: {e}, using default")
+
+    # 5. 生成预测
+    predictions = _generate_predictions(
+        future, calibration_offset, fifa_rankings, host_country,
+        use_dc, fitted_rho, elo_ratings, league_key,
+    )
+
+    # 6. Monte Carlo（可选）
     monte_carlo_result = None
     if run_monte_carlo and predictions:
         team_strengths = {}
@@ -205,23 +284,16 @@ def run_league(league_key: str, args, now_utc, dates_str, silent: bool = False) 
         )
         logger.info(f"Monte Carlo complete. Top champion: {list(monte_carlo_result['champion_probs'].items())[:3]}")
 
+    # 7. 构建输出
     output = {
-        "generated_at": now_utc.isoformat(),
-        "data_window": dates_str,
-        "status": "ok",
-        "league": league_key,
-        "tournament_type": tournament_type,
-        "data_source": data_source,
+        "generated_at": now_utc.isoformat(), "data_window": dates_str,
+        "status": "ok", "league": league_key,
+        "tournament_type": tournament_type, "data_source": data_source,
         "dixon_coles_enabled": use_dc,
         "dixon_coles_rho": fitted_rho if use_dc else None,
-        "calibration": calibration,
-        "calibration_offset": calibration_offset,
-        "past_matches": past,
-        "predictions": predictions,
-        # P3-3: 性能计时
-        "timing_ms": {
-            "total": round((time.time() - _t_start) * 1000),
-        },
+        "calibration": calibration, "calibration_offset": calibration_offset,
+        "past_matches": past, "predictions": predictions,
+        "timing_ms": {"total": round((time.time() - _t_start) * 1000)},
     }
 
     reconciliation = reconcile_predictions(past)
@@ -231,55 +303,20 @@ def run_league(league_key: str, args, now_utc, dates_str, silent: bool = False) 
     if monte_carlo_result:
         output["monte_carlo"] = monte_carlo_result
 
+    # 8. 回测（可选）
     if run_backtest:
-        ts = now_utc.strftime("%Y-%m-%d_%H")
-        pred_file = PREDICTIONS_DIR / f"prediction_{ts}.json"
-        PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
-        with open(pred_file, "w", encoding="utf-8") as f:
-            json.dump(output, f, indent=2, ensure_ascii=False)
-        logger.info(f"Saved: {pred_file}")
+        pred_file = _save_output(output, calibration_offset, now_utc)
         bt = backtest_with_live_results(str(pred_file))
         output["backtest"] = bt
         logger.info(f"Backtest: {bt.get('status')} matched={bt.get('matched_matches')} acc={bt.get('accuracy')}")
 
+    # 9. 输出
     if not silent:
         print(json.dumps(output, indent=2, ensure_ascii=False))
 
-    ts = now_utc.strftime("%Y-%m-%d_%H")
-    pred_file = PREDICTIONS_DIR / f"prediction_{ts}.json"
-    PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
-    with open(pred_file, "w", encoding="utf-8") as f:
-        json.dump(output, f, indent=2, ensure_ascii=False)
-    logger.info(f"Saved: {pred_file}")
+    _save_output(output, calibration_offset, now_utc)
+    _print_summary(predictions, calibration, calibration_offset, monte_carlo_result, n_simulations)
 
-    if calibration_offset:
-        cal_file = PREDICTIONS_DIR / "pred_calibration.json"
-        with open(cal_file, "w", encoding="utf-8") as f:
-            json.dump(calibration_offset, f, indent=2)
-
-    print(f"\n{'='*60}", file=sys.stderr)
-    print(f"Window calibration: {calibration.get('total_matches',0)} finished | home win {calibration.get('home_win_rate',0)*100:.0f}% draw {calibration.get('draw_rate',0)*100:.0f}% away win {calibration.get('away_win_rate',0)*100:.0f}%", file=sys.stderr)
-    print(f"    Odds favorite accuracy: {calibration.get('odds_accuracy',0)*100:.0f}% ({calibration.get('favored_won',0)}/{calibration.get('favored_by_odds',0)})", file=sys.stderr)
-    if calibration_offset:
-        print(f"Calibration offset(n={calibration_offset['sample_size']}): home x{calibration_offset['home_correction']} draw x{calibration_offset['draw_correction']} away x{calibration_offset['away_correction']}", file=sys.stderr)
-        print(f"   Actual distribution: home {calibration_offset['actual_home_rate']} | draw {calibration_offset['actual_draw_rate']} | away {calibration_offset['actual_away_rate']}", file=sys.stderr)
-    else:
-        print(f"Calibration offset: insufficient data (<5 matches), skipping", file=sys.stderr)
-    print(f"To predict: {len(predictions)} matches", file=sys.stderr)
-    for p in predictions:
-        poisson_str = " / ".join(f"{t['score']}({t['prob']:.0%})" for t in p.get('poisson_top3', [])[:3])
-        ci_home = p.get('lambda_home_ci95', (0,0))
-        ci_away = p.get('lambda_away_ci95', (0,0))
-        cal = ' [cal]' if calibration_offset else ''
-        dc = ' [DC]' if p.get('dixon_coles_used') else ''
-        print(f"  {p['match']} | {p['direction']} {p['stars']}{cal}{dc} | {p['predicted_score']} | l={p.get('lambda_home',0)}[{ci_home[0]}-{ci_home[1]}]/{p.get('lambda_away',0)}[{ci_away[0]}-{ci_away[1]}] | {poisson_str}", file=sys.stderr)
-
-    if monte_carlo_result:
-        print(f"\nMonte Carlo champion prediction (n={n_simulations}):", file=sys.stderr)
-        for team, prob in list(monte_carlo_result["champion_probs"].items())[:5]:
-            print(f"  {team}: {prob:.1%}", file=sys.stderr)
-
-    print(f"{'='*60}", file=sys.stderr)
     _elapsed = (time.time() - _t_start) * 1000
     print(f"Total runtime: {_elapsed:.0f}ms", file=sys.stderr)
     print(f"{'='*60}", file=sys.stderr)

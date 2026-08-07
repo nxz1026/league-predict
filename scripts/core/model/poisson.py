@@ -33,15 +33,20 @@ def poisson_pmf(k: int, lam: float) -> float:
 
 def tau_correction(home_goals: int, away_goals: int, lambda_h: float, lambda_a: float, rho: float = 0.2) -> float:
     if home_goals == 0 and away_goals == 0:
-        return 1.0 - rho
+        tau = 1.0 - rho
     elif home_goals == 1 and away_goals == 0:
-        return 1.0 + rho * lambda_a
+        tau = 1.0 + rho * lambda_a
     elif home_goals == 0 and away_goals == 1:
-        return 1.0 + rho * lambda_h
+        tau = 1.0 + rho * lambda_h
     elif home_goals == 1 and away_goals == 1:
-        return 1.0 - rho * lambda_h * lambda_a
+        tau = 1.0 - rho * lambda_h * lambda_a
     else:
         return 1.0
+    # 安全钳位：防止 rho/λ 组合导致负概率
+    if tau < 0:
+        logger.warning(f"tau_correction clamped to 0: tau={tau:.4f} (h={home_goals},a={away_goals},"
+                       f"λ_h={lambda_h:.2f},λ_a={lambda_a:.2f},ρ={rho:.3f})")
+    return max(0.0, tau)
 
 
 def dixon_coles_pmf(home_goals: int, away_goals: int, lambda_h: float, lambda_a: float, rho: float = 0.2) -> float:

@@ -104,8 +104,7 @@ def backtest_from_source(prediction_file: str) -> dict[str, Any]:
 
     league = pred_data.get("league", "epl")
     league_config = LEAGUE_CONFIG.get(league, LEAGUE_CONFIG["epl"])
-    if league_config.get("data_source") != "football-data":
-        return {"status": "skip", "reason": "only football-data source supported for auto backtest"}
+    data_source = league_config.get("data_source", "football-data")
 
     actual_index: dict[tuple[str, str], dict[str, Any]] = {}
     for m in pred_data.get("past_matches", []):
@@ -163,6 +162,106 @@ def backtest_from_source(prediction_file: str) -> dict[str, Any]:
     }
 
 
+def _backtest_api_football(pred_data: dict[str, Any], league_config: dict) -> dict[str, Any]:
+    """从 API-Football 获取实际赛果进行回测。"""
+    api_key = os.environ.get("API_FOOTBALL_KEY", "")
+    if not api_key:
+        return {"status": "skip", "reason": "API_FOOTBALL_KEY not set"}
+
+    fixture_league_id = league_config.get("api_football_id")
+    if not fixture_league_id:
+        return {"status": "skip", "reason": "no api_football_id configured"}
+
+    data_window = pred_data.get("data_window", "")
+    if "-" in data_window:
+        start_raw, end_raw = data_window.split("-", 1)
+    else:
+        start_raw = end_raw = data_window
+
+    def normalize_date(s: str) -> str:
+        s = s.strip()
+        if len(s) == 8 and s.isdigit():
+            return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+        if len(s) == 10 and s[4] == '-' and s[7] == '-':
+            return s
+        return s
+
+    start_date = normalize_date(start_raw)
+    end_date = normalize_date(end_raw)
+
+    headers = {
+        "User-Agent": "LeaguePredict/4.1",
+        "x-apisports-key": api_key,
+    }
+
+    actual_index: dict[tuple[str, str], dict[str, Any]] = {}
+    try:
+        # 获取日期范围内的赛程
+        url = f"https://v3.football.api-sports.io/fixtures?dateFrom={start_date}&dateTo={end_date}"
+        req = urllib.request.Request(url, headers=headers)
+        resp = urllib.request.urlopen(req, timeout=ESPN_TIMEOUT_SECONDS)
+        data = json.loads(resp.read())
+
+        for fixture in data.get("response", []):
+            league_info = fixture.get("league", {})
+            if league_info.get("id") != fixture_league_id:
+                continue
+            teams = fixture.get("teams", {})
+            home_name = teams.get("home", {}).get("name", "")
+            away_name = teams.get("away", {}).get("name", "")
+            goals = fixture.get("goals", {})
+            home_goals = goals.get("home")
+            away_goals = goals.get("away")
+            status = fixture.get("fixture", {}).get("status", {}).get("short", "")
+            if status != "FT" or home_goals is None or away_goals is None:
+                continue
+            actual_index[(home_name, away_name)] = {
+                "winner": "home" if home_goals > away_goals else "away" if away_goals > home_goals else "draw",
+                "score": f"{home_goals}-{away_goals}",
+            }
+    except Exception as e:
+        return {"status": "error", "error": f"API-Football fetch failed: {e}"}
+
+    rows: list[dict[str, Any]] = []
+    for pred in pred_data.get("predictions", []):
+        home = pred.get("home", "")
+        away = pred.get("away", "")
+        actual = actual_index.get((home, away))
+        if not actual:
+            continue
+        predicted: str | None = None
+        score = pred.get("predicted_score") or ""
+        if "-" in score:
+            try:
+                h, a = [int(x.strip()) for x in score.split("-", 1)]
+            except Exception:
+                h = a = None
+            if h is not None:
+                predicted = "home" if h > a else "away" if a > h else "draw"
+        if predicted is None:
+            continue
+        rows.append({
+            "home": home,
+            "away": away,
+            "predicted": predicted,
+            "actual": actual["winner"],
+            "correct": predicted == actual["winner"],
+            "predicted_score": score,
+            "actual_score": actual.get("score", ""),
+        })
+
+    if not rows:
+        return {"status": "no_evaluable_matches", "matched_matches": 0}
+    correct = sum(1 for r in rows if r["correct"])
+    return {
+        "status": "ok",
+        "matched_matches": len(rows),
+        "correct": correct,
+        "accuracy": correct / len(rows),
+        "rows": rows,
+    }
+
+
 def backtest_with_live_results(prediction_file: str) -> dict[str, Any]:
     """Auto-fetch actual results from football-data.org for the prediction window."""
     try:
@@ -172,8 +271,12 @@ def backtest_with_live_results(prediction_file: str) -> dict[str, Any]:
 
     league = pred_data.get("league", "epl")
     league_config = LEAGUE_CONFIG.get(league, LEAGUE_CONFIG["epl"])
-    if league_config.get("data_source") != "football-data":
-        return {"status": "skip", "reason": "only football-data source supported for live backtest"}
+    data_source = league_config.get("data_source", "football-data")
+
+    if data_source == "api-football":
+        return _backtest_api_football(pred_data, league_config)
+    elif data_source != "football-data":
+        return {"status": "skip", "reason": f"unsupported data source: {data_source}"}
 
     api_key = os.environ.get("FOOTBALL_DATA_API_KEY", "")
     if not api_key:
@@ -225,6 +328,106 @@ def backtest_with_live_results(prediction_file: str) -> dict[str, Any]:
             "winner": "home" if h > a else "away" if a > h else "draw",
             "score": f"{h}-{a}",
         }
+
+    rows: list[dict[str, Any]] = []
+    for pred in pred_data.get("predictions", []):
+        home = pred.get("home", "")
+        away = pred.get("away", "")
+        actual = actual_index.get((home, away))
+        if not actual:
+            continue
+        predicted: str | None = None
+        score = pred.get("predicted_score") or ""
+        if "-" in score:
+            try:
+                h, a = [int(x.strip()) for x in score.split("-", 1)]
+            except Exception:
+                h = a = None
+            if h is not None:
+                predicted = "home" if h > a else "away" if a > h else "draw"
+        if predicted is None:
+            continue
+        rows.append({
+            "home": home,
+            "away": away,
+            "predicted": predicted,
+            "actual": actual["winner"],
+            "correct": predicted == actual["winner"],
+            "predicted_score": score,
+            "actual_score": actual.get("score", ""),
+        })
+
+    if not rows:
+        return {"status": "no_evaluable_matches", "matched_matches": 0}
+    correct = sum(1 for r in rows if r["correct"])
+    return {
+        "status": "ok",
+        "matched_matches": len(rows),
+        "correct": correct,
+        "accuracy": correct / len(rows),
+        "rows": rows,
+    }
+
+
+def _backtest_api_football(pred_data: dict[str, Any], league_config: dict) -> dict[str, Any]:
+    """从 API-Football 获取实际赛果进行回测。"""
+    api_key = os.environ.get("API_FOOTBALL_KEY", "")
+    if not api_key:
+        return {"status": "skip", "reason": "API_FOOTBALL_KEY not set"}
+
+    fixture_league_id = league_config.get("api_football_id")
+    if not fixture_league_id:
+        return {"status": "skip", "reason": "no api_football_id configured"}
+
+    data_window = pred_data.get("data_window", "")
+    if "-" in data_window:
+        start_raw, end_raw = data_window.split("-", 1)
+    else:
+        start_raw = end_raw = data_window
+
+    def normalize_date(s: str) -> str:
+        s = s.strip()
+        if len(s) == 8 and s.isdigit():
+            return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+        if len(s) == 10 and s[4] == '-' and s[7] == '-':
+            return s
+        return s
+
+    start_date = normalize_date(start_raw)
+    end_date = normalize_date(end_raw)
+
+    headers = {
+        "User-Agent": "LeaguePredict/4.1",
+        "x-apisports-key": api_key,
+    }
+
+    actual_index: dict[tuple[str, str], dict[str, Any]] = {}
+    try:
+        # 获取日期范围内的赛程
+        url = f"https://v3.football.api-sports.io/fixtures?dateFrom={start_date}&dateTo={end_date}"
+        req = urllib.request.Request(url, headers=headers)
+        resp = urllib.request.urlopen(req, timeout=ESPN_TIMEOUT_SECONDS)
+        data = json.loads(resp.read())
+
+        for fixture in data.get("response", []):
+            league_info = fixture.get("league", {})
+            if league_info.get("id") != fixture_league_id:
+                continue
+            teams = fixture.get("teams", {})
+            home_name = teams.get("home", {}).get("name", "")
+            away_name = teams.get("away", {}).get("name", "")
+            goals = fixture.get("goals", {})
+            home_goals = goals.get("home")
+            away_goals = goals.get("away")
+            status = fixture.get("fixture", {}).get("status", {}).get("short", "")
+            if status != "FT" or home_goals is None or away_goals is None:
+                continue
+            actual_index[(home_name, away_name)] = {
+                "winner": "home" if home_goals > away_goals else "away" if away_goals > home_goals else "draw",
+                "score": f"{home_goals}-{away_goals}",
+            }
+    except Exception as e:
+        return {"status": "error", "error": f"API-Football fetch failed: {e}"}
 
     rows: list[dict[str, Any]] = []
     for pred in pred_data.get("predictions", []):

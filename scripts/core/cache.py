@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""File-based API response cache (P3-2: 减少重复 API 调用).
+"""File-based API response cache.
 
 TTL 默认 1 小时。缓存文件为 JSON 格式，含 mtime 元数据。
 """
@@ -18,8 +18,14 @@ _CACHE_DIR: Path = FOOTBALL_DIR / ".cache"
 _DEFAULT_TTL_SECONDS: float = 3600.0  # 1 hour
 
 
-def _cache_key(url: str, params: dict | None = None) -> str:
-    """Generate deterministic cache key from URL + params."""
+def cache_key_from_url(url: str, params: dict | None = None) -> str:
+    """Generate deterministic cache key from URL + params.
+
+    Example::
+
+        key = cache_key_from_url("https://api.example.com/matches", {"league": 39})
+        data = cached_fetch(lambda: fetch(url), key)
+    """
     raw = url
     if params:
         raw += "?" + "&".join(f"{k}={v}" for k, v in sorted(params.items()))
@@ -65,10 +71,31 @@ def clear_cache() -> int:
     if not _CACHE_DIR.exists():
         return 0
     count = 0
-        for f in _CACHE_DIR.glob("*.json"):
-            f.unlink()
-            count += 1
+    for f in _CACHE_DIR.glob("*.json"):
+        f.unlink()
+        count += 1
     logger.info(f"Cleared {count} cache entries")
+    return count
+
+
+def purge_expired() -> int:
+    """Remove expired cache entries. Returns count of purged files."""
+    if not _CACHE_DIR.exists():
+        return 0
+    now = time.time()
+    count = 0
+    for f in _CACHE_DIR.glob("*.json"):
+        try:
+            data = json.loads(f.read_text())
+            cached_at = data.get("_cached_at", 0)
+            ttl = data.get("_ttl", _DEFAULT_TTL_SECONDS)
+            if now - cached_at > ttl:
+                f.unlink()
+                count += 1
+        except (json.JSONDecodeError, OSError, KeyError):
+            continue
+    if count:
+        logger.info(f"Purged {count} expired cache entries")
     return count
 
 
@@ -82,7 +109,7 @@ def cached_fetch(
     Args:
         fetch_fn: No-arg callable returning the data to cache.
         cache_key: String key for this request.
-        TTL: Seconds before cache expires.
+        ttl: Seconds before cache expires.
 
     Returns:
         The fetched/cached data.

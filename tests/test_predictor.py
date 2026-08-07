@@ -16,9 +16,9 @@ class TestCalculatePrediction(unittest.TestCase):
         base = {
             "home": "Brazil",
             "away": "Argentina",
-            "home_prob": 0.55,
-            "draw_prob": 0.25,
-            "away_prob": 0.20,
+            "home_true_prob": 0.55,
+            "draw_true_prob": 0.25,
+            "away_true_prob": 0.20,
             "odds_data_available": True,
         }
         base.update(overrides)
@@ -31,7 +31,7 @@ class TestCalculatePrediction(unittest.TestCase):
             "away": {"onside_score": 0.4},
         }
         from core.predictor import calculate_prediction
-        match = self._make_match(home_prob=0.55, draw_prob=0.22, away_prob=0.23)
+        match = self._make_match(home_true_prob=0.55, draw_true_prob=0.22, away_true_prob=0.23)
         result = calculate_prediction(match, use_dixon_coles=False)
         self.assertIn("direction", result)
         self.assertIn("confidence_score", result)

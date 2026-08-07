@@ -7,6 +7,7 @@ import urllib.request
 import gzip
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from core.config import (
@@ -34,6 +35,52 @@ def validate_api_keys() -> dict[str, bool]:
 
 # 执行一次全局预检
 _API_KEYS_OK: dict[str, bool] = validate_api_keys()
+
+
+def _validate_api_response(data: dict, source: str, required_keys: list[str] | None = None) -> dict:
+    """校验 API 响应结构完整性，缺失关键字段时打 warning 并返回安全默认值。"""
+    if not isinstance(data, dict):
+        logger.warning(f"[{source}] API response is not a dict (got {type(data).__name__}), returning empty")
+        return {}
+    if required_keys:
+        missing = [k for k in required_keys if k not in data]
+        if missing:
+            logger.warning(f"[{source}] API response missing keys: {missing}")
+    # 检查常见错误响应
+    if "message" in data and "error" in str(data.get("message", "")).lower():
+        logger.warning(f"[{source}] API returned error message: {data.get('message')}")
+    if data.get("count") == 0 and "response" in data:
+        logger.info(f"[{source}] API returned 0 results")
+    return data
+
+
+# ── API-Football 速率限制追踪 ──
+_rate_limit_info: dict[str, Any] = {"remaining": None, "limit": None, "last_updated": None}
+
+
+def get_rate_limit_status() -> dict[str, Any]:
+    """获取 API-Football 当前速率限制状态"""
+    return _rate_limit_info.copy()
+
+
+def _update_rate_limit_from_response(resp_headers: dict) -> None:
+    """从 API 响应头中提取速率限制信息"""
+    for key, val in resp_headers.items():
+        kl = key.lower()
+        if kl in ("x-ratelimit-requests-remaining", "x-requests-remaining"):
+            try:
+                _rate_limit_info["remaining"] = int(val)
+            except (ValueError, TypeError):
+                pass
+        elif kl in ("x-ratelimit-requests-limit", "x-requests-limit"):
+            try:
+                _rate_limit_info["limit"] = int(val)
+            except (ValueError, TypeError):
+                pass
+    _rate_limit_info["last_updated"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    remaining = _rate_limit_info.get("remaining")
+    if remaining is not None and remaining < 10:
+        logger.warning(f"API-Football rate limit low: {remaining} requests remaining")
 
 
 def _retry_request(req: urllib.request.Request, max_retries: int = 3, timeout: int | None = None) -> dict:
@@ -77,12 +124,16 @@ def fetch_events(dates_str: str, league_key: str = "epl", data_source: str = "")
     elif effective_source == "football-data":
         return fetch_football_data(dates_str, config)
     elif effective_source == "api-football":
-        events = fetch_api_football(dates_str, config)
-        if events:
-            return events
-        # 无障碍 = API-Football 没有数据，自动回退
-        logger.info(f"api-football returned 0 events, falling back to {config.get('espn_slug', 'epl')}")
-        return fetch_espn(dates_str, config.get("espn_slug", "epl"))
+        # 并行获取 api-football + ESPN fallback
+        espn_slug = config.get("espn_slug", "epl")
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            fut_api = pool.submit(fetch_api_football, dates_str, config)
+            fut_espn = pool.submit(fetch_espn, dates_str, espn_slug)
+            api_results = fut_api.result()
+            if api_results:
+                return api_results
+            logger.info("api-football returned 0 events, using ESPN fallback")
+            return fut_espn.result()
     else:
         return fetch_espn(dates_str, config.get("espn_slug", "epl"))
 
@@ -100,6 +151,7 @@ def fetch_espn(dates_str: str, league_slug: str = "epl") -> list:
             })
             resp = urllib.request.urlopen(req, timeout=ESPN_TIMEOUT_SECONDS)
             data = json.loads(gzip.decompress(resp.read()))
+            data = _validate_api_response(data, "ESPN", required_keys=["events"])
 
             return data.get("events", [])
 
@@ -112,6 +164,35 @@ def fetch_espn(dates_str: str, league_slug: str = "epl") -> list:
             else:
                 logger.error(f"All {ESPN_MAX_RETRIES} attempts failed for ESPN")
                 raise
+
+
+# ── API-Football 速率限制追踪 ──
+_rate_limit_info: dict[str, Any] = {"remaining": None, "limit": None, "last_updated": None}
+
+
+def get_rate_limit_status() -> dict[str, Any]:
+    """获取 API-Football 当前速率限制状态"""
+    return _rate_limit_info.copy()
+
+
+def _update_rate_limit_from_response(resp_headers: dict) -> None:
+    """从 API 响应头中提取速率限制信息"""
+    for key, val in resp_headers.items():
+        kl = key.lower()
+        if kl in ("x-ratelimit-requests-remaining", "x-requests-remaining"):
+            try:
+                _rate_limit_info["remaining"] = int(val)
+            except (ValueError, TypeError):
+                pass
+        elif kl in ("x-ratelimit-requests-limit", "x-requests-limit"):
+            try:
+                _rate_limit_info["limit"] = int(val)
+            except (ValueError, TypeError):
+                pass
+    _rate_limit_info["last_updated"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    remaining = _rate_limit_info.get("remaining")
+    if remaining is not None and remaining < 10:
+        logger.warning(f"API-Football rate limit low: {remaining} requests remaining")
 
 
 def fetch_football_data(dates_str: str, config: dict) -> list:
@@ -149,6 +230,7 @@ def fetch_football_data(dates_str: str, config: dict) -> list:
         logger.info(f"Fetching football-data.org: {url}")
         req = urllib.request.Request(url, headers=headers)
         data = _retry_request(req, max_retries=3, timeout=TIMEOUT_FOOTBALL_DATA)
+        data = _validate_api_response(data, "football-data", required_keys=["matches"])
 
         # 转换为 ESPN 格式
         return convert_football_data_to_espn_format(data, config)
@@ -223,6 +305,7 @@ def fetch_api_football(dates_str: str, config: dict) -> list:
         logger.info(f"Fetching API-Football fixtures: {fixtures_url}")
         fixtures_req = urllib.request.Request(fixtures_url, headers=headers)
         fixtures_data = _retry_request(fixtures_req, max_retries=3, timeout=TIMEOUT_API_FOOTBALL)
+        fixtures_data = _validate_api_response(fixtures_data, "API-Football", required_keys=["response"])
 
         # 在客户端按 league_id 过滤
         all_fixtures = fixtures_data.get("response", [])
@@ -275,7 +358,10 @@ def update_fifa_rankings() -> dict:
 
 
 def fetch_fifa_rankings(force_refresh: bool = False) -> dict:
-    """获取 FIFA 世界排名，返回 {country_name: rank} 字典"""
-    rank_file = FOOTBALL_DIR / "references" / "fifa_rankings.json"
+    """获取 FIFA 世界排名 — 委托给 core.rankings.fetch_fifa_rankings（统一入口）"""
+    from core.rankings import fetch_fifa_rankings as _fetch
+    if force_refresh:
+        update_fifa_rankings()
+    return _fetch()
 
    

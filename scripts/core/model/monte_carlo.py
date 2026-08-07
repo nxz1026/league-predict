@@ -202,42 +202,45 @@ def simulate_world_cup(fixtures: list[dict[str, Any]], team_strengths: dict[str,
     current_round = "round_of_16"
     remaining_teams: list[str] = []
 
-    for group_name in sorted(group_standings.keys()):
-        advanced = group_standings[group_name][:2]
-        remaining_teams.extend(advanced)
+    # ── 标准 World Cup 淘汰赛对阵 ──
+    # 8 组 (A-H)，每组前2名晋级，16强对阵：
+    # A1 v B2, C1 v D2, E1 v F2, G1 v H2,
+    # B1 v A2, D1 v C2, F1 v E2, H1 v G2
+    _KNOCKOUT_PAIRING = [
+        (0, 1),  # A1 vs B2
+        (2, 3),  # C1 vs D2
+        (4, 5),  # E1 vs F2
+        (6, 7),  # G1 vs H2
+        (1, 0),  # B1 vs A2
+        (3, 2),  # D1 vs C2
+        (5, 4),  # F1 vs E2
+        (7, 6),  # H1 vs G2
+    ]
 
-    if not knockout and len(remaining_teams) >= 2:
-        while len(remaining_teams) > 1:
-            next_round_teams: list[str] = []
-            for i in range(0, len(remaining_teams), 2):
-                if i + 1 < len(remaining_teams):
-                    t1 = remaining_teams[i]
-                    t2 = remaining_teams[i + 1]
+    # 构建淘汰赛队伍列表：[A1, A2, B1, B2, C1, C2, ...]
+    group_order = sorted(group_standings.keys())
+    seeded: list[str] = []
+    for gn in group_order:
+        advanced = group_standings[gn][:2]
+        seeded.extend(advanced)
 
-                    lh = team_strengths.get(t1, {}).get("lambda_home", 1.5)
-                    la = team_strengths.get(t2, {}).get("lambda_away", 1.2)
+    if len(seeded) >= 16:
+        # 按标准对阵配对
+        r16_matchups: list[tuple[str, str]] = []
+        for first_idx, second_idx in _KNOCKOUT_PAIRING:
+            # first_idx: 组号（0=A,1=B...），取该组第1名
+            # second_idx: 组号，取该组第2名
+            t1 = seeded[first_idx * 2]      # 组 first_idx 的第1名
+            t2 = seeded[second_idx * 2 + 1]  # 组 second_idx 的第2名
+            r16_matchups.append((t1, t2))
 
-                    hg, ag = simulate_match_dc(lh, la, rho)
-
-                    if hg == ag:
-                        winner = t1 if random.random() < 0.5 else t2
-                    elif hg > ag:
-                        winner = t1
-                    else:
-                        winner = t2
-
-                    next_round_teams.append(winner)
-
-                    round_name = f"r{len(remaining_teams)}"
-                    if winner not in team_rounds:
-                        team_rounds[winner] = []
-                    team_rounds[winner].append(round_name)
-                else:
-                    next_round_teams.append(remaining_teams[i])
-
-            remaining_teams = next_round_teams
-            if len(remaining_teams) > 1:
-                current_round = f"r{len(remaining_teams)}"
+        remaining_teams = _simulate_knockout_bracket(r16_matchups, team_strengths, rho, team_rounds)
+    elif len(remaining_teams) >= 2:
+        # 组数不足8组时，退化为顺序配对
+        for group_name in sorted(group_standings.keys()):
+            advanced = group_standings[group_name][:2]
+            remaining_teams.extend(advanced)
+        remaining_teams = _simulate_knockout_sequential(remaining_teams, team_strengths, rho, team_rounds)
 
     champion = remaining_teams[0] if remaining_teams else None
 
@@ -245,6 +248,92 @@ def simulate_world_cup(fixtures: list[dict[str, Any]], team_strengths: dict[str,
         "champion": champion,
         "team_rounds": team_rounds,
     }
+
+
+def _simulate_knockout_bracket(
+    matchups: list[tuple[str, str]],
+    team_strengths: dict[str, dict[str, float]],
+    rho: float,
+    team_rounds: dict[str, list[str]],
+) -> list[str]:
+    """按给定对阵表模拟淘汰赛，返回冠军队伍列表。"""
+    round_names = {16: "round_of_16", 8: "quarter_final", 4: "semi_final", 2: "final"}
+
+    current_matchups = matchups
+    while len(current_matchups) >= 1:
+        n_teams = len(current_matchups) * 2
+        round_name = round_names.get(n_teams, f"r{n_teams}")
+        next_matchups: list[tuple[str, str]] = []
+
+        for t1, t2 in current_matchups:
+            lh = team_strengths.get(t1, {}).get("lambda_home", 1.5)
+            la = team_strengths.get(t2, {}).get("lambda_away", 1.2)
+            hg, ag = simulate_match_dc(lh, la, rho)
+
+            if hg == ag:
+                winner = t1 if random.random() < 0.5 else t2
+            elif hg > ag:
+                winner = t1
+            else:
+                winner = t2
+
+            if winner not in team_rounds:
+                team_rounds[winner] = []
+            team_rounds[winner].append(round_name)
+
+            # 将胜者配对进入下一轮
+            if not next_matchups or len(next_matchups[-1]) == 2:
+                next_matchups.append((winner,))
+            else:
+                next_matchups[-1] = (next_matchups[-1][0], winner)
+
+        # 如果只剩1场（决赛），冠军已决出
+        if len(current_matchups) == 1:
+            return [current_matchups[0][0] if isinstance(current_matchups[0], tuple) and len(current_matchups[0]) == 1 else winner]
+
+        current_matchups = next_matchups
+
+    return []
+
+
+def _simulate_knockout_sequential(
+    remaining_teams: list[str],
+    team_strengths: dict[str, dict[str, float]],
+    rho: float,
+    team_rounds: dict[str, list[str]],
+) -> list[str]:
+    """顺序配对模拟淘汰赛（组数不足8组时的退化方案）。"""
+    while len(remaining_teams) > 1:
+        next_round_teams: list[str] = []
+        round_name = f"r{len(remaining_teams)}"
+        for i in range(0, len(remaining_teams), 2):
+            if i + 1 < len(remaining_teams):
+                t1 = remaining_teams[i]
+                t2 = remaining_teams[i + 1]
+
+                lh = team_strengths.get(t1, {}).get("lambda_home", 1.5)
+                la = team_strengths.get(t2, {}).get("lambda_away", 1.2)
+
+                hg, ag = simulate_match_dc(lh, la, rho)
+
+                if hg == ag:
+                    winner = t1 if random.random() < 0.5 else t2
+                elif hg > ag:
+                    winner = t1
+                else:
+                    winner = t2
+
+                next_round_teams.append(winner)
+
+                if winner not in team_rounds:
+                    team_rounds[winner] = []
+                team_rounds[winner].append(round_name)
+            else:
+                next_round_teams.append(remaining_teams[i])
+
+        remaining_teams = next_round_teams
+
+    return remaining_teams
 
 
 def simulate_league(fixtures: list[dict[str, Any]], team_strengths: dict[str, dict[str, float]], rho: float) -> dict[str, Any]:

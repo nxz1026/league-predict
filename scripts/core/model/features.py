@@ -1,5 +1,10 @@
 """Feature engineering pipeline for ML integration.
 
+⚠️  EXPERIMENTAL — This module is under active development.
+The feature set, column names, and extraction logic may change
+between releases without a deprecation cycle.  Do not rely on
+its stability in production pipelines.
+
 Zero external dependencies. Converts match dicts → feature vectors
 for model training and prediction.
 

@@ -1,4 +1,7 @@
-"""Model layer: Poisson, Dixon-Coles, Monte Carlo, Features, Ensemble."""
+"""Model layer: Poisson, Dixon-Coles, Monte Carlo, Features, Ensemble.
+
+Note: The features module is EXPERIMENTAL and may change without notice.
+"""
 
 from core.model.poisson import (
     poisson_pmf,

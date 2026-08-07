@@ -9,6 +9,7 @@ P0-D 升级: 增加 ELO ratings 持久化（save/load），避免每次冷启动
 
 import json
 import math
+import time
 from pathlib import Path
 from typing import Any
 
@@ -41,7 +42,7 @@ def expected_score(elo_a: float, elo_b: float, home_adv: bool = False) -> float:
         A 队期望得分 [0, 1]
     """
     effective_a = elo_a + (HOME_ADVANTAGE_ELO if home_adv else 0)
-    return 1.0 / (1.0 + 10 ** ((effective_a - elo_b) / SCALE_FACTOR))
+    return 1.0 / (1.0 + 10 ** ((elo_b - effective_a) / SCALE_FACTOR))
 
 
 def update_elo(
@@ -184,11 +185,11 @@ def save_elo_ratings(ratings: dict[str, float]) -> None:
         _ELO_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "ratings": {k: v for k, v in sorted(ratings.items(), key=lambda x: -x[1])},
-            "_saved_at": __import__("time").strftime("%Y-%m-%dT%H:%M:%SZ", __import__("time").gmtime()),
+            "_saved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "_team_count": len(ratings),
         }
         with open(_ELO_STATE_FILE, "w", encoding="utf-8") as f:
-            __import__("json").dump(payload, f, ensure_ascii=False, indent=2)
+            json.dump(payload, f, ensure_ascii=False, indent=2)
         logger.info(f"Saved ELO ratings for {len(ratings)} teams to {_ELO_STATE_FILE}")
     except Exception as e:
         logger.warning(f"Failed to save ELO ratings: {e}")
