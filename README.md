@@ -2,7 +2,7 @@
 
 联赛预测引擎。多数据源融合 + 信号模型 + ELO + Dixon-Coles 双变量泊松 + 蒙特卡洛模拟。
 
-零外部依赖，纯 Python stdlib。每日 21:00 (BJT) 通过 GHA 自动运行。
+零外部依赖，纯 Python stdlib。每日 21:33 (BJT) 通过 GHA 自动运行。
 
 ## 架构
 
@@ -158,7 +158,6 @@ scripts/
 | bundesliga | Bundesliga | api-football | 78 | 0.19 | 3.2 |
 | seriea | Serie A | api-football | 135 | 0.28 | 2.5 |
 | ligue1 | Ligue 1 | api-football | 61 | 0.21 | 2.7 |
-| mls | Major League Soccer | espn | 253 | 0.23 | 2.9 |
 | jleague | J-League | football-data | 98 | 0.20 | 2.8 |
 | csl | Chinese Super League | api-football | 169 | 0.22 | 2.9 |
 
@@ -174,6 +173,13 @@ scripts/
 - **缓存**: 文件级 TTL 缓存, 过期清理, URL 键生成
 - **并行获取**: API-Football + ESPN fallback 并行请求
 - **API 校验**: 响应结构验证 + 速率限制追踪
+
+## v4.3 变更日志
+
+### 变更 (P5)
+- **移除 MLS 预测**: 从 `LEAGUE_CONFIG` 及 ρ/λ 映射中移除美职联，`--all` 不再运行
+- **中超队名中文化**: `COUNTRY_CN` 新增 15 支中超俱乐部中文映射（青岛海牛、上海申花、浙江队、成都蓉城等）
+- **GHA 触发时间**: 调整为每日 21:33 (BJT)
 
 ## v4.2 变更日志
 
