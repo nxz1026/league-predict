@@ -93,6 +93,9 @@ X, y = build_training_set(past_matches, {"elo_ratings": elo})
 
 ```bash
 # 环境变量 (API-Football 用于赔率, football-data.org 备用)
+# 方式一：写入 .env 文件（推荐，自动加载）
+echo 'API_FOOTBALL_KEY=your_key' > .env
+# 方式二：export 临时
 export API_FOOTBALL_KEY=your_key
 export FOOTBALL_DATA_API_KEY=your_key
 
@@ -171,6 +174,14 @@ scripts/
 - **缓存**: 文件级 TTL 缓存, 过期清理, URL 键生成
 - **并行获取**: API-Football + ESPN fallback 并行请求
 - **API 校验**: 响应结构验证 + 速率限制追踪
+
+## v4.2 变更日志
+
+### 修复 (P0)
+- **ESPN 403 修复**: ESPN 封锁 `Mozilla/5.0` 与 `LeaguePredict/4.1` 等 User-Agent，改用 `python-requests/2.31`，恢复 ESPN 数据源可用性（MLS/中超降级路径）
+
+### 增强 (P5)
+- **.env 自动加载**: 支持在项目根目录 `.env` 写入 `API_FOOTBALL_KEY` / `FOOTBALL_DATA_API_KEY`，启动自动加载，免手动 export
 
 ## v4.1 变更日志
 

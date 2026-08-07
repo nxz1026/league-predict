@@ -146,7 +146,7 @@ def fetch_espn(dates_str: str, league_slug: str = "epl") -> list:
         try:
             logger.info(f"Fetching ESPN (attempt {attempt}/{ESPN_MAX_RETRIES}): {url}")
             req = urllib.request.Request(url, headers={
-                'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
+                'User-Agent': 'python-requests/2.31',
                 'Accept-Encoding': 'gzip'
             })
             resp = urllib.request.urlopen(req, timeout=ESPN_TIMEOUT_SECONDS)
