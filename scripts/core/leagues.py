@@ -15,7 +15,6 @@ LEAGUE_DC_RHO: dict[str, float] = {
     "bundesliga": 0.19,  # 德甲：进球多，平局略少
     "seriea":    0.28,   # 意甲：防守型，平局最多
     "ligue1":    0.21,   # 法甲：接近平均
-    "mls":       0.23,   # 美职：中等水平
     "jleague":   0.20,   # J联：接近平均
     "csl":       0.22,   # 中超：略高于平均
 }
@@ -31,7 +30,6 @@ LEAGUE_LAMBDA_MULTIPLIER: dict[str, float] = {
     "bundesliga": 3.2,   # 德甲: ~3.2+ 球/场（进攻型）
     "seriea":    2.5,    # 意甲: ~2.5 球/场（防守型）
     "ligue1":    2.7,    # 法甲: ~2.7 球/场
-    "mls":       2.9,    # 美职: ~2.9 球/场
     "jleague":   2.8,    # J联: ~2.75 球/场
     "csl":       2.9,    # 中超: ~2.9 球/场
 }
@@ -89,17 +87,6 @@ LEAGUE_CONFIG: dict[str, dict[str, object]] = {
         "api_football_id": 61,
         "espn_slug": "fra.1",
         "host_country": "France",
-        "groups": False,
-        "knockout": False,
-    },
-    "mls": {
-        "name": "Major League Soccer",
-        "tournament_type": "league",
-        "data_source": "espn",
-        "league_id": "MLS",
-        "api_football_id": 253,
-        "espn_slug": "usa.1",
-        "host_country": "USA",
         "groups": False,
         "knockout": False,
     },

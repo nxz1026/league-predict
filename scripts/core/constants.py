@@ -171,6 +171,18 @@ COUNTRY_CN: dict[str, str] = {
     "Bayern Munich": "拜仁慕尼黑", "Borussia Dortmund": "多特蒙德",
     "Paris Saint-Germain": "巴黎圣日耳曼", "Juventus": "尤文图斯",
     "AC Milan": "AC米兰", "Inter Milan": "国际米兰", "Napoli": "那不勒斯",
+    # ── 中超俱乐部 ──
+    "Qingdao Hainiu": "青岛海牛", "Shanghai Shenhua": "上海申花",
+    "Dalian Yingbo": "大连英博", "Liaoning Tieren": "辽宁铁人",
+    "Zhejiang Professional FC": "浙江队", "Wuhan Three Towns": "武汉三镇",
+    "Yunnan Yukun": "云南玉昆", "Chengdu Rongcheng": "成都蓉城",
+    "Beijing Guoan": "北京国安", "Shenzhen Xinpengcheng": "深圳新鹏城",
+    "Shanghai Port": "上海海港", "Shanghai SIPG": "上海海港",
+    "Shandong Taishan": "山东泰山", "Shandong Luneng": "山东泰山",
+    "Tianjin Jinmen Tigers": "天津津门虎", "Tianjin Teda": "天津津门虎",
+    "Henan FC": "河南队", "Henan Songshan Longmen": "河南队",
+    "Changchun Yatai": "长春亚泰", "Meizhou Hakka": "梅州客家",
+    "Nantong Zhiyun": "南通支云", "Shenzhen FC": "深圳队",
 }
 
 # ── API 超时配置 ──────────────────────────────────
