@@ -62,7 +62,7 @@ MAX_GOALS_MC: int = 8
 MAX_GOALS_PREDICT: int = 9
 
 # ── 市场赔率权重 ──────────────────────────────────
-MARKET_ODDS_WEIGHT: float = 0.20
+MARKET_ODDS_WEIGHT: float = 0.45
 
 # ── Onside 4 信号权重 ─────────────────────────────
 ONSIDE_WEIGHTS: dict[str, float] = {
