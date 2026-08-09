@@ -91,7 +91,7 @@ LEAGUE_CONFIG: dict[str, dict[str, object]] = {
     "jleague": {
         "name": "J-League",
         "tournament_type": "league",
-        "data_source": "football-data",
+        "data_source": "api-football",
         "league_id": "JL1",
         "api_football_id": 98,
         "espn_slug": "japan.1",
