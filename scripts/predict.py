@@ -336,13 +336,14 @@ def main() -> None:
         cleanup_old_files(days=7)
         return
 
-    now_utc = datetime.now(timezone.utc)
+    # 使用北京时间（BJT）计算日期范围，而非UTC
+    now_bjt = datetime.now(timezone(timedelta(hours=8)))
 
     if args.dates:
         dates_str = args.dates
     else:
-        d1 = (now_utc - timedelta(days=1)).strftime("%Y%m%d")
-        d2 = (now_utc + timedelta(days=1)).strftime("%Y%m%d")
+        d1 = now_bjt.strftime("%Y%m%d")
+        d2 = (now_bjt + timedelta(days=1)).strftime("%Y%m%d")
         dates_str = f"{d1}-{d2}"
 
     if args.all:
@@ -352,7 +353,7 @@ def main() -> None:
             print(f"# LEAGUE: {league_key}", file=sys.stderr)
             print(f"{'#'*60}", file=sys.stderr)
             try:
-                result = run_league(league_key, args, now_utc, dates_str, silent=True)
+                result = run_league(league_key, args, now_bjt, dates_str, silent=True)
                 if result:
                     all_outputs.append(result)
             except Exception as e:
@@ -360,7 +361,7 @@ def main() -> None:
         # Print combined JSON array for --all mode
         print(json.dumps(all_outputs, indent=2, ensure_ascii=False))
     else:
-        run_league(args.league, args, now_utc, dates_str)
+        run_league(args.league, args, now_bjt, dates_str)
 
 
 if __name__ == "__main__":
