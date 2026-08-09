@@ -9,14 +9,13 @@ from __future__ import annotations
 #   Bundesliga 平局率 ~24% → ρ=0.19
 #   EPL 平局率 ~23% → ρ=0.17 (进攻型联赛，低分平局少)
 # ════════════════════════════════════════════════
-LEAGUE_DC_RHO: dict[str, float] = {
+LEAGUE_DC_RHO: dict[str, float] = {\
     "epl":       0.17,   # 英超：进攻性强，平局偏少
     "laliga":    0.22,   # 西甲：技术流，中等平局
     "bundesliga": 0.19,  # 德甲：进球多，平局略少
     "seriea":    0.28,   # 意甲：防守型，平局最多
     "ligue1":    0.21,   # 法甲：接近平均
     "jleague":   0.20,   # J联：接近平均
-    "csl":       0.22,   # 中超：略高于平均
 }
 
 # ════════════════════════════════════════════════
@@ -24,14 +23,13 @@ LEAGUE_DC_RHO: dict[str, float] = {
 # 不同联赛场均进球差异显著，统一 2.8 导致系统性偏差
 # 数据来源: 各联赛近 5 赛季场均进球统计
 # ════════════════════════════════════════════════
-LEAGUE_LAMBDA_MULTIPLIER: dict[str, float] = {
+LEAGUE_LAMBDA_MULTIPLIER: dict[str, float] = {\
     "epl":       2.8,    # 英超: ~2.8 球/场
     "laliga":    2.7,    # 西甲: ~2.65 球/场
     "bundesliga": 3.2,   # 德甲: ~3.2+ 球/场（进攻型）
     "seriea":    2.5,    # 意甲: ~2.5 球/场（防守型）
     "ligue1":    2.7,    # 法甲: ~2.7 球/场
     "jleague":   2.8,    # J联: ~2.75 球/场
-    "csl":       2.9,    # 中超: ~2.9 球/场
 }
 
 # ── 联赛元数据配置 ─────────────────────────────────
@@ -76,17 +74,6 @@ LEAGUE_CONFIG: dict[str, dict[str, object]] = {
         "api_football_id": 135,
         "espn_slug": "ita.1",
         "host_country": "Italy",
-        "groups": False,
-        "knockout": False,
-    },
-    "ligue1": {
-        "name": "Ligue 1",
-        "tournament_type": "league",
-        "data_source": "api-football",
-        "league_id": "FL1",
-        "api_football_id": 61,
-        "espn_slug": "fra.1",
-        "host_country": "France",
         "groups": False,
         "knockout": False,
     },
