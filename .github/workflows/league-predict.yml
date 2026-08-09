@@ -66,8 +66,7 @@ jobs:
 
           LEAGUE_CN = {
               'epl': '英超', 'laliga': '西甲', 'bundesliga': '德甲',
-              'seriea': '意甲', 'ligue1': '法甲', 'mls': '美职联',
-              'jleague': '日职联',
+              'seriea': '意甲', 'ligue1': '法甲',
           }
 
           bjt = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M')
