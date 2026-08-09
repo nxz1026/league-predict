@@ -31,10 +31,12 @@ LEAGUE_LAMBDA_MULTIPLIER: dict[str, float] = {
 }
 
 # ── 联赛元数据配置 ─────────────────────────────────
+# football-data.org 为默认数据源（免费，含赔率）
+# api-football 为备用（需额外 API key）
 LEAGUE_CONFIG: dict[str, dict[str, object]] = {
     "epl": {
         "name": "English Premier League",
-        "data_source": "api-football",
+        "data_source": "football-data",  # 默认 football-data.org
         "league_id": "PL",
         "api_football_id": 39,
         "espn_slug": "eng.1",
@@ -45,7 +47,7 @@ LEAGUE_CONFIG: dict[str, dict[str, object]] = {
     "laliga": {
         "name": "La Liga",
         "tournament_type": "league",
-        "data_source": "api-football",
+        "data_source": "football-data",
         "league_id": "PD",
         "api_football_id": 140,
         "espn_slug": "spa.1",
@@ -56,7 +58,7 @@ LEAGUE_CONFIG: dict[str, dict[str, object]] = {
     "bundesliga": {
         "name": "Bundesliga",
         "tournament_type": "league",
-        "data_source": "api-football",
+        "data_source": "football-data",
         "league_id": "BL1",
         "api_football_id": 78,
         "espn_slug": "ger.1",
@@ -67,7 +69,7 @@ LEAGUE_CONFIG: dict[str, dict[str, object]] = {
     "seriea": {
         "name": "Serie A",
         "tournament_type": "league",
-        "data_source": "api-football",
+        "data_source": "football-data",
         "league_id": "SA",
         "api_football_id": 135,
         "espn_slug": "ita.1",
@@ -78,7 +80,7 @@ LEAGUE_CONFIG: dict[str, dict[str, object]] = {
     "ligue1": {
         "name": "Ligue 1",
         "tournament_type": "league",
-        "data_source": "api-football",
+        "data_source": "football-data",
         "league_id": "FL1",
         "api_football_id": 61,
         "espn_slug": "fra.1",
