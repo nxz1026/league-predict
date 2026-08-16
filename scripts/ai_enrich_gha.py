@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 def load_predictions(path: str = "/tmp/predict_output.txt") -> list:
     if not os.path.exists(path):
