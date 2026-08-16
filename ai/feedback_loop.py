@@ -125,7 +125,6 @@ def reconcile_results(predictions: list[dict], actual_results: list[dict]) -> di
 
     Returns metrics dict.
     """
-    from core.backtest import reconcile_predictions
 
     # Build a lookup of actual results by match name
     actual_by_name = {}
