@@ -37,10 +37,30 @@ def parse_details(details_str: str | None) -> tuple[str | None, str | None, floa
 
 
 def to_cn(name: str | None) -> str:
-    """英文国家名/俱乐部名 → 中文（查硬编码表，未匹配返回原名）"""
+    """英文国家名/俱乐部名 → 中文（查硬编码表，未匹配则 strip 前后缀后再查，仍不匹配返回原名）"""
     if not name:
         return name
+    # 直接匹配
     cn = COUNTRY_CN.get(name, COUNTRY_CN.get(name.replace("'", ""), None))
+    if cn:
+        return cn
+    # strip 常见足球俱乐部前缀（如 RCD, RC, CD, FC, UD 等）
+    _prefixes = ["RCD ", "RC ", "CD ", "FC ", "UD ", "CF ", "SD ", "AD ", "CA ",
+                 "Real ", "Deportivo ", "Club ", "Athletic ", "Sporting "]
+    cleaned = name
+    for pfx in _prefixes:
+        if cleaned.startswith(pfx):
+            cleaned = cleaned[len(pfx):]
+            break
+    # strip 常见足球俱乐部后缀
+    _suffixes = [" CF", " FC", " UD", " CD", " RC", " RCD", " C.F.", " F.C.",
+                 " SAD", " S.A.D.", " B", " II", " Women", " FCB", " S.L."]
+    for sfx in _suffixes:
+        if cleaned.endswith(sfx):
+            cleaned = cleaned[: -len(sfx)]
+            break
+    # 再查一次
+    cn = COUNTRY_CN.get(cleaned, COUNTRY_CN.get(cleaned.replace("'", ""), None))
     return cn if cn else name
 
 
