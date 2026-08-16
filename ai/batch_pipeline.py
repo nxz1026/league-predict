@@ -3,7 +3,7 @@ Batch AI analysis pipeline: split items, enrich via Gemini, return scored items.
 Adapted from ECC community data-scraper-agent skill.
 """
 import json
-from llm_client import generate  # same directory
+from ai.llm_client import generate
 
 
 def analyse_batch(
