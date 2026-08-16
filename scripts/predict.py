@@ -37,6 +37,15 @@ from core.output import cleanup_old_files, save_results
 from core.predictor import calculate_prediction
 from core.elo import get_or_init_elo_ratings, process_match_result, save_elo_ratings
 
+# AI feedback loop — load previous enrichment scores
+try:
+    from ai.feedback_loop import load_ai_adjustments, adjust_prediction
+    _ai_adjustments = load_ai_adjustments()
+    if _ai_adjustments:
+        logger.info(f"AI feedback: loaded {len(_ai_adjustments)} enrichment scores")
+except Exception:
+    _ai_adjustments = {}
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -137,6 +146,9 @@ def _generate_predictions(
             pred["match"] = match["name"]
             pred["home"] = match.get("home", "")
             pred["away"] = match.get("away", "")
+            # Apply AI feedback adjustment
+            if _ai_adjustments:
+                pred = adjust_prediction(pred, _ai_adjustments)
             predictions.append(pred)
         except Exception as e:
             logger.error(f"Prediction failed for {match.get('name', '?')}: {e}")

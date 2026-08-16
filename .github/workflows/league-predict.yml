@@ -171,6 +171,60 @@ jobs:
           LLM_MODEL: ${{ secrets.LLM_MODEL }}
         run: python3 scripts/ai_enrich_gha.py || echo "[AI Enrich] skipped (no key or error)"
 
+      - name: AI Feedback Reconciliation
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: |
+          python3 << 'PYEOF'
+          import json, os
+          from pathlib import Path
+
+          from ai.feedback_loop import load_ai_adjustments, reconcile_results, print_metrics_summary
+
+          # Check if AI scores exist
+          adjustments = load_ai_adjustments()
+          scores_file = Path("predictions/ai_scores.json")
+          has_ai_scores = scores_file.exists() and len(adjustments) > 0
+          print(f"[AI Feedback] AI scores available: {len(adjustments)} entries" if has_ai_scores else "[AI Feedback] No AI scores yet (first run)")
+
+          # Find latest prediction file
+          pred_dir = Path("predictions")
+          if not pred_dir.exists():
+              print("[AI Feedback] No predictions directory, skipping")
+              exit(0)
+          pred_files = sorted(pred_dir.glob("prediction_*.json"))
+          if not pred_files:
+              print("[AI Feedback] No prediction files found, skipping")
+              exit(0)
+          latest = pred_files[-1]
+          print(f"[AI Feedback] Latest prediction: {latest.name}")
+
+          with open(latest) as f:
+              data = json.load(f)
+
+          # Handle both single league and --all mode (list of leagues)
+          leagues = data if isinstance(data, list) else [data]
+
+          for league_data in leagues:
+              predictions = league_data.get("predictions", [])
+              past_matches = league_data.get("past_matches", [])
+              league_key = league_data.get("league", "?")
+
+              if not predictions or not past_matches:
+                  print(f"[AI Feedback] {league_key}: no predictions or past matches, skipping")
+                  continue
+
+              metrics = reconcile_results(predictions, past_matches)
+              summary = print_metrics_summary(metrics)
+              print(f"\n[AI Feedback] {league_key}:\n{summary}")
+
+              # Save metrics to file for GHA artifact
+              with open("/tmp/ai_metrics.json", "w") as f:
+                  json.dump(metrics, f, indent=2)
+
+          print("[AI Feedback] Reconciliation complete")
+          PYEOF
+
       - name: Send webhook (with retry)
         shell: bash
         env:

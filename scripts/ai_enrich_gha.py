@@ -24,8 +24,8 @@ def load_predictions(path: str = "/tmp/predict_output.txt") -> list:
     return data if isinstance(data, list) else [data]
 
 
-def enrich_via_llm(predictions: list) -> str:
-    """Call LLM for enrichment, return markdown snippet."""
+def enrich_via_llm(predictions: list) -> tuple[str, list]:
+    """Call LLM for enrichment, return (markdown_snippet, enriched_items)."""
     from ai.batch_pipeline import analyse_batch
 
     # Build items from predictions
@@ -45,7 +45,7 @@ def enrich_via_llm(predictions: list) -> str:
             })
 
     if not items:
-        return ""
+        return "", []
 
     enriched = analyse_batch(
         items,
@@ -72,10 +72,10 @@ def enrich_via_llm(predictions: list) -> str:
         summary = item.get("ai_summary", "")
         notes = item.get("ai_notes", "")
         if "mock" in notes:
-            return ""  # mock data, skip
+            return "", []  # mock data, skip
         lines.append(f"• {item['name']}  **{s}/100**  — {summary}")
     lines.append("")
-    return "\n".join(lines)
+    return "\n".join(lines), enriched
 
 
 def main():
@@ -90,10 +90,15 @@ def main():
         return
 
     print(f"[AI Enrich] Loaded {len(predictions)} leagues, enriching...")
-    snippet = enrich_via_llm(predictions)
+    snippet, enriched_items = enrich_via_llm(predictions)
     if not snippet:
         print("[AI Enrich] No enrichment produced (mock or empty)")
         return
+
+    # Save AI scores for next prediction run (feedback loop)
+    if enriched_items:
+        from ai.feedback_loop import save_ai_scores
+        save_ai_scores(enriched_items, league_key="")
 
     email_body_path = "/tmp/email_body.txt"
     if os.path.exists(email_body_path):
