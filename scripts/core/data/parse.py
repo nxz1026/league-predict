@@ -52,6 +52,13 @@ def to_cn(name: str | None) -> str:
         if cleaned.startswith(pfx):
             cleaned = cleaned[len(pfx):]
             break
+    # strip "de X", "de la X" 西班牙命名模式（如 "Espanyol de Barcelona" → "Espanyol"）
+    _de_patterns = [" de la ", " de las ", " de los ", " de "]
+    for dp in _de_patterns:
+        if dp in cleaned:
+            parts = cleaned.split(dp, 1)
+            cleaned = parts[0]
+            break
     # strip 常见足球俱乐部后缀
     _suffixes = [" CF", " FC", " UD", " CD", " RC", " RCD", " C.F.", " F.C.",
                  " SAD", " S.A.D.", " B", " II", " Women", " FCB", " S.L."]

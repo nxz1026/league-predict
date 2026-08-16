@@ -195,6 +195,7 @@ COUNTRY_CN: dict[str, str] = {
     "Levante": "莱万特", "Elche": "埃尔切",
     "Deportivo La Coruña": "拉科鲁尼亚", "Deportivo": "拉科鲁尼亚",
     "Racing Santander": "桑坦德竞技", "Racing Club": "桑坦德竞技",
+    "Racing Club de Santander": "桑坦德竞技", "Racing de Santander": "桑坦德竞技",
     "Sporting Gijón": "希洪竞技", "Sporting": "希洪竞技",
     "Tenerife": "特内里费", "Zaragoza": "萨拉戈萨",
     "Huesca": "韦斯卡", "Albacete": "阿尔巴塞特",
@@ -202,6 +203,7 @@ COUNTRY_CN: dict[str, str] = {
     "Mirandés": "米兰德斯", "Eibar": "埃瓦尔",
     "Almería": "阿尔梅里亚", "Granada": "格拉纳达",
     "Cádiz": "加的斯", "Córdoba": "科尔多瓦",
+    "Espanyol de Barcelona": "西班牙人", "Espanyol Barcelona": "西班牙人",
     # ── 德甲俱乐部 ──
     "Bayern Munich": "拜仁慕尼黑", "Borussia Dortmund": "多特蒙德",
     "Bayer Leverkusen": "勒沃库森", "Leverkusen": "勒沃库森",
