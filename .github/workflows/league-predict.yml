@@ -21,7 +21,7 @@ jobs:
           cache: 'pip'
 
       - name: Install dependencies
-        run: pip install pytest
+        run: pip install requests pyyaml pytest
 
       - name: Run tests
         run: python -m pytest tests/ -v
@@ -164,6 +164,12 @@ jobs:
               day = datetime.now(timezone(timedelta(hours=8))).strftime('%m/%d')
               f.write(f'subject={day}\n')
           PYEOF
+
+      - name: AI Enrichment
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+        run: python3 scripts/ai_enrich_gha.py || echo "[AI Enrich] skipped (no key or error)"
 
       - name: Send webhook (with retry)
         shell: bash
