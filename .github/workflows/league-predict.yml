@@ -139,7 +139,7 @@ jobs:
               if pm:
                   lines_out.append(f'回填：{len(pm)} 场')
                   for m in pm:
-                      display = m.get('name', f"{m.get('away','?')} vs {m.get('home','?')}")
+                      display = m.get('name', f"{m.get('home','?')} vs {m.get('away','?')}")
                       sc = m.get('score', '?')
                       lines_out.append(f'  {display} -> {sc}')
 

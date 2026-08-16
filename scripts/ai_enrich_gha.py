@@ -115,4 +115,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        import traceback
+        print(f"[AI Enrich] ❌ 错误: {e}")
+        print(f"[AI Enrich] 详细: {traceback.format_exc()}")
+        print(f"[AI Enrich] 提示: 检查依赖安装 (pip install -r requirements.txt) 或 LLM_API_KEY 配置")
+        sys.exit(1)
