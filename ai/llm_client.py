@@ -75,9 +75,14 @@ def _call_openai(prompt: str, model: str, api_base: str, api_key: str) -> dict:
             timeout=30,
         )
         if resp.status_code != 200:
+            print(f"[LLM] API error {resp.status_code}: {resp.text[:200]}", file=sys.stderr)
             return {}
-        return _parse_openai(resp)
-    except requests.RequestException:
+        result = _parse_openai(resp)
+        if not result:
+            print(f"[LLM] Failed to parse response: {resp.text[:200]}", file=sys.stderr)
+        return result
+    except requests.RequestException as e:
+        print(f"[LLM] Request failed: {e}", file=sys.stderr)
         return {}
 
 
