@@ -231,7 +231,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add predictions/ai_scores.json 2>/dev/null || true
+          git add -f predictions/ai_scores.json 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "[Persist] No AI scores to commit"
           else

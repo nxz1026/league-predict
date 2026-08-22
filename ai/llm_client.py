@@ -67,23 +67,30 @@ def _call_openai(prompt: str, model: str, api_base: str, api_key: str) -> dict:
         "max_tokens": 2048,
         "response_format": {"type": "json_object"},
     }
-    try:
-        resp = requests.post(
-            url,
-            json=payload,
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            timeout=30,
-        )
-        if resp.status_code != 200:
-            print(f"[LLM] API error {resp.status_code}: {resp.text[:200]}", file=sys.stderr)
+    for attempt in range(3):
+        try:
+            resp = requests.post(
+                url,
+                json=payload,
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                timeout=30,
+            )
+            if resp.status_code == 429:
+                print(f"[LLM] 429 rate limited, retry {attempt + 1}/3...", file=sys.stderr)
+                time.sleep(10 * (attempt + 1))
+                continue
+            if resp.status_code != 200:
+                print(f"[LLM] API error {resp.status_code}: {resp.text[:200]}", file=sys.stderr)
+                return {}
+            result = _parse_openai(resp)
+            if not result:
+                print(f"[LLM] Failed to parse response: {resp.text[:200]}", file=sys.stderr)
+            return result
+        except requests.RequestException as e:
+            print(f"[LLM] Request failed: {e}", file=sys.stderr)
             return {}
-        result = _parse_openai(resp)
-        if not result:
-            print(f"[LLM] Failed to parse response: {resp.text[:200]}", file=sys.stderr)
-        return result
-    except requests.RequestException as e:
-        print(f"[LLM] Request failed: {e}", file=sys.stderr)
-        return {}
+    print("[LLM] Gave up after 3 retries on 429", file=sys.stderr)
+    return {}
 
 
 def _call_gemini(prompt: str, model: str, api_key: str, rate_limit: float) -> dict:
