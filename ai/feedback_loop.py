@@ -15,7 +15,7 @@ import json
 import os
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent
 AI_SCORES_FILE = REPO_ROOT / "predictions" / "ai_scores.json"
 METRICS_FILE = REPO_ROOT / "results" / "metrics_history.json"
 
