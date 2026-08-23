@@ -14,85 +14,85 @@
     "source": "epl"
   },
   "纽卡斯尔 vs 利物浦": {
-    "ai_score": 35,
-    "ai_summary": "Newcastle predicted to beat Liverpool, an underdog pick with a clear direction. However, absence of odds data severely limits confidence.",
+    "ai_score": 60,
+    "ai_summary": "Newcastle is an underdog against Liverpool, making the prediction bold. However, the low confidence due to lack of handicap data limits the value.",
     "ai_notes": "",
     "league": "epl",
     "source": "epl"
   },
   "富勒姆 vs 切尔西": {
-    "ai_score": 35,
-    "ai_summary": "Fulham predicted to beat Chelsea, another underdog directional pick. Confidence is low due to no odds data, but the underdog angle is present.",
+    "ai_score": 60,
+    "ai_summary": "Fulham is an underdog against Chelsea, which aligns with the user's preference for underdog picks. The absence of betting data reduces confidence to a moderate level.",
     "ai_notes": "",
     "league": "epl",
     "source": "epl"
   },
   "Club Atlético de Madrid vs 比利亚雷亚尔": {
-    "ai_score": 20,
-    "ai_summary": "Atlético Madrid is favored over Villarreal, but no odds data exists. The prediction is not an underdog and confidence is minimal.",
+    "ai_score": 40,
+    "ai_summary": "Atlético Madrid is favored over Villarreal, so this is not an underdog pick. Without handicap data, the prediction carries weak confidence and limited appeal.",
     "ai_notes": "",
     "league": "laliga",
     "source": "laliga"
   },
   "赫塔费 vs 桑坦德竞技": {
-    "ai_score": 30,
-    "ai_summary": "Prediction based solely on fundamentals with no market data. Low confidence due to lack of betting odds analysis.",
-    "ai_notes": "Underdog status unclear; 1-star rating indicates weak signal.",
+    "ai_score": 40,
+    "ai_summary": "Getafe is the stronger team against Santander, making this a non-underdog prediction. The lack of market data results in low confidence and a weak score.",
+    "ai_notes": "",
     "league": "laliga",
     "source": "laliga"
   },
   "埃尔切 vs 巴塞罗那": {
-    "ai_score": 30,
-    "ai_summary": "Only fundamental analysis provided, no market data to confirm. Low confidence prediction.",
-    "ai_notes": "Similar to other items, lacks clear directional strength.",
+    "ai_score": 55,
+    "ai_summary": "Elche is a major underdog against Barcelona, which fits the underdog preference. However, the prediction relies solely on fundamentals with no handicap data, keeping confidence low.",
+    "ai_notes": "",
     "league": "laliga",
     "source": "laliga"
   },
   "奥萨苏纳 vs 莱万特": {
     "ai_score": 30,
-    "ai_summary": "No market data available, relying on basic fundamentals. Confidence is low.",
-    "ai_notes": "Underdog not identified; 1-star rating limits reliability.",
+    "ai_summary": "Prediction favors Osasuna but lacks data and confidence. Not an underdog pick, so low value.",
+    "ai_notes": "",
     "league": "laliga",
     "source": "laliga"
   },
   "Málaga CF vs 拉科鲁尼亚": {
     "ai_score": 30,
-    "ai_summary": "Prediction without market data, only fundamental reference. Weak confidence.",
-    "ai_notes": "Team status (favorite/underdog) unknown; low star rating.",
+    "ai_summary": "Málaga CF predicted to win with no supporting data. Low confidence, not a clear underdog.",
+    "ai_notes": "",
     "league": "laliga",
     "source": "laliga"
   },
   "Frosinone Calcio vs 尤文图斯": {
-    "ai_score": 30,
-    "ai_summary": "No market data, just fundamental analysis. Low confidence pick.",
-    "ai_notes": "1-star rating and lack of odds info reduce predictive value.",
+    "ai_score": 65,
+    "ai_summary": "Frosinone is a strong underdog against Juventus, aligning with preference. However, no data reduces confidence.",
+    "ai_notes": "",
     "league": "seriea",
     "source": "seriea"
   },
   "威尼斯 vs US Lecce": {
-    "ai_score": 45,
-    "ai_summary": "Prediction of Venice win with low confidence due to lack of odds data. Not clearly an underdog, so limited value for betting.",
+    "ai_score": 35,
+    "ai_summary": "Venezia predicted win with no data. Unclear underdog status, low confidence.",
     "ai_notes": "",
     "league": "seriea",
     "source": "seriea"
   },
   "Atalanta BC vs US Sassuolo Calcio": {
-    "ai_score": 40,
-    "ai_summary": "Prediction of Atalanta win, but Atalanta is the favorite rather than an underdog. Low confidence further reduces the appeal.",
+    "ai_score": 20,
+    "ai_summary": "Atalanta is favorite with no data. Low confidence and not an underdog, weak pick.",
     "ai_notes": "",
     "league": "seriea",
     "source": "seriea"
   },
   "都灵 vs AC米兰": {
-    "ai_score": 55,
-    "ai_summary": "Prediction of Torino win, an underdog pick against AC Milan. Low confidence limits the score, but underdog preference adds some value.",
+    "ai_score": 35,
+    "ai_summary": "Torino is an underdog against AC Milan, but the prediction has no hard data and only basic reference. Low confidence makes this a weak pick.",
     "ai_notes": "",
     "league": "seriea",
     "source": "seriea"
   },
   "Bologna FC 1909 vs SS Lazio": {
-    "ai_score": 55,
-    "ai_summary": "Prediction of Bologna win, an underdog against Lazio. Low confidence, but underdog direction aligns with user preference.",
+    "ai_score": 35,
+    "ai_summary": "Bologna is an underdog versus Lazio, but the lack of statistical backing and 1-star rating reduce reliability. Not recommended for high-confidence betting.",
     "ai_notes": "",
     "league": "seriea",
     "source": "seriea"
@@ -105,15 +105,15 @@
     "source": "ligue1"
   },
   "Le Havre AC vs AS Monaco FC": {
-    "ai_score": 45,
-    "ai_summary": "Le Havre AC is an underdog against Monaco, which aligns with user preference, but the 1-star confidence and lack of handicap data make this a weak pick. Only basic fundamentals are available, providing unreliable guidance.",
+    "ai_score": 35,
+    "ai_summary": "Le Havre is a strong underdog against Monaco, yet the prediction lacks any data support. The low confidence outweighs the underdog appeal.",
     "ai_notes": "",
     "league": "ligue1",
     "source": "ligue1"
   },
   "巴黎圣日耳曼 vs Stade Rennais FC 1901": {
-    "ai_score": 35,
-    "ai_summary": "PSG is a strong favorite, contradicting the underdog preference, and the 1-star confidence with no handicap data signals low reliability. This prediction offers little value for betting.",
+    "ai_score": 25,
+    "ai_summary": "PSG is a heavy favorite against Rennes, which contradicts the preferred underdog picks. Combined with no data, this is a very weak prediction.",
     "ai_notes": "",
     "league": "ligue1",
     "source": "ligue1"
