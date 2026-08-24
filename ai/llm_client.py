@@ -37,7 +37,7 @@ def generate(
     # Resolve from env/params
     api_key = api_key or os.environ.get("LLM_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
     api_base = api_base or os.environ.get("LLM_API_BASE", "https://api.agnes-ai.cn/v1")
-    model = model or os.environ.get("LLM_MODEL") or "agnes-2.5-pro"
+    model = model or os.environ.get("LLM_MODEL") or "agnes-2.5-flash"
 
     if not api_key:
         return {}
