@@ -17,10 +17,13 @@ import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-# ── 确保脚本目录在 sys.path 中，支持从项目根目录直接运行 ──
+# ── 确保脚本目录与仓库根在 sys.path 中（仓库根含 ai/ 包，LLM 翻译等需要）──
 _SCRIPT_DIR = str(Path(__file__).parent)
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
+_REPO_ROOT = str(Path(__file__).parent.parent)
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
 from core.config import (
     LEAGUE_CONFIG, PREDICTIONS_DIR, FOOTBALL_DIR, DC_RHO, DEFAULT_N_SIMULATIONS

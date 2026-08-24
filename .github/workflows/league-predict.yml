@@ -35,6 +35,9 @@ jobs:
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_API_BASE: ${{ secrets.LLM_API_BASE }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
         run: python3 scripts/predict.py --all > /tmp/predict_output.txt 2>/tmp/predict_stderr.txt || (cat /tmp/predict_stderr.txt && cat /tmp/predict_output.txt && exit 1)
 
       - name: Show stderr (debug)
