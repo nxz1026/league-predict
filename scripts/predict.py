@@ -246,6 +246,15 @@ def run_league(league_key: str, args, now_utc, dates_str, silent: bool = False) 
     # 1. 获取并解析赛事数据
     events, past, future, in_prog = _fetch_and_parse(league_key, data_source, dates_str, now_utc, skip_fetch)
 
+    # 1.5 累计历史完赛记录（供线上 ML 训练 / calibration 跨运行累计，P5）
+    try:
+        from core.calibration import append_historical_past_matches
+        _added = append_historical_past_matches(league_key, past)
+        if _added:
+            logger.info(f"Accumulated {_added} historical past matches (league={league_key})")
+    except Exception as e:
+        logger.warning(f"Failed to accumulate historical past matches: {e}")
+
     # 2. ELO 评分初始化与更新
     fifa_rankings = fetch_fifa_rankings()
     logger.info(f"FIFA rankings loaded: {len(fifa_rankings)} teams")

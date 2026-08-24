@@ -103,6 +103,58 @@ def load_historical_past_matches(days: int = 30, league: str | None = None) -> l
     return unique
 
 
+def append_historical_past_matches(league: str, past_matches: list[dict[str, Any]],
+                                   base_dir: "Path | None" = None) -> int:
+    """将本次运行的完赛记录合并进 references/historical_past_matches.json。
+
+    仅纳入带有效比分的已结束比赛；按 联赛+kickoff+主客队 去重。
+    供 ML 训练 / calibration 跨 GHA 运行累计样本（P5：线上 ML 激活的前提）。
+    """
+    ref_dir = (base_dir or FOOTBALL_DIR) / "references"
+    try:
+        ref_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return 0
+    hist_file = ref_dir / "historical_past_matches.json"
+    try:
+        existing = _try_load_json(hist_file) or []
+    except Exception:
+        existing = []
+    if not isinstance(existing, list):
+        existing = []
+
+    seen: set[str] = set()
+    for m in existing:
+        seen.add(f"{m.get('league','')}_{m.get('kickoff_utc','')}_{m.get('home','')}_{m.get('away','')}")
+
+    merged = list(existing)
+    added = 0
+    for m in past_matches:
+        score = m.get("score", "")
+        if not score or "-" not in score:
+            continue
+        parts = score.split("-")
+        if len(parts) != 2 or not parts[0].strip().isdigit() or not parts[1].strip().isdigit():
+            continue
+        entry = dict(m)
+        entry["league"] = league
+        key = f"{league}_{entry.get('kickoff_utc','')}_{entry.get('home','')}_{entry.get('away','')}"
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(entry)
+        added += 1
+
+    if added:
+        try:
+            with open(hist_file, "w", encoding="utf-8") as f:
+                json.dump(merged, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning(f"Failed to save historical past matches: {e}")
+            return 0
+    return added
+
+
 def compute_calibration_offset(past_matches: list[dict[str, Any]], league: str | None = None) -> dict[str, Any] | None:
     """
     从累积 past_matches 计算 calibration 修正因子。

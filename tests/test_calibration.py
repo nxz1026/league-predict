@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
-from core.calibration import compute_calibration_offset, build_calibration, _parse_score
+from core.calibration import compute_calibration_offset, build_calibration, _parse_score, append_historical_past_matches
 
 
 class TestParseScore(unittest.TestCase):
@@ -83,6 +83,40 @@ class TestBuildCalibration(unittest.TestCase):
         ]
         result = build_calibration(past, [])
         self.assertEqual(result["total_matches"], 3)
+
+
+class TestHistoricalPastMatches(unittest.TestCase):
+    """P5: 历史完赛记录跨运行累计（线上 ML 激活前提）。"""
+
+    def test_append_dedup_and_only_scored(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            # 第一次运行：2 场完赛 + 1 场未结束（无比分）
+            past1 = [
+                {"kickoff_utc": "2026-01-01T12:00:00Z", "home": "A", "away": "B", "score": "2-1"},
+                {"kickoff_utc": "2026-01-02T12:00:00Z", "home": "C", "away": "D", "score": "0-0"},
+                {"kickoff_utc": "2026-01-03T12:00:00Z", "home": "E", "away": "F"},  # 无比分 -> 跳过
+            ]
+            n1 = append_historical_past_matches("epl", past1, base_dir=base)
+            self.assertEqual(n1, 2)
+
+            # 第二次运行：含 1 场重复（应去重）+ 1 场新
+            past2 = [
+                {"kickoff_utc": "2026-01-01T12:00:00Z", "home": "A", "away": "B", "score": "2-1"},
+                {"kickoff_utc": "2026-01-04T12:00:00Z", "home": "G", "away": "H", "score": "3-1"},
+            ]
+            n2 = append_historical_past_matches("epl", past2, base_dir=base)
+            self.assertEqual(n2, 1)
+
+            # load_historical_past_matches 默认读 PREDICTIONS_DIR，这里直接读文件验证
+            import json as _json
+            data = _json.loads((base / "references" / "historical_past_matches.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(data), 3)
+            for m in data:
+                self.assertEqual(m["league"], "epl")
+            # 仅含比分的条目被正确写入
+            self.assertIn("2-1", [m["score"] for m in data])
+            self.assertIn("3-1", [m["score"] for m in data])
 
 
 if __name__ == "__main__":
