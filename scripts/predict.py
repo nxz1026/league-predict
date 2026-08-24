@@ -37,14 +37,12 @@ from core.output import cleanup_old_files, save_results
 from core.predictor import calculate_prediction
 from core.elo import get_or_init_elo_ratings, process_match_result, save_elo_ratings
 
-# AI feedback loop — load previous enrichment scores
+# AI feedback loop — load previous enrichment scores (按联赛在 run_league 内隔离加载)
 try:
     from ai.feedback_loop import load_ai_adjustments, adjust_prediction
-    _ai_adjustments = load_ai_adjustments()
-    if _ai_adjustments:
-        logger.info(f"AI feedback: loaded {len(_ai_adjustments)} enrichment scores")
 except Exception:
-    _ai_adjustments = {}
+    load_ai_adjustments = lambda league_key="": {}
+    adjust_prediction = lambda pred, adj: pred
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -68,6 +66,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-fetch", action="store_true", help="Use local cached data")
     parser.add_argument("--no-dc", action="store_true", help="Disable Dixon-Coles model")
     parser.add_argument("--update-rankings", action="store_true", help="Force refresh FIFA rankings from API")
+    parser.add_argument("--train-ml", action="store_true",
+                        help="Train per-league ML models from historical data, then exit")
+    parser.add_argument("--no-ml", action="store_true", help="Disable ML probability blending for this run")
+    parser.add_argument("--dashboard", action="store_true",
+                        help="Generate static HTML dashboard (predictions/dashboard_{league}.html)")
     return parser
 
 
@@ -101,13 +104,14 @@ def _update_elo(past: list, fifa_rankings: dict, force_refresh: bool = False) ->
     return elo_ratings
 
 
-def _compute_calibration(past: list, future: list) -> tuple[dict, dict | None]:
+def _compute_calibration(past: list, future: list, league_key: str | None = None) -> tuple[dict, dict | None]:
     """计算校准参数，返回 (calibration, calibration_offset)。"""
     calibration = build_calibration(past, future)
     logger.info(f"Calibration: {json.dumps(calibration)}")
 
-    historical_past = load_historical_past_matches(days=30)
-    calibration_offset = compute_calibration_offset(historical_past)
+    # P1-2 修复: 按联赛过滤历史文件，避免跨联赛校准污染
+    historical_past = load_historical_past_matches(days=30, league=league_key)
+    calibration_offset = compute_calibration_offset(historical_past, league=league_key)
     if calibration_offset:
         logger.info(f"Calibration offset: {json.dumps(calibration_offset)}")
     else:
@@ -129,8 +133,10 @@ def _generate_predictions(
     future: list, calibration_offset: dict | None, fifa_rankings: dict,
     host_country: str | None, use_dc: bool, fitted_rho: float,
     elo_ratings: dict[str, float], league_key: str,
+    ai_adjustments: dict | None = None,
 ) -> list[dict]:
     """对每场未来比赛生成预测。"""
+    ai_adjustments = ai_adjustments or {}
     predictions = []
     for match in future:
         try:
@@ -142,13 +148,14 @@ def _generate_predictions(
                 use_dixon_coles=use_dc,
                 dc_rho=fitted_rho,
                 elo_ratings=elo_ratings,
+                league_key=league_key,
             )
             pred["match"] = match["name"]
             pred["home"] = match.get("home", "")
             pred["away"] = match.get("away", "")
-            # Apply AI feedback adjustment
-            if _ai_adjustments:
-                pred = adjust_prediction(pred, _ai_adjustments)
+            # Apply AI feedback adjustment (按联赛隔离，P4)
+            if ai_adjustments:
+                pred = adjust_prediction(pred, ai_adjustments)
             predictions.append(pred)
         except Exception as e:
             logger.error(f"Prediction failed for {match.get('name', '?')}: {e}")
@@ -174,7 +181,8 @@ def _save_output(output: dict, calibration_offset: dict | None, now_utc) -> Path
 
 
 def _print_summary(predictions: list, calibration: dict, calibration_offset: dict | None,
-                    monte_carlo_result: dict | None, n_simulations: int) -> None:
+                    monte_carlo_result: dict | None, n_simulations: int,
+                    accuracy_summary: dict | None = None) -> None:
     """打印 stderr 摘要。"""
     print(f"\n{'='*60}", file=sys.stderr)
     print(f"Window calibration: {calibration.get('total_matches',0)} finished | "
@@ -208,6 +216,13 @@ def _print_summary(predictions: list, calibration: dict, calibration_offset: dic
         print(f"\nMonte Carlo champion prediction (n={n_simulations}):", file=sys.stderr)
         for team, prob in list(monte_carlo_result["champion_probs"].items())[:5]:
             print(f"  {team}: {prob:.1%}", file=sys.stderr)
+
+    if accuracy_summary:
+        print(f"\nAccuracy summary:", file=sys.stderr)
+        for window, a in accuracy_summary.items():
+            print(f"  {window}: dir {a['direction_accuracy']*100:.0f}% | "
+                  f"score {a['score_accuracy']*100:.0f}% | "
+                  f"O/U {a['over_under_accuracy']*100:.0f}% (n={a['reconciled']})", file=sys.stderr)
 
     print(f"{'='*60}", file=sys.stderr)
 
@@ -262,7 +277,7 @@ def run_league(league_key: str, args, now_utc, dates_str, silent: bool = False) 
         return output
 
     # 3. 校准
-    calibration, calibration_offset = _compute_calibration(past, future)
+    calibration, calibration_offset = _compute_calibration(past, future, league_key)
 
     # 4. Dixon-Coles ρ 拟合
     fitted_rho = DC_RHO
@@ -272,10 +287,11 @@ def run_league(league_key: str, args, now_utc, dates_str, silent: bool = False) 
         except Exception as e:
             logger.info(f"DC rho fit failed: {e}, using default")
 
-    # 5. 生成预测
+    # 5. 生成预测（AI 反馈分数按联赛隔离加载，P4）
+    ai_adjustments = load_ai_adjustments(league_key)
     predictions = _generate_predictions(
         future, calibration_offset, fifa_rankings, host_country,
-        use_dc, fitted_rho, elo_ratings, league_key,
+        use_dc, fitted_rho, elo_ratings, league_key, ai_adjustments,
     )
 
     # 6. Monte Carlo（可选）
@@ -315,6 +331,29 @@ def run_league(league_key: str, args, now_utc, dates_str, silent: bool = False) 
     if monte_carlo_result:
         output["monte_carlo"] = monte_carlo_result
 
+    # 7.4 命中率小结（P5 产品建议：近 7/30 天各联赛方向/比分/大小球命中率）
+    accuracy_summary: dict[str, Any] = {}
+    try:
+        from core.backtest import league_accuracy
+        for _d in (7, 30):
+            _acc = league_accuracy(league_key, days=_d)
+            if _acc:
+                accuracy_summary[f"{_d}d"] = _acc
+    except Exception as e:
+        logger.warning(f"Accuracy summary failed: {e}")
+    if accuracy_summary:
+        output["accuracy_summary"] = accuracy_summary
+
+    # 7.5 生成静态 Dashboard（P5-1：接入此前未使用的高完成度孤岛功能）
+    if args.dashboard:
+        from core.dashboard import generate_dashboard
+        dash_path = PREDICTIONS_DIR / f"dashboard_{league_key}.html"
+        try:
+            generate_dashboard(output, dash_path)
+            logger.info(f"Dashboard generated: {dash_path}")
+        except Exception as e:
+            logger.warning(f"Dashboard generation failed: {e}")
+
     # 8. 回测（可选）
     if run_backtest:
         pred_file = _save_output(output, calibration_offset, now_utc)
@@ -327,7 +366,7 @@ def run_league(league_key: str, args, now_utc, dates_str, silent: bool = False) 
         print(json.dumps(output, indent=2, ensure_ascii=False))
 
     _save_output(output, calibration_offset, now_utc)
-    _print_summary(predictions, calibration, calibration_offset, monte_carlo_result, n_simulations)
+    _print_summary(predictions, calibration, calibration_offset, monte_carlo_result, n_simulations, accuracy_summary)
 
     _elapsed = (time.time() - _t_start) * 1000
     print(f"Total runtime: {_elapsed:.0f}ms", file=sys.stderr)
@@ -343,6 +382,25 @@ def main() -> None:
         pass
     parser = build_parser()
     args = parser.parse_args()
+
+    # ── ML 开关（ML-5）──────────────────────────────
+    from core.config import ML_CONFIG
+    if args.no_ml:
+        ML_CONFIG["enabled"] = False
+        logger.info("ML blending disabled via --no-ml")
+
+    if args.train_ml:
+        from core.model.ml_model import train_all_league_models
+        from core.rankings import fetch_fifa_rankings
+        from core.elo import get_or_init_elo_ratings
+        fifa = fetch_fifa_rankings()
+        elo = get_or_init_elo_ratings(fifa)
+        logger.info("Training per-league ML models from historical data...")
+        results = train_all_league_models(elo_ratings=elo)
+        for league_key, model in results.items():
+            status = "trained" if model is not None else "skipped (insufficient data)"
+            print(f"  {league_key}: {status}", file=sys.stderr)
+        return
 
     if args.cleanup:
         cleanup_old_files(days=7)

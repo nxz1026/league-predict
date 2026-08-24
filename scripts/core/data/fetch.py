@@ -56,6 +56,7 @@ def _validate_api_response(data: dict, source: str, required_keys: list[str] | N
 
 # ── API-Football 速率限制追踪 ──
 _rate_limit_info: dict[str, Any] = {"remaining": None, "limit": None, "last_updated": None}
+_last_resp_headers: dict[str, str] = {}
 
 
 def get_rate_limit_status() -> dict[str, Any]:
@@ -84,11 +85,14 @@ def _update_rate_limit_from_response(resp_headers: dict) -> None:
 
 
 def _retry_request(req: urllib.request.Request, max_retries: int = 3, timeout: int | None = None) -> dict:
-    """通用重试机制：指数退避，适用于所有外部 API 调用"""
+    """通用重试机制：指数退避，适用于所有外部 API 调用。
+    成功时把响应头存入 _last_resp_headers，供速率限制追踪使用。"""
     _timeout = timeout or ESPN_TIMEOUT_SECONDS
     for attempt in range(1, max_retries + 1):
         try:
             resp = urllib.request.urlopen(req, timeout=_timeout)
+            _last_resp_headers.clear()
+            _last_resp_headers.update(dict(resp.headers))
             return json.loads(resp.read())
         except Exception as e:
             logger.warning(f"Request attempt {attempt}/{max_retries} failed: {type(e).__name__}: {e}")
@@ -164,35 +168,6 @@ def fetch_espn(dates_str: str, league_slug: str = "epl") -> list:
             else:
                 logger.error(f"All {ESPN_MAX_RETRIES} attempts failed for ESPN")
                 raise
-
-
-# ── API-Football 速率限制追踪 ──
-_rate_limit_info: dict[str, Any] = {"remaining": None, "limit": None, "last_updated": None}
-
-
-def get_rate_limit_status() -> dict[str, Any]:
-    """获取 API-Football 当前速率限制状态"""
-    return _rate_limit_info.copy()
-
-
-def _update_rate_limit_from_response(resp_headers: dict) -> None:
-    """从 API 响应头中提取速率限制信息"""
-    for key, val in resp_headers.items():
-        kl = key.lower()
-        if kl in ("x-ratelimit-requests-remaining", "x-requests-remaining"):
-            try:
-                _rate_limit_info["remaining"] = int(val)
-            except (ValueError, TypeError):
-                pass
-        elif kl in ("x-ratelimit-requests-limit", "x-requests-limit"):
-            try:
-                _rate_limit_info["limit"] = int(val)
-            except (ValueError, TypeError):
-                pass
-    _rate_limit_info["last_updated"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    remaining = _rate_limit_info.get("remaining")
-    if remaining is not None and remaining < 10:
-        logger.warning(f"API-Football rate limit low: {remaining} requests remaining")
 
 
 def fetch_football_data(dates_str: str, config: dict) -> list:
@@ -305,6 +280,8 @@ def fetch_api_football(dates_str: str, config: dict) -> list:
         logger.info(f"Fetching API-Football fixtures: {fixtures_url}")
         fixtures_req = urllib.request.Request(fixtures_url, headers=headers)
         fixtures_data = _retry_request(fixtures_req, max_retries=3, timeout=TIMEOUT_API_FOOTBALL)
+        # 速率限制追踪：从响应头提取 API-Football 配额（P1/清理：此前为死功能）
+        _update_rate_limit_from_response(dict(_last_resp_headers))
         fixtures_data = _validate_api_response(fixtures_data, "API-Football", required_keys=["response"])
 
         # 在客户端按 league_id 过滤

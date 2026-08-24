@@ -1,2 +1,5 @@
-# predict_wc.py 使用纯 stdlib (urllib.request, json, gzip, math, pathlib)
-# 零外部依赖，无需 pip install
+# 核心预测引擎使用纯 stdlib（urllib.request, json, gzip, math, pathlib），零外部依赖。
+# 但 AI 富化模块（ai/）依赖以下第三方包；本地复现 AI 功能需安装：
+requests>=2.28
+pyyaml>=6.0
+pytest>=7.0   # 仅测试需要

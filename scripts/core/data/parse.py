@@ -206,6 +206,50 @@ def remove_vig(home_p: float | None, draw_p: float | None, away_p: float | None 
     return home_p / total, draw_p / total, away_p / total
 
 
+def _collect_completed(past: list[dict]) -> list[tuple[str, str, str, int, int]]:
+    """收集已完成比赛 (kickoff, home_en, away_en, home_goals, away_goals)。"""
+    items: list[tuple[str, str, str, int, int]] = []
+    for m in past:
+        sc = m.get("score", "")
+        if "-" not in sc:
+            continue
+        try:
+            h, a = sc.split("-")
+            h, a = int(h), int(a)
+        except (ValueError, TypeError):
+            continue
+        items.append((m.get("kickoff_utc", ""), m.get("home_en", ""), m.get("away_en", ""), h, a))
+    return items
+
+
+def _team_form_before(completed: list[tuple[str, str, str, int, int]], team_en: str,
+                      kickoff: str, n: int = 5) -> list[str]:
+    """取某队在 kickoff 之前最近 n 场的结果序列（'W'/'D'/'L'，最近在前）。"""
+    results: list[str] = []
+    for ko, he, ae, h, a in completed:
+        if ko >= kickoff:
+            continue
+        if he == team_en:
+            results.append("W" if h > a else "L" if h < a else "D")
+        elif ae == team_en:
+            results.append("L" if h > a else "W" if h < a else "D")
+    return results[-n:] if results else []
+
+
+def _scores_from_results(results: list[str]) -> tuple[float, str, str, float]:
+    """从 W/D/L 序列推导 form_score / form 串 / record 串 / record_score。"""
+    if not results:
+        return 0.5, "", "", 0.5
+    score = sum(1.0 if r == "W" else 0.5 if r == "D" else 0.0 for r in results) / len(results)
+    form_str = "".join(results)
+    w = results.count("W")
+    d = results.count("D")
+    l = results.count("L")
+    record_summary = f"{w}-{d}-{l}"
+    rec_score = w / (w + d + l) if (w + d + l) else 0.5
+    return round(score, 3), form_str, record_summary, round(rec_score, 3)
+
+
 def parse_events(events: list, now_utc: datetime | None = None) -> tuple[list, list, list]:
     """解析 ESPN events → 结束比赛列表 + 待预测比赛列表"""
     if now_utc is None:
@@ -331,5 +375,30 @@ def parse_events(events: list, now_utc: datetime | None = None) -> tuple[list, l
             future.append(rec)
         else:
             in_progress.append(rec)
+
+    # ── 状态/战绩信号回填（P2 修复）──────────────────
+    # 默认数据源 football-data 的每场不提供 form/records，导致该信号恒为中性 0.5。
+    # 这里从已完成比赛的真实比分推导各队近期状态，回填到所有比赛；
+    # 若数据源本身提供了 form（如 ESPN）则保留原值。
+    completed = _collect_completed(past)
+    _warned_no_form = False
+    for m in list(past) + list(future) + list(in_progress):
+        ko = m.get("kickoff_utc", "")
+        for en_key, form_key, fs_key, rec_key, rs_key in (
+            ("home_en", "home_form", "home_form_score", "home_record", "home_record_score"),
+            ("away_en", "away_form", "away_form_score", "away_record", "away_record_score"),
+        ):
+            if m.get(form_key):
+                continue  # 数据源已提供，保留
+            results = _team_form_before(completed, m.get(en_key, ""), ko)
+            if results:
+                fs, form_str, rec_sum, rs = _scores_from_results(results)
+                m[form_key] = form_str
+                m[fs_key] = fs
+                m[rec_key] = rec_sum
+                m[rs_key] = rs
+            elif not _warned_no_form:
+                logger.warning("form/records 数据源未提供且无历史比赛可推导，状态/战绩信号回退为中性值")
+                _warned_no_form = True
 
     return past, future, in_progress

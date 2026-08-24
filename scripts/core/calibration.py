@@ -11,7 +11,11 @@ from core.log import logger
 
 
 # ── P0-1: Calibration 持久化路径 ────────────────────────
-_CALIBRATION_CACHE_FILE = FOOTBALL_DIR / "references" / ".calibration_state.json"
+# 每个联赛独立持久化，避免跨联赛指数平滑污染（P1-2 修复）
+def _calibration_cache_file(league: str | None = None) -> "Path":
+    if league:
+        return FOOTBALL_DIR / "references" / f".calibration_state_{league}.json"
+    return FOOTBALL_DIR / "references" / ".calibration_state.json"
 
 
 def _try_load_json(path) -> dict | None:
@@ -25,34 +29,42 @@ def _try_load_json(path) -> dict | None:
     return None
 
 
-def _load_prev_offset() -> dict | None:
-    """从持久化文件加载上一次校准偏移（P0-1 修复）"""
+def _load_prev_offset(league: str | None = None) -> dict | None:
+    """从持久化文件加载上一次校准偏移（P0-1 修复，按联赛隔离 P1-2）"""
+    cache_file = _calibration_cache_file(league)
     try:
-        if _CALIBRATION_CACHE_FILE.exists():
-            data = _try_load_json(_CALIBRATION_CACHE_FILE)
+        if cache_file.exists():
+            data = _try_load_json(cache_file)
             if data and isinstance(data, dict):
-                logger.info(f"Loaded previous calibration offset (sample_size={data.get('sample_size', '?')})")
+                logger.info(f"Loaded previous calibration offset (league={league or 'global'}, "
+                            f"sample_size={data.get('sample_size', '?')})")
                 return data
     except Exception as e:
         logger.warning(f"Failed to load previous calibration offset: {e}")
     return None
 
 
-def _save_offset(offset: dict) -> None:
-    """持久化校准偏移到文件（P0-1 修复）"""
+def _save_offset(offset: dict, league: str | None = None) -> None:
+    """持久化校准偏移到文件（P0-1 修复，按联赛隔离 P1-2）"""
+    cache_file = _calibration_cache_file(league)
     try:
-        _CALIBRATION_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
         # 保存时附带时间戳，便于调试
         offset["_saved_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        with open(_CALIBRATION_CACHE_FILE, "w", encoding="utf-8") as f:
+        offset["_league"] = league or "global"
+        with open(cache_file, "w", encoding="utf-8") as f:
             json.dump(offset, f, ensure_ascii=False, indent=2)
-        logger.debug(f"Saved calibration offset to {_CALIBRATION_CACHE_FILE}")
+        logger.debug(f"Saved calibration offset to {cache_file}")
     except Exception as e:
         logger.warning(f"Failed to save calibration offset: {e}")
 
 
-def load_historical_past_matches(days: int = 30) -> list[dict[str, Any]]:
-    """读取历史 predictions/ 文件中的 past_matches + references/historical_past_matches.json，去重后返回"""
+def load_historical_past_matches(days: int = 30, league: str | None = None) -> list[dict[str, Any]]:
+    """读取历史 predictions/ 文件中的 past_matches + references/historical_past_matches.json，去重后返回。
+
+    P1-2 修复: 当传入 league 时，只纳入该联赛的历史文件（按文件顶层 'league' 字段过滤），
+    避免五联赛一起跑时主/平/客胜率修正因子相互污染叠加。
+    """
     all_past: list[dict[str, Any]] = []
     cutoff = time.time() - days * 86400
 
@@ -61,15 +73,22 @@ def load_historical_past_matches(days: int = 30) -> list[dict[str, Any]]:
             continue
         try:
             d = _try_load_json(f)
-            if d is not None:
-                all_past.extend(d.get("past_matches", []))
+            if d is None:
+                continue
+            # 按联赛过滤：文件顶层 league 字段
+            if league is not None and d.get("league") != league:
+                continue
+            all_past.extend(d.get("past_matches", []))
         except (json.JSONDecodeError, OSError, KeyError):
             pass
 
     hist_file = FOOTBALL_DIR / "references" / "historical_past_matches.json"
     if hist_file.exists():
         try:
-            hist_data = _try_load_json(hist_file)
+            hist_data = _try_load_json(hist_file) or []
+            # 同样按联赛过滤（仅有 league 字段的历史条目才会被纳入）
+            if league is not None:
+                hist_data = [m for m in hist_data if m.get("league") == league]
             all_past.extend(hist_data)
         except (json.JSONDecodeError, OSError):
             pass
@@ -84,12 +103,13 @@ def load_historical_past_matches(days: int = 30) -> list[dict[str, Any]]:
     return unique
 
 
-def compute_calibration_offset(past_matches: list[dict[str, Any]]) -> dict[str, Any] | None:
+def compute_calibration_offset(past_matches: list[dict[str, Any]], league: str | None = None) -> dict[str, Any] | None:
     """
     从累积 past_matches 计算 calibration 修正因子。
     用实际赛果分布 vs 均匀分布(1/3)的比率做软修正。
-    
+
     P0-1 修复: 指数平滑现在会真正执行，通过 _load_prev_offset / _save_offset 持久化。
+    P1-2 修复: league 参数使指数平滑按联赛独立进行，不再跨联赛污染。
     """
     if len(past_matches) < 5:
         return None
@@ -135,7 +155,7 @@ def compute_calibration_offset(past_matches: list[dict[str, Any]]) -> dict[str, 
 
     # ── P0-1 修复: 指数平滑现在真正生效 ──
     _smooth = 0.7
-    prev_offset = _load_prev_offset()  # 从文件加载上一次值
+    prev_offset = _load_prev_offset(league)  # 按联赛加载上一次值（P1-2）
     if prev_offset:
         home_correction = _smooth * prev_offset.get("home_correction", home_correction) + (1 - _smooth) * home_correction
         draw_correction = _smooth * prev_offset.get("draw_correction", draw_correction) + (1 - _smooth) * draw_correction
@@ -160,7 +180,7 @@ def compute_calibration_offset(past_matches: list[dict[str, Any]]) -> dict[str, 
     }
 
     # ── P0-1 修复: 持久化当前校准值 ──
-    _save_offset(result)
+    _save_offset(result, league)
 
     logger.info(f"Calibration offset(n={total}, weight={sample_weight:.2f}): "
                 f"home×{home_correction:.3f} draw×{draw_correction:.3f} away×{away_correction:.3f} | "

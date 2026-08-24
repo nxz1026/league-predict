@@ -3,13 +3,29 @@ from __future__ import annotations
 """Core prediction engine: Onside 4+1 signal model combined with Dixon-Coles."""
 
 import json
-from core.config import ONSIDE_WEIGHTS, MARKET_ODDS_WEIGHT, DC_RHO, THRESHOLDS, LEAGUE_DC_RHO
+from core.config import ONSIDE_WEIGHTS, MARKET_ODDS_WEIGHT, DC_RHO, THRESHOLDS, LEAGUE_DC_RHO, ML_CONFIG
 from core.log import logger
 # 统一从 core.rankings 导入（P1-3：打破循环依赖）
 from core.rankings import fetch_fifa_rankings
 from core.model.onside import compute_onside_signals
 from core.model.poisson import dixon_coles_match_probs, poisson_pmf, poisson_confidence_interval
 from core.elo import expected_score, DEFAULT_ELO
+from core.model.features import extract_features
+from core.model.ml_model import load_league_model
+
+# ── ML 模型缓存（按联赛加载一次）────────────────────
+_ML_MODEL_CACHE: dict[str, object] = {}
+
+
+def get_ml_model(league_key: str):
+    """按联赛加载 ML 模型（带缓存）；不存在或未启用时返回 None。"""
+    if not ML_CONFIG.get("enabled", False):
+        return None
+    if league_key in _ML_MODEL_CACHE:
+        return _ML_MODEL_CACHE[league_key]
+    model = load_league_model(league_key)
+    _ML_MODEL_CACHE[league_key] = model  # 可能为 None，缓存以避免重复 IO
+    return model
 
 
 def calculate_prediction(
@@ -144,6 +160,32 @@ def calculate_prediction(
     draw_prob_calc = draw_strength / total
     away_prob = away_strength / total
 
+    # ── ML 概率融合（P1/ML: 26 维特征分类器与主模型概率做加权融合）──
+    ml_proba = None
+    ml_model = get_ml_model(league_key)
+    if ml_model is not None:
+        feature_match = dict(match)
+        feature_match["onside_signals"] = onside
+        feature_match["spread_movement_score"] = sm
+        _ml_context = {"elo_ratings": elo_ratings, "host_country": host_country}
+        try:
+            vec = extract_features(feature_match, _ml_context)
+            ml_proba = ml_model.predict_proba(vec)
+            w = float(ML_CONFIG.get("blend_weight", 0.0))
+            if w > 0 and len(ml_proba) == 3:
+                home_prob = (1 - w) * home_prob + w * ml_proba[0]
+                draw_prob_calc = (1 - w) * draw_prob_calc + w * ml_proba[1]
+                away_prob = (1 - w) * away_prob + w * ml_proba[2]
+                _t = home_prob + draw_prob_calc + away_prob
+                if _t > 0:
+                    home_prob /= _t
+                    draw_prob_calc /= _t
+                    away_prob /= _t
+                logger.debug(f"ML blend applied (league={league_key}, w={w})")
+        except Exception as e:
+            logger.warning(f"ML blend failed, falling back to rule model: {e}")
+            ml_proba = None
+
     # ── 方向判断 ──
     if home_prob > THRESHOLDS["direction_min_prob"] and home_prob > away_prob * THRESHOLDS["direction_odds_ratio"]:
         direction = f"{match['home']} 胜"
@@ -253,6 +295,11 @@ def calculate_prediction(
             return "home"
         elif dir_str.startswith(away_name):
             return "away"
+        # 前缀均不匹配（如队名互为前缀等边界情况），记录以便排查
+        logger.warning(
+            f"_resolve_direction_winner: 无法解析方向 '{dir_str}' "
+            f"(home='{home_name}', away='{away_name}')"
+        )
         return None
 
     if "胜" in direction:
@@ -292,6 +339,8 @@ def calculate_prediction(
         "btts": "Yes" if btts_prob > 0.5 else "No",
         "dixon_coles_used": use_dixon_coles,
         "dixon_coles_rho": dc_rho if use_dixon_coles else None,
+        "ml_model_used": ml_proba is not None,
+        "ml_proba": [round(p, 4) for p in ml_proba] if ml_proba else None,
         "dixon_coles_league_rho": LEAGUE_DC_RHO.get(league_key, DC_RHO),  # P0-3: 报告使用的 ρ 来源
         "onside_signals": onside,
         "confidence_note": confidence_note,

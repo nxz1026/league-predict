@@ -105,9 +105,6 @@ python3 scripts/predict.py --league epl
 # 使用 football-data.org (历史数据)
 python3 scripts/predict.py --league epl --data-source football-data
 
-# MLS (默认 ESPN)
-python3 scripts/predict.py --league mls
-
 # 蒙特卡洛冠军模拟
 python3 scripts/predict.py --league epl --monte-carlo
 
@@ -116,6 +113,12 @@ python3 scripts/predict.py --league epl --dates 20250101-20250131
 
 # 回测
 python3 scripts/predict.py --league epl --backtest
+
+# 用历史数据训练各联赛 ML 模型（落盘 references/ml_model_{league}.json）
+python3 scripts/predict.py --train-ml
+
+# 本次运行禁用 ML 融合
+python3 scripts/predict.py --league epl --no-ml
 ```
 
 ## 文件结构
@@ -139,7 +142,7 @@ scripts/
 │   │   ├── onside.py          # Onside 4 信号 (FIFA排名/联赛足迹/主场/足联)
 │   │   ├── poisson.py         # Poisson / Dixon-Coles (τ 钳位)
 │   │   ├── monte_carlo.py     # 蒙特卡洛 10k 模拟 (标准淘汰赛对阵)
-│   │   └── features.py        # 26 维 ML 特征工程 (实验性)
+│   │   └── features.py          # 26 维 ML 特征工程 (生产使用)
 │   ├── calibration.py         # 自动校准
 │   ├── backtest.py            # 回测 + 复盘
 │   ├── rankings.py            # FIFA 排名统一入口
@@ -153,13 +156,11 @@ scripts/
 
 | 键 | 联赛 | 默认数据源 | API-Football ID | DC ρ | λ 乘数 |
 |----|------|-----------|----------------|------|--------|
-| epl | English Premier League | api-football | 39 | 0.17 | 2.8 |
-| laliga | La Liga | api-football | 140 | 0.22 | 2.7 |
-| bundesliga | Bundesliga | api-football | 78 | 0.19 | 3.2 |
-| seriea | Serie A | api-football | 135 | 0.28 | 2.5 |
-| ligue1 | Ligue 1 | api-football | 61 | 0.21 | 2.7 |
-| jleague | J-League | football-data | 98 | 0.20 | 2.8 |
-| csl | Chinese Super League | api-football | 169 | 0.22 | 2.9 |
+| epl | English Premier League | football-data | 39 | 0.17 | 2.8 |
+| laliga | La Liga | football-data | 140 | 0.22 | 2.7 |
+| bundesliga | Bundesliga | football-data | 78 | 0.19 | 3.2 |
+| seriea | Serie A | football-data | 135 | 0.28 | 2.5 |
+| ligue1 | Ligue 1 | football-data | 61 | 0.21 | 2.7 |
 
 ## 技术栈
 
@@ -170,6 +171,7 @@ scripts/
 - **Dixon-Coles**: 联赛差异化 ρ, τ 钳位防负概率, 三分搜索优化
 - **蒙特卡洛**: 逐场 Poisson 采样, 10k 次完整赛季模拟, 标准 World Cup 淘汰赛对阵
 - **校准**: 历史累积分布修正, onside 信号专用减半因子
+- **ML 融合**: 零依赖多分类器（softmax 逻辑回归）从 26 维特征产出 H/D/A 概率，与主模型按权重融合（默认开启，可用 `--no-ml` 关闭）；模型按联赛用历史数据训练（`--train-ml`）
 - **缓存**: 文件级 TTL 缓存, 过期清理, URL 键生成
 - **并行获取**: API-Football + ESPN fallback 并行请求
 - **API 校验**: 响应结构验证 + 速率限制追踪

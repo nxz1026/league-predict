@@ -3,7 +3,22 @@ Batch AI analysis pipeline: split items, enrich via Gemini, return scored items.
 Adapted from ECC community data-scraper-agent skill.
 """
 import json
+import os
 from ai.llm_client import generate
+
+# 业务评分偏好默认集（P4：改为可配置，避免硬编码在调用方源码中）。
+# 可通过环境变量 LP_AI_PRIORITIES（逗号分隔）覆盖，或在调用时通过
+# config["priorities"] 传入。
+DEFAULT_AI_PRIORITIES: list[str] = [
+    "High confidence predictions preferred",
+    "Underdog picks preferred",
+    "Clear direction signals preferred",
+]
+
+# 评分规则（rubric）默认文案，可通过 config["scoring_rubric"] 覆盖。
+DEFAULT_SCORING_RUBRIC: str = (
+    "Be concise. Score 90+=excellent match, 70-89=good, 50-69=ok, <50=weak."
+)
 
 
 def analyse_batch(
@@ -54,12 +69,13 @@ def analyse_batch(
 
 def _build_prompt(batch, context, preference_prompt, config):
     """Build the Gemini prompt for a batch of items."""
-    priorities = config.get("priorities", [])
+    priorities = config.get("priorities") or DEFAULT_AI_PRIORITIES
     items_text = "\n\n".join(
         f"Item {i+1}: {json.dumps({k: v for k, v in item.items() if not k.startswith('_')})}"
         for i, item in enumerate(batch)
     )
 
+    scoring_rubric = config.get("scoring_rubric") or DEFAULT_SCORING_RUBRIC
     return f"""Analyse these {len(batch)} items and return a JSON object.
 # Items
 {items_text}
@@ -70,4 +86,4 @@ def _build_prompt(batch, context, preference_prompt, config):
 {preference_prompt}
 # Instructions
 Return: {{"analyses": [{{"score": <0-100>, "summary": "<2 sentences>", "notes": ""}} for each item in order]}}
-Be concise. Score 90+=excellent match, 70-89=good, 50-69=ok, <50=weak."""
+{scoring_rubric}"""

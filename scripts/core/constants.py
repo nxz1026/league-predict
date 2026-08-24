@@ -59,7 +59,6 @@ BOOKMAKER_MARGIN: float = 1.07
 
 # ── Monte Carlo 统一进球范围 ───────────────────────
 MAX_GOALS_MC: int = 8
-MAX_GOALS_PREDICT: int = 9
 
 # ── 市场赔率权重 ──────────────────────────────────
 MARKET_ODDS_WEIGHT: float = 0.45
@@ -260,3 +259,13 @@ TIMEOUT_API_FOOTBALL: int = 20
 
 # ── 去水相关常量 ──────────────────────────────────
 MIN_IMPLIED_PROB: float = 0.01
+
+# ── ML 融合配置（零依赖轻量多分类器，与主模型概率融合）────────
+ML_CONFIG: dict = {
+    "enabled": True,            # 是否启用 ML 概率融合
+    "blend_weight": 0.15,       # ML 概率在最终方向概率(H/D/A)中的融合权重
+    "min_train_samples": 30,    # 训练样本低于此值则不训练/加载模型，回退规则基线
+    "lr": 0.1,                  # 梯度下降学习率
+    "epochs": 300,              # 训练轮数
+    "l2": 0.01,                 # L2 正则化系数（防过拟合，小样本关键）
+}

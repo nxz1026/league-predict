@@ -48,6 +48,15 @@ def enrich_via_llm(predictions: list) -> tuple[str, list]:
     if not items:
         return "", []
 
+    # 业务偏好配置化（P4）：优先读取环境变量 LP_AI_PRIORITIES（逗号分隔），
+    # 否则使用 batch_pipeline 的 DEFAULT_AI_PRIORITIES，不再硬编码于此。
+    env_priorities = os.environ.get("LP_AI_PRIORITIES")
+    if env_priorities:
+        priorities = [p.strip() for p in env_priorities.split(",") if p.strip()]
+    else:
+        from ai.batch_pipeline import DEFAULT_AI_PRIORITIES
+        priorities = list(DEFAULT_AI_PRIORITIES)
+
     enriched = analyse_batch(
         items,
         context="Football match predictions for betting. Score each match by predicted value and confidence.",
@@ -59,11 +68,7 @@ def enrich_via_llm(predictions: list) -> tuple[str, list]:
                 "rate_limit_seconds": 3,
                 "min_score": 0,
             },
-            "priorities": [
-                "High confidence predictions preferred",
-                "Underdog picks preferred",
-                "Clear direction signals preferred",
-            ],
+            "priorities": priorities,
         },
     )
 
@@ -76,7 +81,37 @@ def enrich_via_llm(predictions: list) -> tuple[str, list]:
             return "", []  # mock data, skip
         lines.append(f"• {item['name']}  **{s}/100**  — {summary}")
     lines.append("")
+
+    # 命中率小结并入每日推送（P5 产品建议）
+    acc_block = _format_accuracy_summary(predictions)
+    if acc_block:
+        lines.insert(0, acc_block)
+
     return "\n".join(lines), enriched
+
+
+def _format_accuracy_summary(predictions: list) -> str:
+    """从各联赛预测输出中提取 accuracy_summary，生成 Markdown 小结。"""
+    blocks = []
+    for league_out in predictions:
+        if not isinstance(league_out, dict):
+            continue
+        league_name = league_out.get("league", "?")
+        acc = league_out.get("accuracy_summary") or {}
+        if not acc:
+            continue
+        rows = []
+        for window, a in acc.items():
+            rows.append(
+                f"{window}: 方向 {a['direction_accuracy']*100:.0f}% / "
+                f"比分 {a['score_accuracy']*100:.0f}% / "
+                f"大小球 {a['over_under_accuracy']*100:.0f}% (n={a['reconciled']})"
+            )
+        if rows:
+            blocks.append(f"【{league_name} 命中率】\n" + "\n".join(f"  - {r}" for r in rows))
+    if not blocks:
+        return ""
+    return "=== 近期命中率小结 ===\n" + "\n".join(blocks) + "\n"
 
 
 def main():

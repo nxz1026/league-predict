@@ -235,12 +235,17 @@ def simulate_world_cup(fixtures: list[dict[str, Any]], team_strengths: dict[str,
             r16_matchups.append((t1, t2))
 
         remaining_teams = _simulate_knockout_bracket(r16_matchups, team_strengths, rho, team_rounds)
-    elif len(remaining_teams) >= 2:
-        # 组数不足8组时，退化为顺序配对
+    elif len(seeded) >= 2:
+        # 组数不足 8 组（种子不足 16 强）时，退化为顺序配对：
+        # 汇总所有组的晋级队，按顺序两两淘汰（修复：此前 remaining_teams
+        # 永远为空列表，该分支恒不可达，冠军静默为 None）
         for group_name in sorted(group_standings.keys()):
             advanced = group_standings[group_name][:2]
             remaining_teams.extend(advanced)
         remaining_teams = _simulate_knockout_sequential(remaining_teams, team_strengths, rho, team_rounds)
+    else:
+        remaining_teams = []
+        logger.warning("simulate_world_cup: 晋级队伍不足 2 支，无法模拟淘汰赛，冠军为 None")
 
     champion = remaining_teams[0] if remaining_teams else None
 

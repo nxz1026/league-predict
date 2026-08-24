@@ -1,12 +1,10 @@
 """Feature engineering pipeline for ML integration.
 
-⚠️  EXPERIMENTAL — This module is under active development.
-The feature set, column names, and extraction logic may change
-between releases without a deprecation cycle.  Do not rely on
-its stability in production pipelines.
+Converts match dicts → 26-dimensional feature vectors used by the
+production ML classifier (core.model.ml_model.MatchMLModel), which is
+blended with the Onside+DC probabilities in core.predictor.
 
-Zero external dependencies. Converts match dicts → feature vectors
-for model training and prediction.
+Zero external dependencies.
 
 Usage:
     from core.model.features import extract_features, FEATURE_COLUMNS
@@ -69,7 +67,13 @@ def extract_features(match: dict[str, Any], context: dict[str, Any] | None = Non
 
     hp = match.get("home_true_prob") or 0.5
     dp = match.get("draw_true_prob") or 0.25
-    ap = match.get("away_true_prob") or (1.0 - hp - dp) if match.get("away_true_prob") is None else (match["away_true_prob"] or 0.25)
+    # away_true_prob 区分"未提供"与"明确为 0"：未提供时用 1-hp-dp 推导，
+    # 明确提供（含 0.0）则原样保留，避免被 `or 0.25` 误判成缺失值。
+    ap_raw = match.get("away_true_prob")
+    if ap_raw is None:
+        ap = 1.0 - hp - dp
+    else:
+        ap = ap_raw
     if hp + dp + ap < 0.01:
         hp, dp, ap = 0.45, 0.25, 0.30
 
