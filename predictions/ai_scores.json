@@ -126,9 +126,9 @@
     "source": "laliga"
   },
   "罗马 vs ACF Fiorentina": {
-    "ai_score": 30,
-    "ai_summary": "Prediction is a clear Roma win but lacks odds data and is rated only 1-star, indicating low confidence. It does not align with the preference for underdog picks and offers weak betting value.",
-    "ai_notes": "No handicap data available; fundamental-only pick with limited confidence.",
+    "ai_score": 50,
+    "ai_summary": "",
+    "ai_notes": "",
     "league": "seriea",
     "source": "seriea"
   }
