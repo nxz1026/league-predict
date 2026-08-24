@@ -21,8 +21,8 @@
     "source": "epl"
   },
   "富勒姆 vs 切尔西": {
-    "ai_score": 60,
-    "ai_summary": "Fulham is an underdog against Chelsea, which aligns with the user's preference for underdog picks. The absence of betting data reduces confidence to a moderate level.",
+    "ai_score": 50,
+    "ai_summary": "",
     "ai_notes": "",
     "league": "epl",
     "source": "epl"
@@ -49,15 +49,15 @@
     "source": "laliga"
   },
   "奥萨苏纳 vs 莱万特": {
-    "ai_score": 30,
-    "ai_summary": "Prediction favors Osasuna but lacks data and confidence. Not an underdog pick, so low value.",
+    "ai_score": 50,
+    "ai_summary": "",
     "ai_notes": "",
     "league": "laliga",
     "source": "laliga"
   },
   "Málaga CF vs 拉科鲁尼亚": {
-    "ai_score": 30,
-    "ai_summary": "Málaga CF predicted to win with no supporting data. Low confidence, not a clear underdog.",
+    "ai_score": 50,
+    "ai_summary": "",
     "ai_notes": "",
     "league": "laliga",
     "source": "laliga"
@@ -91,8 +91,8 @@
     "source": "seriea"
   },
   "Bologna FC 1909 vs SS Lazio": {
-    "ai_score": 35,
-    "ai_summary": "Bologna is an underdog versus Lazio, but the lack of statistical backing and 1-star rating reduce reliability. Not recommended for high-confidence betting.",
+    "ai_score": 50,
+    "ai_summary": "",
     "ai_notes": "",
     "league": "seriea",
     "source": "seriea"
@@ -117,5 +117,19 @@
     "ai_notes": "",
     "league": "ligue1",
     "source": "ligue1"
+  },
+  "瓦伦西亚 vs Real Betis Balompié": {
+    "ai_score": 50,
+    "ai_summary": "",
+    "ai_notes": "",
+    "league": "laliga",
+    "source": "laliga"
+  },
+  "罗马 vs ACF Fiorentina": {
+    "ai_score": 30,
+    "ai_summary": "Prediction is a clear Roma win but lacks odds data and is rated only 1-star, indicating low confidence. It does not align with the preference for underdog picks and offers weak betting value.",
+    "ai_notes": "No handicap data available; fundamental-only pick with limited confidence.",
+    "league": "seriea",
+    "source": "seriea"
   }
 }
