@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from core.config import COUNTRY_CN
 from core.log import logger
 
 
@@ -37,38 +36,9 @@ def parse_details(details_str: str | None) -> tuple[str | None, str | None, floa
 
 
 def to_cn(name: str | None) -> str:
-    """英文国家名/俱乐部名 → 中文（查硬编码表，未匹配则 strip 前后缀后再查，仍不匹配返回原名）"""
-    if not name:
-        return name
-    # 直接匹配
-    cn = COUNTRY_CN.get(name, COUNTRY_CN.get(name.replace("'", ""), None))
-    if cn:
-        return cn
-    # strip 常见足球俱乐部前缀（如 RCD, RC, CD, FC, UD 等）
-    _prefixes = ["RCD ", "RC ", "CD ", "FC ", "UD ", "CF ", "SD ", "AD ", "CA ",
-                 "Real ", "Deportivo ", "Club ", "Athletic ", "Sporting "]
-    cleaned = name
-    for pfx in _prefixes:
-        if cleaned.startswith(pfx):
-            cleaned = cleaned[len(pfx):]
-            break
-    # strip "de X", "de la X" 西班牙命名模式（如 "Espanyol de Barcelona" → "Espanyol"）
-    _de_patterns = [" de la ", " de las ", " de los ", " de "]
-    for dp in _de_patterns:
-        if dp in cleaned:
-            parts = cleaned.split(dp, 1)
-            cleaned = parts[0]
-            break
-    # strip 常见足球俱乐部后缀
-    _suffixes = [" CF", " FC", " UD", " CD", " RC", " RCD", " C.F.", " F.C.",
-                 " SAD", " S.A.D.", " B", " II", " Women", " FCB", " S.L."]
-    for sfx in _suffixes:
-        if cleaned.endswith(sfx):
-            cleaned = cleaned[: -len(sfx)]
-            break
-    # 再查一次
-    cn = COUNTRY_CN.get(cleaned, COUNTRY_CN.get(cleaned.replace("'", ""), None))
-    return cn if cn else name
+    """英文队名/国名 → 中文（P6：国名走稳定表，队名走 LLM 翻译缓存）。"""
+    from core.i18n import to_cn as _i18n_to_cn
+    return _i18n_to_cn(name)
 
 
 def form_to_score(form_str: str | None) -> float:
@@ -258,6 +228,27 @@ def parse_events(events: list, now_utc: datetime | None = None) -> tuple[list, l
     past = []
     future = []
     in_progress = []
+
+    # 预热 LLM 队名翻译缓存（P6：队名统一中文，避免硬对照）
+    try:
+        from core.i18n import warm_translations
+        _names: list[str] = []
+        for ev in events:
+            en = ev.get("name", "")
+            if " at " in en:
+                _a, _h = en.split(" at ", 1)
+                _names.append(_h.strip())
+                _names.append(_a.strip())
+            else:
+                _names.append(en)
+            for _comp in (ev.get("competitions") or []):
+                for _c in (_comp.get("competitors") or []):
+                    _dn = (_c.get("team") or {}).get("displayName")
+                    if _dn:
+                        _names.append(_dn)
+        warm_translations(_names)
+    except Exception as e:
+        logger.warning(f"Team-name translation warm-up failed: {e}")
 
     for ev in events:
         en_name = ev.get("name", "")
