@@ -11,6 +11,9 @@ predictions/*.json
 results/*.json
 output/
 
+# Calibration state caches (generated per-league)
+scripts/references/.calibration_state*.json
+
 # Environment
 .env
 .venv/
