@@ -91,9 +91,9 @@
     "source": "seriea"
   },
   "Bologna FC 1909 vs SS Lazio": {
-    "ai_score": 48,
-    "ai_summary": "Bologna vs Lazio is an away favorite match; picking Bologna as the winner is an underdog play but lacks statistical backing. Low reliability.",
-    "ai_notes": "Weak signal; risky underdog pick.",
+    "ai_score": 25,
+    "ai_summary": "All five items explicitly state there is no betting line data and rely solely on basic fundamentals. The analysis lacks quantitative metrics or odds comparison required for a reliable prediction.",
+    "ai_notes": "No market edge detected; confidence is insufficient for decision-making.",
     "league": "seriea",
     "source": "seriea"
   },
@@ -127,9 +127,37 @@
   },
   "罗马 vs ACF Fiorentina": {
     "ai_score": 35,
-    "ai_summary": "The prediction favors AS Roma to win, but there is no handicap data available for analysis. Decisions are limited to basic fundamentals with low reliability.",
-    "ai_notes": "Low confidence due to missing data; no clear underdog or value opportunity identified.",
+    "ai_summary": "This prediction is classified as weak due to a complete lack of available data or betting lines. The confidence level is insufficient to support a reliable pick, as it relies solely on basic fundamentals without statistical backing.",
+    "ai_notes": "Insufficient data; no odds or market analysis provided.",
     "league": "seriea",
     "source": "seriea"
+  },
+  "Fulham FC vs Chelsea FC": {
+    "ai_score": 25,
+    "ai_summary": "All five items explicitly state there is no betting line data and rely solely on basic fundamentals. The analysis lacks quantitative metrics or odds comparison required for a reliable prediction.",
+    "ai_notes": "No market edge detected; confidence is insufficient for decision-making.",
+    "league": "epl",
+    "source": "epl"
+  },
+  "CA Osasuna vs Levante UD": {
+    "ai_score": 25,
+    "ai_summary": "All five items explicitly state there is no betting line data and rely solely on basic fundamentals. The analysis lacks quantitative metrics or odds comparison required for a reliable prediction.",
+    "ai_notes": "No market edge detected; confidence is insufficient for decision-making.",
+    "league": "laliga",
+    "source": "laliga"
+  },
+  "Málaga CF vs RC Deportivo La Coruña": {
+    "ai_score": 25,
+    "ai_summary": "All five items explicitly state there is no betting line data and rely solely on basic fundamentals. The analysis lacks quantitative metrics or odds comparison required for a reliable prediction.",
+    "ai_notes": "No market edge detected; confidence is insufficient for decision-making.",
+    "league": "laliga",
+    "source": "laliga"
+  },
+  "Valencia CF vs Real Betis Balompié": {
+    "ai_score": 25,
+    "ai_summary": "All five items explicitly state there is no betting line data and rely solely on basic fundamentals. The analysis lacks quantitative metrics or odds comparison required for a reliable prediction.",
+    "ai_notes": "No market edge detected; confidence is insufficient for decision-making.",
+    "league": "laliga",
+    "source": "laliga"
   }
 }
