@@ -49,9 +49,9 @@
     "source": "laliga"
   },
   "奥萨苏纳 vs 莱万特": {
-    "ai_score": 45,
-    "ai_summary": "Osasuna vs Getafe is likely a tight defensive match; predicting an Osasuna win carries high risk without market data. Basic fundamentals do not strongly support this direction.",
-    "ai_notes": "Weak signal; avoid.",
+    "ai_score": 60,
+    "ai_summary": "Osasuna vs Levante picks Osasuna win, a likely underdog position. Without odds, confidence remains speculative despite clear direction.",
+    "ai_notes": "1-star due to missing market data",
     "league": "laliga",
     "source": "laliga"
   },
@@ -159,5 +159,40 @@
     "ai_notes": "No market edge detected; confidence is insufficient for decision-making.",
     "league": "laliga",
     "source": "laliga"
+  },
+  "富勒姆足球俱乐部 vs 切尔西足球俱乐部": {
+    "ai_score": 55,
+    "ai_summary": "Fulham vs Chelsea prediction favors Fulham, but lacks market data. Direction is clear, yet the 1-star rating limits overall value.",
+    "ai_notes": "No盘口数据，基本面为主",
+    "league": "epl",
+    "source": "epl"
+  },
+  "马拉加 vs 拉科鲁尼亚": {
+    "ai_score": 58,
+    "ai_summary": "Mallorca vs Rayo Vallecano suggests a home win for Mallorca. The pick is plausible but unverified by betting markets.",
+    "ai_notes": "Basic fundamentals only",
+    "league": "laliga",
+    "source": "laliga"
+  },
+  "瓦伦西亚 vs 皇家贝蒂斯": {
+    "ai_score": 52,
+    "ai_summary": "Valencia vs Real Betis predicts a Valencia victory. This is a risky underdog-style pick with no statistical backing from odds.",
+    "ai_notes": "Low confidence without data",
+    "league": "laliga",
+    "source": "laliga"
+  },
+  "博洛尼亚足球俱乐部 vs 拉齐奥足球俱乐部": {
+    "ai_score": 57,
+    "ai_summary": "Bologna vs Lazio selects Bologna as winner, a strong underdog angle. However, the absence of handicap data weakens reliability.",
+    "ai_notes": "Underdog preference noted",
+    "league": "seriea",
+    "source": "seriea"
+  },
+  "罗马 vs 佛罗伦萨足球俱乐部": {
+    "ai_score": 15,
+    "ai_summary": "The analysis is critically weak as it explicitly states there are no betting market data points to reference. This lack of quantitative foundation makes any directional signal unreliable for betting purposes.",
+    "ai_notes": "Fails priorities: low confidence (no data), no underdog value indicated, and the 'direction' is unsupported by evidence.",
+    "league": "seriea",
+    "source": "seriea"
   }
 }
