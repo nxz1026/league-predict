@@ -21,9 +21,9 @@
     "source": "epl"
   },
   "富勒姆 vs 切尔西": {
-    "ai_score": 45,
-    "ai_summary": "No betting line data available; analysis relies solely on basic fundamentals. The signal is marked as weak due to lack of quantitative support.",
-    "ai_notes": "Item 1",
+    "ai_score": 55,
+    "ai_summary": "No odds data limits analysis to basics; low confidence despite direction.",
+    "ai_notes": "Weak due to missing quantitative validation",
     "league": "epl",
     "source": "epl"
   },
@@ -49,9 +49,9 @@
     "source": "laliga"
   },
   "奥萨苏纳 vs 莱万特": {
-    "ai_score": 45,
-    "ai_summary": "No betting line data available; analysis relies solely on basic fundamentals. The signal is marked as weak due to lack of quantitative support.",
-    "ai_notes": "Item 2",
+    "ai_score": 55,
+    "ai_summary": "Fundamentals favor home win but lack of data reduces reliability.",
+    "ai_notes": "Weak due to missing quantitative validation",
     "league": "laliga",
     "source": "laliga"
   },
@@ -168,16 +168,16 @@
     "source": "epl"
   },
   "马拉加 vs 拉科鲁尼亚": {
-    "ai_score": 45,
-    "ai_summary": "No betting line data available; analysis relies solely on basic fundamentals. The signal is marked as weak due to lack of quantitative support.",
-    "ai_notes": "Item 3",
+    "ai_score": 55,
+    "ai_summary": "Basic metrics suggest home win, yet no odds support the pick.",
+    "ai_notes": "Weak due to missing quantitative validation",
     "league": "laliga",
     "source": "laliga"
   },
   "瓦伦西亚 vs 皇家贝蒂斯": {
-    "ai_score": 45,
-    "ai_summary": "No betting line data available; analysis relies solely on basic fundamentals. The signal is marked as weak due to lack of quantitative support.",
-    "ai_notes": "Item 4",
+    "ai_score": 55,
+    "ai_summary": "Home advantage noted but insufficient data for strong confidence.",
+    "ai_notes": "Weak due to missing quantitative validation",
     "league": "laliga",
     "source": "laliga"
   },
@@ -196,16 +196,16 @@
     "source": "seriea"
   },
   "博洛尼亚 vs 拉齐奥": {
-    "ai_score": 45,
-    "ai_summary": "No betting line data available; analysis relies solely on basic fundamentals. The signal is marked as weak due to lack of quantitative support.",
-    "ai_notes": "Item 5",
+    "ai_score": 55,
+    "ai_summary": "Picks based on fundamentals only; no odds to confirm value.",
+    "ai_notes": "Weak due to missing quantitative validation",
     "league": "seriea",
     "source": "seriea"
   },
   "罗马 vs 佛罗伦萨": {
-    "ai_score": 32,
-    "ai_summary": "The prediction favors Roma based on fundamental analysis, but confidence is critically low due to a complete absence of quantitative odds or statistical data. The outcome remains highly speculative without empirical backing.",
-    "ai_notes": "No data available for validation; relies solely on basic fundamentals.",
+    "ai_score": 55,
+    "ai_summary": "Roma vs Fiorentina Serie A match; model predicts Roma win with low confidence. The 'no data' note suggests insufficient market signals for strong value.",
+    "ai_notes": "Low confidence (无盘口数据). Basic form only; underdog value unlikely here.",
     "league": "seriea",
     "source": "seriea"
   }
