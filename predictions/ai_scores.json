@@ -21,9 +21,9 @@
     "source": "epl"
   },
   "富勒姆 vs 切尔西": {
-    "ai_score": 42,
-    "ai_summary": "Low confidence due to lack of handicap data; prediction relies solely on basic fundamentals. Fulham's home advantage is noted but insufficient for a strong bet.",
-    "ai_notes": "Weak signal; no underdog value identified.",
+    "ai_score": 45,
+    "ai_summary": "No betting line data available; analysis relies solely on basic fundamentals. The signal is marked as weak due to lack of quantitative support.",
+    "ai_notes": "Item 1",
     "league": "epl",
     "source": "epl"
   },
@@ -49,9 +49,9 @@
     "source": "laliga"
   },
   "奥萨苏纳 vs 莱万特": {
-    "ai_score": 60,
-    "ai_summary": "Osasuna vs Levante picks Osasuna win, a likely underdog position. Without odds, confidence remains speculative despite clear direction.",
-    "ai_notes": "1-star due to missing market data",
+    "ai_score": 45,
+    "ai_summary": "No betting line data available; analysis relies solely on basic fundamentals. The signal is marked as weak due to lack of quantitative support.",
+    "ai_notes": "Item 2",
     "league": "laliga",
     "source": "laliga"
   },
@@ -168,16 +168,16 @@
     "source": "epl"
   },
   "马拉加 vs 拉科鲁尼亚": {
-    "ai_score": 58,
-    "ai_summary": "Mallorca vs Rayo Vallecano suggests a home win for Mallorca. The pick is plausible but unverified by betting markets.",
-    "ai_notes": "Basic fundamentals only",
+    "ai_score": 45,
+    "ai_summary": "No betting line data available; analysis relies solely on basic fundamentals. The signal is marked as weak due to lack of quantitative support.",
+    "ai_notes": "Item 3",
     "league": "laliga",
     "source": "laliga"
   },
   "瓦伦西亚 vs 皇家贝蒂斯": {
-    "ai_score": 52,
-    "ai_summary": "Valencia vs Real Betis predicts a Valencia victory. This is a risky underdog-style pick with no statistical backing from odds.",
-    "ai_notes": "Low confidence without data",
+    "ai_score": 45,
+    "ai_summary": "No betting line data available; analysis relies solely on basic fundamentals. The signal is marked as weak due to lack of quantitative support.",
+    "ai_notes": "Item 4",
     "league": "laliga",
     "source": "laliga"
   },
@@ -192,6 +192,20 @@
     "ai_score": 15,
     "ai_summary": "The analysis is critically weak as it explicitly states there are no betting market data points to reference. This lack of quantitative foundation makes any directional signal unreliable for betting purposes.",
     "ai_notes": "Fails priorities: low confidence (no data), no underdog value indicated, and the 'direction' is unsupported by evidence.",
+    "league": "seriea",
+    "source": "seriea"
+  },
+  "博洛尼亚 vs 拉齐奥": {
+    "ai_score": 45,
+    "ai_summary": "No betting line data available; analysis relies solely on basic fundamentals. The signal is marked as weak due to lack of quantitative support.",
+    "ai_notes": "Item 5",
+    "league": "seriea",
+    "source": "seriea"
+  },
+  "罗马 vs 佛罗伦萨": {
+    "ai_score": 32,
+    "ai_summary": "The prediction favors Roma based on fundamental analysis, but confidence is critically low due to a complete absence of quantitative odds or statistical data. The outcome remains highly speculative without empirical backing.",
+    "ai_notes": "No data available for validation; relies solely on basic fundamentals.",
     "league": "seriea",
     "source": "seriea"
   }
