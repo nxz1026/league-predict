@@ -53,7 +53,10 @@ def translate_team_names(names: list[str]) -> dict:
     try:
         prompt = (
             "You are a football name translator. Translate the following English "
-            "football club or national-team names into their most common Chinese names. "
+            "football club or national-team names into their most common CONCISE Chinese names. "
+            "Use the short form fans actually use, e.g. 'Fulham' -> '富勒姆', 'Chelsea FC' -> '切尔西', "
+            "'Bologna FC 1909' -> '博洛尼亚', 'AS Roma' -> '罗马'. Omit '足球俱乐部' / 'FC' style suffixes "
+            "unless they are part of the standard short name. "
             "Return ONLY a JSON object, either of the form "
             '{"translations": {"EnglishName": "中文名"}} or a flat object '
             '{"EnglishName": "中文名"}. If you are unsure of a name, use the original '
