@@ -210,9 +210,23 @@
     "source": "seriea"
   },
   "皇家马德里 vs 皇家社会": {
+    "ai_score": 55,
+    "ai_summary": "Real Madrid faces Real Sociedad with a predicted home win. Confidence is low due to lack of odds data and reliance on basic fundamentals.",
+    "ai_notes": "Favorable direction signal but weak confidence metrics.",
+    "league": "laliga",
+    "source": "laliga"
+  },
+  "维戈塞尔塔 vs 奥萨苏纳": {
     "ai_score": 50,
-    "ai_summary": "",
-    "ai_notes": "",
+    "ai_summary": "Valladolid is predicted to defeat Osasuna at home. The analysis is constrained by insufficient betting market data.",
+    "ai_notes": "Low confidence; underdog value unclear without odds.",
+    "league": "laliga",
+    "source": "laliga"
+  },
+  "巴塞罗那 vs 毕尔巴鄂竞技": {
+    "ai_score": 60,
+    "ai_summary": "Barcelona is tipped to beat Athletic Bilbao in a strong home fixture. Basic fundamentals support the prediction despite no odds.",
+    "ai_notes": "Strongest direction among the three, yet still lacks quantitative backing.",
     "league": "laliga",
     "source": "laliga"
   }
