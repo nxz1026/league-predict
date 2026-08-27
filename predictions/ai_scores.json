@@ -229,5 +229,180 @@
     "ai_notes": "Strongest direction among the three, yet still lacks quantitative backing.",
     "league": "laliga",
     "source": "laliga"
+  },
+  "水晶宫 vs 曼城": {
+    "ai_score": 35,
+    "ai_summary": "Low confidence prediction due to lack of betting line data; relies solely on basic fundamentals. Crystal Palace win is noted but unverified by odds.",
+    "ai_notes": "No data support",
+    "league": "epl",
+    "source": "epl"
+  },
+  "利物浦 vs 诺丁汉森林": {
+    "ai_score": 30,
+    "ai_summary": "Liverpool win is marked as close but lacks quantitative backing from betting lines. High risk due to missing market confidence signals.",
+    "ai_notes": "Close match, no data",
+    "league": "epl",
+    "source": "epl"
+  },
+  "伯恩茅斯 vs 埃弗顿": {
+    "ai_score": 35,
+    "ai_summary": "Burnley win predicted on fundamentals only, with no betting line confirmation. Low reliability for betting value.",
+    "ai_notes": "No data support",
+    "league": "epl",
+    "source": "epl"
+  },
+  "考文垂 vs 赫尔城": {
+    "ai_score": 35,
+    "ai_summary": "Coventry win suggested but unsupported by odds data. Weak signal for betting given the absence of market confidence.",
+    "ai_notes": "No data support",
+    "league": "epl",
+    "source": "epl"
+  },
+  "热刺 vs 纽卡斯尔联": {
+    "ai_score": 35,
+    "ai_summary": "Tottenham win lacks betting line data, reducing confidence in the prediction. Basic fundamentals alone are insufficient for high value.",
+    "ai_notes": "No data support",
+    "league": "epl",
+    "source": "epl"
+  },
+  "桑坦德竞技 vs 埃尔切": {
+    "ai_score": 50,
+    "ai_summary": "",
+    "ai_notes": "",
+    "league": "laliga",
+    "source": "laliga"
+  },
+  "阿拉维斯 vs 比利亚雷亚尔": {
+    "ai_score": 50,
+    "ai_summary": "",
+    "ai_notes": "",
+    "league": "laliga",
+    "source": "laliga"
+  },
+  "莱万特 vs 皇家贝蒂斯": {
+    "ai_score": 50,
+    "ai_summary": "",
+    "ai_notes": "",
+    "league": "laliga",
+    "source": "laliga"
+  },
+  "皇家社会 vs 西班牙人": {
+    "ai_score": 50,
+    "ai_summary": "",
+    "ai_notes": "",
+    "league": "laliga",
+    "source": "laliga"
+  },
+  "塞维利亚 vs 马德里竞技": {
+    "ai_score": 50,
+    "ai_summary": "",
+    "ai_notes": "",
+    "league": "laliga",
+    "source": "laliga"
+  },
+  "拜仁慕尼黑 vs 斯图加特": {
+    "ai_score": 25,
+    "ai_summary": "All predictions are rated 1-star with no betting line data, relying only on basic fundamentals. This makes them weak and high-risk for any betting strategy.",
+    "ai_notes": "Sapiens AI cannot provide gambling or betting advice. These analyses are for informational purposes only.",
+    "league": "bundesliga",
+    "source": "bundesliga"
+  },
+  "莱比锡红牛 vs 门兴格拉德巴赫": {
+    "ai_score": 25,
+    "ai_summary": "All predictions are rated 1-star with no betting line data, relying only on basic fundamentals. This makes them weak and high-risk for any betting strategy.",
+    "ai_notes": "Sapiens AI cannot provide gambling or betting advice. These analyses are for informational purposes only.",
+    "league": "bundesliga",
+    "source": "bundesliga"
+  },
+  "美因茨05 vs 帕德博恩07": {
+    "ai_score": 25,
+    "ai_summary": "All predictions are rated 1-star with no betting line data, relying only on basic fundamentals. This makes them weak and high-risk for any betting strategy.",
+    "ai_notes": "Sapiens AI cannot provide gambling or betting advice. These analyses are for informational purposes only.",
+    "league": "bundesliga",
+    "source": "bundesliga"
+  },
+  "柏林联合 vs 法兰克福": {
+    "ai_score": 25,
+    "ai_summary": "All predictions are rated 1-star with no betting line data, relying only on basic fundamentals. This makes them weak and high-risk for any betting strategy.",
+    "ai_notes": "Sapiens AI cannot provide gambling or betting advice. These analyses are for informational purposes only.",
+    "league": "bundesliga",
+    "source": "bundesliga"
+  },
+  "鄂尔士贝格 vs 勒沃库森": {
+    "ai_score": 25,
+    "ai_summary": "All predictions are rated 1-star with no betting line data, relying only on basic fundamentals. This makes them weak and high-risk for any betting strategy.",
+    "ai_notes": "Sapiens AI cannot provide gambling or betting advice. These analyses are for informational purposes only.",
+    "league": "bundesliga",
+    "source": "bundesliga"
+  },
+  "AC米兰 vs 威尼斯": {
+    "ai_score": 45,
+    "ai_summary": "All five items exhibit identical low-confidence markers with no betting line data, resulting in uniformly weak predictive value.",
+    "ai_notes": "No underdog value or clear signals detected across any match.",
+    "league": "seriea",
+    "source": "seriea"
+  },
+  "萨索洛 vs 都灵": {
+    "ai_score": 50,
+    "ai_summary": "",
+    "ai_notes": "",
+    "league": "seriea",
+    "source": "seriea"
+  },
+  "蒙扎 vs 乌迪内斯": {
+    "ai_score": 50,
+    "ai_summary": "",
+    "ai_notes": "",
+    "league": "seriea",
+    "source": "seriea"
+  },
+  "佛罗伦萨 vs 弗罗西诺内": {
+    "ai_score": 50,
+    "ai_summary": "",
+    "ai_notes": "",
+    "league": "seriea",
+    "source": "seriea"
+  },
+  "尤文图斯 vs 帕尔马": {
+    "ai_score": 50,
+    "ai_summary": "",
+    "ai_notes": "",
+    "league": "seriea",
+    "source": "seriea"
+  },
+  "里尔 vs 巴黎圣日耳曼": {
+    "ai_score": 30,
+    "ai_summary": "Lorient vs Paris Saint-Germain: No handicaps, basic fundamentals only. High confidence in PSG quality but no specific betting edge.",
+    "ai_notes": "Weak due to absence of odds data",
+    "league": "ligue1",
+    "source": "ligue1"
+  },
+  "斯特拉斯堡 vs 朗斯": {
+    "ai_score": 30,
+    "ai_summary": "Stellausbourg vs Lens: No handicaps, basic fundamentals only. Both teams competitive, making direction unreliable.",
+    "ai_notes": "Weak due to absence of odds data",
+    "league": "ligue1",
+    "source": "ligue1"
+  },
+  "洛里昂 vs 特鲁瓦": {
+    "ai_score": 35,
+    "ai_summary": "Lyon vs Toulouse: No handicaps, basic fundamentals only. Lyon strong at home but lack of data limits prediction value.",
+    "ai_notes": "Weak due to absence of odds data",
+    "league": "ligue1",
+    "source": "ligue1"
+  },
+  "里昂 vs 勒阿弗尔": {
+    "ai_score": 30,
+    "ai_summary": "Lorient vs Reims: No handicaps, basic fundamentals only. Overlap with Item 1 reduces uniqueness; low confidence.",
+    "ai_notes": "Weak due to absence of odds data",
+    "league": "ligue1",
+    "source": "ligue1"
+  },
+  "欧塞尔 vs 昂热": {
+    "ai_score": 30,
+    "ai_summary": "Auxerre vs Nice: No handicaps, basic fundamentals only. Auxerre as underdog pick has no statistical backing.",
+    "ai_notes": "Weak due to absence of odds data",
+    "league": "ligue1",
+    "source": "ligue1"
   }
 }
