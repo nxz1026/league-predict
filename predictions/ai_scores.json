@@ -404,5 +404,19 @@
     "ai_notes": "Weak due to absence of odds data",
     "league": "ligue1",
     "source": "ligue1"
+  },
+  "皇家社会 vs 维戈塞尔塔": {
+    "ai_score": 42,
+    "ai_summary": "Both predictions are based solely on fundamentals with no odds data. Confidence is explicitly low due to the lack of market signals.",
+    "ai_notes": "No clear direction signal from betting markets; consider waiting for lineup/odds updates.",
+    "league": "laliga",
+    "source": "laliga"
+  },
+  "图卢兹 vs 里尔": {
+    "ai_score": 40,
+    "ai_summary": "Identical situation to Item 1 with no盘口 (handicap/odds) data. Reliance on basic analysis only reduces predictive reliability.",
+    "ai_notes": "Weak confidence due to missing financial market context; underdog potential unverified.",
+    "league": "ligue1",
+    "source": "ligue1"
   }
 }
