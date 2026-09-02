@@ -406,16 +406,58 @@
     "source": "ligue1"
   },
   "皇家社会 vs 维戈塞尔塔": {
-    "ai_score": 42,
-    "ai_summary": "Both predictions are based solely on fundamentals with no odds data. Confidence is explicitly low due to the lack of market signals.",
-    "ai_notes": "No clear direction signal from betting markets; consider waiting for lineup/odds updates.",
+    "ai_score": 55,
+    "ai_summary": "No betting odds provided, limiting predictive accuracy. Leans toward Real Sociedad Win based on fundamentals.",
+    "ai_notes": "Insufficient data for value assessment.",
     "league": "laliga",
     "source": "laliga"
   },
   "图卢兹 vs 里尔": {
+    "ai_score": 35,
+    "ai_summary": "Low-value prediction due to absence of odds data. Basic fundamentals alone are insufficient for a reliable edge.",
+    "ai_notes": "No line data; Tuliza home win is speculative.",
+    "league": "ligue1",
+    "source": "ligue1"
+  },
+  "伊普斯维奇 vs 利物浦": {
+    "ai_score": 55,
+    "ai_summary": "Low confidence due to absence of odds data. Direction suggests a basic fundamental lean toward Ipswich Win.",
+    "ai_notes": "Weak signal; consider skipping.",
+    "league": "epl",
+    "source": "epl"
+  },
+  "皇家贝蒂斯 vs 皇家马德里": {
+    "ai_score": 55,
+    "ai_summary": "Lacks market data for confident evaluation. Predicts Real Betis Win from basic metrics only.",
+    "ai_notes": "Avoid due to zero model confidence.",
+    "league": "laliga",
+    "source": "laliga"
+  },
+  "斯图加特 vs 科隆": {
+    "ai_score": 55,
+    "ai_summary": "No odds available to gauge value. Fundamental analysis points to Stuttgart Win.",
+    "ai_notes": "Data deficiency reduces reliability.",
+    "league": "bundesliga",
+    "source": "bundesliga"
+  },
+  "热那亚 vs 科莫": {
+    "ai_score": 55,
+    "ai_summary": "Missing odds means no edge detection. Prediction is limited to Hotspur Win fundamentals.",
+    "ai_notes": "Not recommended for betting.",
+    "league": "seriea",
+    "source": "seriea"
+  },
+  "里昂 vs 欧塞尔": {
     "ai_score": 40,
-    "ai_summary": "Identical situation to Item 1 with no盘口 (handicap/odds) data. Reliance on basic analysis only reduces predictive reliability.",
-    "ai_notes": "Weak confidence due to missing financial market context; underdog potential unverified.",
+    "ai_summary": "Weak analysis lacking betting market context. Fundamentals suggest Lille win but without value confirmation.",
+    "ai_notes": "No odds; insufficient data for confident underdog selection.",
+    "league": "ligue1",
+    "source": "ligue1"
+  },
+  "巴黎圣日耳曼 vs 摩纳哥": {
+    "ai_score": 30,
+    "ai_summary": "Lowest priority match due to zero quantitative backing. PSG victory is obvious but offers no betting value.",
+    "ai_notes": "Heavy favorite pick; fails underdog preference and confidence criteria.",
     "league": "ligue1",
     "source": "ligue1"
   }
