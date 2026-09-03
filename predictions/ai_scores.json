@@ -420,44 +420,163 @@
     "source": "ligue1"
   },
   "伊普斯维奇 vs 利物浦": {
-    "ai_score": 55,
-    "ai_summary": "Low confidence due to absence of odds data. Direction suggests a basic fundamental lean toward Ipswich Win.",
-    "ai_notes": "Weak signal; consider skipping.",
+    "ai_score": 25,
+    "ai_summary": "Liverpool is a strong away favorite against Ipswich; home underdog pick with low confidence.",
+    "ai_notes": "All 1-star, no odds data",
     "league": "epl",
     "source": "epl"
   },
   "皇家贝蒂斯 vs 皇家马德里": {
-    "ai_score": 55,
-    "ai_summary": "Lacks market data for confident evaluation. Predicts Real Betis Win from basic metrics only.",
-    "ai_notes": "Avoid due to zero model confidence.",
+    "ai_score": 45,
+    "ai_summary": "Real Betis vs Real Madrid prediction favors Betis, but confidence is low due to lack of odds data. This is a high-profile matchup where Madrid is typically favored, making this an underdog pick with weak analytical backing.",
+    "ai_notes": "High-risk underdog; basic fundamentals only.",
     "league": "laliga",
     "source": "laliga"
   },
   "斯图加特 vs 科隆": {
-    "ai_score": 55,
-    "ai_summary": "No odds available to gauge value. Fundamental analysis points to Stuttgart Win.",
-    "ai_notes": "Data deficiency reduces reliability.",
+    "ai_score": 58,
+    "ai_summary": "Stuttgart vs Cologne predicts a Stuttgart win in the Bundesliga. Stuttgart is generally strong at home, but the lack of odds and reliance on basic fundamentals keeps this in the weak-to-ok range.",
+    "ai_notes": "Plausible but data-deficient.",
     "league": "bundesliga",
     "source": "bundesliga"
   },
   "热那亚 vs 科莫": {
-    "ai_score": 55,
-    "ai_summary": "Missing odds means no edge detection. Prediction is limited to Hotspur Win fundamentals.",
-    "ai_notes": "Not recommended for betting.",
+    "ai_score": 48,
+    "ai_summary": "1-star low confidence, no data. 热那亚胜 slightly better due to home advantage in Serie A.",
+    "ai_notes": "Only match with marginal underdog angle",
     "league": "seriea",
     "source": "seriea"
   },
   "里昂 vs 欧塞尔": {
-    "ai_score": 40,
-    "ai_summary": "Weak analysis lacking betting market context. Fundamentals suggest Lille win but without value confirmation.",
-    "ai_notes": "No odds; insufficient data for confident underdog selection.",
+    "ai_score": 42,
+    "ai_summary": "Slightly higher potential due to Lyon's domestic dominance, but still lacks quantitative backing.",
+    "ai_notes": "Basic form suggests value, but confidence note invalidates high-confidence requirement.",
     "league": "ligue1",
     "source": "ligue1"
   },
   "巴黎圣日耳曼 vs 摩纳哥": {
     "ai_score": 30,
-    "ai_summary": "Lowest priority match due to zero quantitative backing. PSG victory is obvious but offers no betting value.",
-    "ai_notes": "Heavy favorite pick; fails underdog preference and confidence criteria.",
+    "ai_summary": "Very weak pick. PSG vs Monaco is a high-variance fixture with no data support.",
+    "ai_notes": "Underdog preference not applicable (PSG is favorite); no data undermines all priorities.",
+    "league": "ligue1",
+    "source": "ligue1"
+  },
+  "纽卡斯尔联 vs 伯恩茅斯": {
+    "ai_score": 30,
+    "ai_summary": "Newcastle at home vs Burnley is a likely win for the home side; minimal underdog value.",
+    "ai_notes": "All 1-star, no odds data",
+    "league": "epl",
+    "source": "epl"
+  },
+  "诺丁汉森林 vs 热刺": {
+    "ai_score": 45,
+    "ai_summary": "Nottingham Forest vs Spurs is closer; Forest as underdog has some value but low confidence.",
+    "ai_notes": "All 1-star, no odds data",
+    "league": "epl",
+    "source": "epl"
+  },
+  "曼城 vs 考文垂": {
+    "ai_score": 20,
+    "ai_summary": "Man City heavily favored at home vs Everton; poor underdog choice.",
+    "ai_notes": "All 1-star, no odds data",
+    "league": "epl",
+    "source": "epl"
+  },
+  "布莱顿 vs 利兹联": {
+    "ai_score": 55,
+    "ai_summary": "Brighton vs Leeds labeled 'near' pick; best underdog candidate with directional signal.",
+    "ai_notes": "All 1-star, no odds data",
+    "league": "epl",
+    "source": "epl"
+  },
+  "毕尔巴鄂竞技 vs 马德里竞技": {
+    "ai_score": 48,
+    "ai_summary": "Bilbao vs Atletico Madrid selects Bilbao to win, rated as 1-star with no odds data. Bilbao's strong home record may justify the underdog angle, but the lack of quantitative support limits score.",
+    "ai_notes": "Underdog appeal but insufficient data.",
+    "league": "laliga",
+    "source": "laliga"
+  },
+  "巴列卡诺 vs 桑坦德竞技": {
+    "ai_score": 52,
+    "ai_summary": "Barcelona vs Girona predicts a Barcelona win. While Barcelona is the clear favorite, the entry marks it as an underdog-style pick with no odds data, creating a signal conflict that lowers reliability.",
+    "ai_notes": "Favorite picked as underdog direction; weak signal.",
+    "league": "laliga",
+    "source": "laliga"
+  },
+  "比利亚雷亚尔 vs 拉科鲁尼亚": {
+    "ai_score": 55,
+    "ai_summary": "Villarreal vs Rayo Vallecano selects Villarreal, labeled as an underdog pick despite likely being the favorite. The contradiction and lack of data reduce the predictive value significantly.",
+    "ai_notes": "Misaligned underdog tag; no odds.",
+    "league": "laliga",
+    "source": "laliga"
+  },
+  "云达不莱梅 vs 莱比锡红牛": {
+    "ai_score": 45,
+    "ai_summary": "1-star low confidence, no data. 云达不莱梅胜 lacks analytical support.",
+    "ai_notes": "Underdog pick weak without odds",
+    "league": "bundesliga",
+    "source": "bundesliga"
+  },
+  "霍芬海姆 vs 多特蒙德": {
+    "ai_score": 45,
+    "ai_summary": "1-star low confidence, no data. 霍芬海姆胜 has no statistical basis.",
+    "ai_notes": "Home win assumption insufficient",
+    "league": "bundesliga",
+    "source": "bundesliga"
+  },
+  "勒沃库森 vs 柏林联合": {
+    "ai_score": 42,
+    "ai_summary": "1-star low confidence, no data. 勒沃库森胜 is standard home favorite, poor value.",
+    "ai_notes": "Low underdog potential",
+    "league": "bundesliga",
+    "source": "bundesliga"
+  },
+  "门兴格拉德巴赫 vs 鄂尔士贝格": {
+    "ai_score": 40,
+    "ai_summary": "1-star low confidence, no data. 门兴胜 is weakest pick, both mid-table.",
+    "ai_notes": "No clear directional signal",
+    "league": "bundesliga",
+    "source": "bundesliga"
+  },
+  "佛罗伦萨 vs 都灵": {
+    "ai_score": 35,
+    "ai_summary": "Low-value pick due to absence of betting data. No statistical edge can be identified without odds.",
+    "ai_notes": "Confidence explicitly states no market data; violates high-confidence priority.",
+    "league": "seriea",
+    "source": "seriea"
+  },
+  "国际米兰 vs 那不勒斯": {
+    "ai_score": 38,
+    "ai_summary": "Low-value pick due to absence of betting data. No statistical edge can be identified without odds.",
+    "ai_notes": "Confidence explicitly states no market data; violates high-confidence priority.",
+    "league": "seriea",
+    "source": "seriea"
+  },
+  "罗马 vs 亚特兰大": {
+    "ai_score": 36,
+    "ai_summary": "Low-value pick due to absence of betting data. No statistical edge can be identified without odds.",
+    "ai_notes": "Confidence explicitly states no market data; violates high-confidence priority.",
+    "league": "seriea",
+    "source": "seriea"
+  },
+  "朗斯 vs 洛里昂": {
+    "ai_score": 45,
+    "ai_summary": "Low confidence due to lack of betting market data; prediction relies solely on basic fundamentals.",
+    "ai_notes": "Weak signal; no odds analysis available to validate the 'Lens win' direction.",
+    "league": "ligue1",
+    "source": "ligue1"
+  },
+  "勒阿弗尔 vs 布雷斯特": {
+    "ai_score": 42,
+    "ai_summary": "Low confidence due to lack of betting market data; prediction relies solely on basic fundamentals.",
+    "ai_notes": "Weak signal; no odds analysis available to validate the 'Le Havre win' direction.",
+    "league": "ligue1",
+    "source": "ligue1"
+  },
+  "尼斯 vs 勒芒": {
+    "ai_score": 48,
+    "ai_summary": "Low confidence due to lack of betting market data; prediction relies solely on basic fundamentals.",
+    "ai_notes": "Weak signal; no odds analysis available to validate the 'Nice win' direction.",
     "league": "ligue1",
     "source": "ligue1"
   }
