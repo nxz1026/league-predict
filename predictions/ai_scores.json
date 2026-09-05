@@ -579,5 +579,124 @@
     "ai_notes": "Weak signal; no odds analysis available to validate the 'Nice win' direction.",
     "league": "ligue1",
     "source": "ligue1"
+  },
+  "埃弗顿 vs 曼联": {
+    "ai_score": 25,
+    "ai_summary": "Low confidence due to no market data. Direction lacks statistical backing.",
+    "ai_notes": "Base fundamentals only",
+    "league": "epl",
+    "source": "epl"
+  },
+  "阿森纳 vs 切尔西": {
+    "ai_score": 25,
+    "ai_summary": "Low confidence due to no market data. Direction lacks statistical backing.",
+    "ai_notes": "Base fundamentals only",
+    "league": "epl",
+    "source": "epl"
+  },
+  "瓦伦西亚 vs 巴塞罗那": {
+    "ai_score": 25,
+    "ai_summary": "Low confidence due to no market data. Direction lacks statistical backing.",
+    "ai_notes": "Base fundamentals only",
+    "league": "laliga",
+    "source": "laliga"
+  },
+  "阿拉维斯 vs 奥萨苏纳": {
+    "ai_score": 25,
+    "ai_summary": "Low confidence due to no market data. Direction lacks statistical backing.",
+    "ai_notes": "Base fundamentals only",
+    "league": "laliga",
+    "source": "laliga"
+  },
+  "马拉加 vs 莱万特": {
+    "ai_score": 25,
+    "ai_summary": "Low confidence due to no market data. Direction lacks statistical backing.",
+    "ai_notes": "Base fundamentals only",
+    "league": "laliga",
+    "source": "laliga"
+  },
+  "西班牙人 vs 塞维利亚": {
+    "ai_score": 35,
+    "ai_summary": "All items explicitly lack betting market data and rely solely on basic fundamentals. No underdog opportunities or high-confidence signals are present due to missing odds.",
+    "ai_notes": "Low confidence across all picks; direction is unclear without numerical reference.",
+    "league": "laliga",
+    "source": "laliga"
+  },
+  "赫塔菲 vs 维戈塞尔塔": {
+    "ai_score": 35,
+    "ai_summary": "All items explicitly lack betting market data and rely solely on basic fundamentals. No underdog opportunities or high-confidence signals are present due to missing odds.",
+    "ai_notes": "Low confidence across all picks; direction is unclear without numerical reference.",
+    "league": "laliga",
+    "source": "laliga"
+  },
+  "汉堡 vs 美因茨05": {
+    "ai_score": 35,
+    "ai_summary": "All items explicitly lack betting market data and rely solely on basic fundamentals. No underdog opportunities or high-confidence signals are present due to missing odds.",
+    "ai_notes": "Low confidence across all picks; direction is unclear without numerical reference.",
+    "league": "bundesliga",
+    "source": "bundesliga"
+  },
+  "法兰克福 vs 奥格斯堡": {
+    "ai_score": 35,
+    "ai_summary": "All items explicitly lack betting market data and rely solely on basic fundamentals. No underdog opportunities or high-confidence signals are present due to missing odds.",
+    "ai_notes": "Low confidence across all picks; direction is unclear without numerical reference.",
+    "league": "bundesliga",
+    "source": "bundesliga"
+  },
+  "帕尔马 vs 蒙扎": {
+    "ai_score": 35,
+    "ai_summary": "All items explicitly lack betting market data and rely solely on basic fundamentals. No underdog opportunities or high-confidence signals are present due to missing odds.",
+    "ai_notes": "Low confidence across all picks; direction is unclear without numerical reference.",
+    "league": "seriea",
+    "source": "seriea"
+  },
+  "弗罗西诺内 vs 威尼斯": {
+    "ai_score": 20,
+    "ai_summary": "Low-confidence home win for Frozinoone with no odds data to support the pick.",
+    "ai_notes": "Weak selection; consider skipping.",
+    "league": "seriea",
+    "source": "seriea"
+  },
+  "博洛尼亚 vs 萨索洛": {
+    "ai_score": 20,
+    "ai_summary": "Low-confidence home win for Bologna with no odds data to support the pick.",
+    "ai_notes": "Weak selection; consider skipping.",
+    "league": "seriea",
+    "source": "seriea"
+  },
+  "尤文图斯 vs AC米兰": {
+    "ai_score": 25,
+    "ai_summary": "Juventus home win is the only team with strong underlying fundamentals, but 1-star rating limits value.",
+    "ai_notes": "Safest of the weak group, but still not recommended.",
+    "league": "seriea",
+    "source": "seriea"
+  },
+  "卡利亚里 vs 莱切": {
+    "ai_score": 20,
+    "ai_summary": "Low-confidence home win for Cagliari with no odds data to support the pick.",
+    "ai_notes": "Weak selection; consider skipping.",
+    "league": "seriea",
+    "source": "seriea"
+  },
+  "特鲁瓦 vs 斯特拉斯堡": {
+    "ai_score": 15,
+    "ai_summary": "Toulouse home win against Strasbourg lacks data and is a high-risk Ligue 1 pick.",
+    "ai_notes": "Avoid; insufficient information for a confident bet.",
+    "league": "ligue1",
+    "source": "ligue1"
+  },
+  "昂热 vs 雷恩": {
+    "ai_score": 42,
+    "ai_summary": "Low confidence due to absence of odds data and reliance solely on fundamentals. Direction points to Ounget, but value is unverified.",
+    "ai_notes": "No betting edge confirmed",
+    "league": "ligue1",
+    "source": "ligue1"
+  },
+  "马赛 vs 巴黎FC": {
+    "ai_score": 45,
+    "ai_summary": "Weak prediction basis with no market data; only fundamental analysis supports Marseille win. Underdog potential unclear.",
+    "ai_notes": "Insufficient data for value assessment",
+    "league": "ligue1",
+    "source": "ligue1"
   }
 }
