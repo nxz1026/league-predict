@@ -624,8 +624,8 @@
   },
   "赫塔菲 vs 维戈塞尔塔": {
     "ai_score": 35,
-    "ai_summary": "All items explicitly lack betting market data and rely solely on basic fundamentals. No underdog opportunities or high-confidence signals are present due to missing odds.",
-    "ai_notes": "Low confidence across all picks; direction is unclear without numerical reference.",
+    "ai_summary": "All predictions are rated 1-star with no betting market data, indicating very low confidence. The explicit lack of quantitative support makes these weak and risky picks.",
+    "ai_notes": "No underdog value identified; all are home favorites with minimal analytical backing.",
     "league": "laliga",
     "source": "laliga"
   },
@@ -672,9 +672,9 @@
     "source": "seriea"
   },
   "卡利亚里 vs 莱切": {
-    "ai_score": 20,
-    "ai_summary": "Low-confidence home win for Cagliari with no odds data to support the pick.",
-    "ai_notes": "Weak selection; consider skipping.",
+    "ai_score": 35,
+    "ai_summary": "Another 1-star home favorite prediction without market data, resulting in the lowest reliability tier. No edge can be confirmed over bookmaker lines.",
+    "ai_notes": "Cardinal vs Lecce is not an obvious underdog scenario; prediction strength is weak.",
     "league": "seriea",
     "source": "seriea"
   },
@@ -698,5 +698,19 @@
     "ai_notes": "Insufficient data for value assessment",
     "league": "ligue1",
     "source": "ligue1"
+  },
+  "埃尔切 vs 皇家社会": {
+    "ai_score": 35,
+    "ai_summary": "Identical low-confidence profile with no odds data to validate the prediction. Fundamental analysis alone is insufficient for a reliable bet.",
+    "ai_notes": "Home win direction but lacks the signal clarity required for high-priority selection.",
+    "league": "laliga",
+    "source": "laliga"
+  },
+  "乌迪内斯 vs 拉齐奥": {
+    "ai_score": 35,
+    "ai_summary": "Same low-confidence structure as the others, relying solely on basics without odds or statistical validation. Unsuitable for high-stakes betting.",
+    "ai_notes": "Udinese vs Lazio is a tricky fixture; without data, the home win signal is unreliable.",
+    "league": "seriea",
+    "source": "seriea"
   }
 }
