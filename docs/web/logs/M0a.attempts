@@ -16,3 +16,9 @@ try 4 rc=0 end=20:50:05
 try 5/30 start=20260909_205025
 try 5 rc=0 end=21:02:11
 try 6/30 start=20260909_210231
+try 6 rc=0 end=21:16:01
+try 7/30 start=20260909_211621
+try 7 rc=124 end=21:32:51
+try 8/30 start=20260909_213311
+try 8 rc=124 end=21:49:41
+SUCCESS try=8
