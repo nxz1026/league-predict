@@ -15,3 +15,7 @@
 - 本地 20s 命令上限：OMP 用 nohup+日志文件方式派发，轮询用短命令
 - welfare 参照要点：入口 pyproject `[tool.fastapi] entryPoint = "src.api:app"`（league 将为 `web.api:app`）；compose 端口 8000:8080、healthcheck /health、restart unless-stopped（league 本地调试可用 8010 占位）
 - 云端若实测无常驻定时器 → 启用 PLAN §1.2 fallback（惰性触发+TTL），M3 时定夺
+| 09-09 18:46 | M5预研 | FastAPI Cloud 官方文档核实：①Scale-to-Zero 默认开，Hobby 套餐 min 恒为0 ⇒ 常驻 cron 不可靠，M3 默认改为「访问时惰性刷新+当日BJT判据」，Pro(min≥1) 才叠加真 cron；②GitHub 集成仅默认分支 push 触发部署（PR/其他分支不触发）⇒ 开发分支安全，merge main 即上线；③.gitignore 生效、predictions/results 历史 JSON 在仓库内 ⇒ 冷启动自带种子数据；④env 敏感值须建为 Secret（创建时定型）；⑤无持久盘声明 ⇒ 会话/新产物重启即失，按风险登记处置 | ✅ |
+| 09-09 18:47 | M0 | OMP 仍在执行（pid 13197，LinBlue provider 已解析；--timeout 1200s 上限约 18:57 BJT）；已挂 watcher → docs/web/logs/M0.done；到期未完则重派或转队长自办 | ⏳ |
+| 09-09 19:02 | M0 事故 | 首次派工（LinBlue/DeepSeek-V4-Flash-0.1）19 分钟零产出：网关 /v1/models 正常(200/1.6s)，但该模型通道 503 no available channel；GLM-5.3 返回空 content。判读＝默认模型死通道导致 ACP 卡死。已杀进程 | ✅ |
+| 09-09 19:04 | **M0a** | 重派：--acp --model Kimi-K2.7-Code（健康）--timeout 1500，策略改为**先建骨架后增量落盘**，范围收敛到契约 1–4 节（5–9 节留 M0b）。日志 M0a_20260909_190418.log，退出写 M0a.done。套餐确认=Hobby（免费档）⇒ M3 定稿「惰性刷新」为主 | ⏳ 进行中 |
