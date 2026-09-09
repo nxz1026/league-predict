@@ -39,3 +39,8 @@
 - PLAN §7 SOP 修正：派工模型改裸名 DeepSeek-V4-Flash-0.1（带前缀=静默挂死，附 WORKLOG 事故链接）。
 - WO-M1.md 定稿：骨架+认证 11 交付物、6 红线、A-E 验收点；暂不加 apscheduler（留给 M3）。
 - 09-10 03:18:11  **M0b STALLED 3.5h 未出哨兵 → 流水线停车，待晨间人工处置** (auto-chain)
+
+## 事故：哨兵大小写空转（01:35–05:50）
+- M0b 实际 01:35 完成（契约 48.9KB、待补0、报告5.4KB），但 agent 把哨兵写成 `M0B-DONE`（大写B），wrapper/watchdog/pipeline 三处大小写敏感 grep 均不认 → 空转 20 次重试 ×~22min（浪费付费模型调用，late 轮次还在自发打磨 §9 无害亦无效），pipeline 03:18 按规停车（stall commit 682e385，机制本身是对的）。
+- 修复：三脚本哨兵检查全部 grep -qi；M0b.job 摘除、halt 清除、wrapper 20972 停止。流水线重启，M0b 将走过闸提交，继续 M1→M4。
+- 教训入 skill：完成信号字符串必须机器可判、检查一律大小写不敏感。
