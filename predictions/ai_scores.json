@@ -712,5 +712,33 @@
     "ai_notes": "Udinese vs Lazio is a tricky fixture; without data, the home win signal is unreliable.",
     "league": "seriea",
     "source": "seriea"
+  },
+  "塞维利亚 vs 瓦伦西亚": {
+    "ai_score": 10,
+    "ai_summary": "All four items lack betting data and rely solely on basic fundamentals with no market confidence indicators.",
+    "ai_notes": "No underdog value, low confidence, weak signals.",
+    "league": "laliga",
+    "source": "laliga"
+  },
+  "柏林联合 vs 沙尔克04": {
+    "ai_score": 10,
+    "ai_summary": "All four items lack betting data and rely solely on basic fundamentals with no market confidence indicators.",
+    "ai_notes": "No underdog value, low confidence, weak signals.",
+    "league": "bundesliga",
+    "source": "bundesliga"
+  },
+  "威尼斯 vs 佛罗伦萨": {
+    "ai_score": 10,
+    "ai_summary": "All four items lack betting data and rely solely on basic fundamentals with no market confidence indicators.",
+    "ai_notes": "No underdog value, low confidence, weak signals.",
+    "league": "seriea",
+    "source": "seriea"
+  },
+  "雷恩 vs 马赛": {
+    "ai_score": 10,
+    "ai_summary": "All four items lack betting data and rely solely on basic fundamentals with no market confidence indicators.",
+    "ai_notes": "No underdog value, low confidence, weak signals.",
+    "league": "ligue1",
+    "source": "ligue1"
   }
 }
