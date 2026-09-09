@@ -90,7 +90,7 @@ Python 兼容下限 **3.11**（GHA 3.11 / coder 机 3.12，勿照抄 welfare 的
 ## 7. 监管流程（队长 SOP）
 
 1. 工单＝`docs/web/WO-Mx.md`（目标/范围/红线/验收标准，OMP 开工前必读）。
-2. OMP 执行：统一走 `/root/omp-resilient.sh <TAG> <cwd> <attempt_timeout_s> <max_tries> <prompt_file> <sentinel>`（**锁定付费模型 LinBlue/DeepSeek-V4-Flash-0.1，用户指令 2026-09-09：抽风不死不休**——哨兵文件未出现 DONE 就自动续跑最多 30 次，每次退避 20s；工单 prompt 必须设计成断点续做+自报完成信号 `<cwd>/docs/web/logs/<TAG>.done`）。日志/尝试计数落 `docs/web/logs/`。
+2. OMP 执行：统一走 `/root/omp-resilient.sh <TAG> <cwd> <attempt_timeout_s> <max_tries> <prompt_file> <sentinel>`（**锁定付费模型 DeepSeek-V4-Flash-0.1（**必须裸名，带前缀会静默挂死**），用户指令 2026-09-09：抽风不死不休**——哨兵文件未出现 DONE 就自动续跑最多 30 次，每次退避 20s；工单 prompt 必须设计成断点续做+自报完成信号 `<cwd>/docs/web/logs/<TAG>.done`）。日志/尝试计数落 `docs/web/logs/`。
 3. 交付＝代码提交到分支 `web-dashboard` + 自测报告（`docs/web/Mx_report.md`：做了什么/自测证据/未尽事项）。
 4. 队长验收：`git diff` 审查（红线、行数纪律、敏感值、时区）→ 跑 pytest + 冒烟脚本 → 结论记 `WORKLOG.md`（PASS/REWORK+理由）。
 5. 全部 PASS 后：合回 main（用户确认后 push GitHub）。

@@ -34,3 +34,7 @@
 - 抽证：§2 顶层 keys 与真实 JSON 逐一对上；predict.py:280/329 引证属实；scripts/core 零 diff；commit 00b5516。
 - 亮点发现（Web 层直接受益）：①now_utc 是 now_bjt 的别名（变量名撒谎），文件名时间戳=BJT、粒度到小时；②文件名不含联赛码→同小时多联赛互相覆盖→store 层必须按联赛分文件或改命名（§9-1）；③样本 generated_at +00:00 与现版 +08:00 矛盾，已挂 §9 疑点（疑似 GHA 旧版直调）。
 - M0b 23:36:53 发车（§5-9+疑点收口），budget 1200s x30，watchdog 已接管 .job。
+
+## 队长文书 (23:45)
+- PLAN §7 SOP 修正：派工模型改裸名 DeepSeek-V4-Flash-0.1（带前缀=静默挂死，附 WORKLOG 事故链接）。
+- WO-M1.md 定稿：骨架+认证 11 交付物、6 红线、A-E 验收点；暂不加 apscheduler（留给 M3）。
