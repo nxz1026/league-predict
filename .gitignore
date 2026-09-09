@@ -38,3 +38,6 @@ docs/web/logs/*.tail
 docs/web/logs/*.killed
 web/.data/
 docs/web/logs/*.log
+docs/web/logs/*.job
+docs/web/logs/*.done
+docs/web/logs/PIPELINE.*
