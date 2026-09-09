@@ -28,3 +28,9 @@
 - 模型铁律再确认：ACP --model 必须裸名 DeepSeek-V4-Flash-0.1；带 LinBlue/ 前缀 = 静默挂死。
 - 监控三层：① OMP 官方 hook（~/.omp/agent/hooks/heartbeat.ts，经 --hook 显式加载——自动发现在 print/acp 无效）→ hb/heartbeat.jsonl 工具级事件流；② /root/omp-watchdog.sh cron 每分钟：wrapper 死了复活 / 日志+心跳双沉默>12min 戳子进程强制重试 / STATUS.md 状态行；暂停某任务 touch logs/<TAG>.paused；③ 可选推送 /root/omp-notify.conf NOTIFY_URL（ntfy 兼容，待用户 topic）。
 - M0a 进度：第 1 节已落盘（predict.py 引证抽查 3/3 属实）；try6 进行中；wrapper 30 次耗尽会被 watchdog 复活续跑。
+
+## M0a 验收 PASS (23:36)
+- SUCCESS try8 21:49 BJT；哨兵 2026-09-09T13:30Z；契约 23.8KB（§1-4）。
+- 抽证：§2 顶层 keys 与真实 JSON 逐一对上；predict.py:280/329 引证属实；scripts/core 零 diff；commit 00b5516。
+- 亮点发现（Web 层直接受益）：①now_utc 是 now_bjt 的别名（变量名撒谎），文件名时间戳=BJT、粒度到小时；②文件名不含联赛码→同小时多联赛互相覆盖→store 层必须按联赛分文件或改命名（§9-1）；③样本 generated_at +00:00 与现版 +08:00 矛盾，已挂 §9 疑点（疑似 GHA 旧版直调）。
+- M0b 23:36:53 发车（§5-9+疑点收口），budget 1200s x30，watchdog 已接管 .job。
