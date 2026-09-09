@@ -44,3 +44,4 @@
 - M0b 实际 01:35 完成（契约 48.9KB、待补0、报告5.4KB），但 agent 把哨兵写成 `M0B-DONE`（大写B），wrapper/watchdog/pipeline 三处大小写敏感 grep 均不认 → 空转 20 次重试 ×~22min（浪费付费模型调用，late 轮次还在自发打磨 §9 无害亦无效），pipeline 03:18 按规停车（stall commit 682e385，机制本身是对的）。
 - 修复：三脚本哨兵检查全部 grep -qi；M0b.job 摘除、halt 清除、wrapper 20972 停止。流水线重启，M0b 将走过闸提交，继续 M1→M4。
 - 教训入 skill：完成信号字符串必须机器可判、检查一律大小写不敏感。
+- 09-10 05:49:08  **M0b GATE-FAIL（原因见 pipeline.log）→ 流水线停车，越权文件已移 /tmp/forensics/M0b** (auto-chain)
