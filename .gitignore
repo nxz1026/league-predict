@@ -32,3 +32,7 @@ Thumbs.db
 # Skill artifacts (optional)
 *.bak
 SKILL.md.bak-*
+docs/web/logs/*_try*.log
+docs/web/logs/*.out
+docs/web/logs/*.tail
+docs/web/logs/*.killed

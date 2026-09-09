@@ -21,3 +21,10 @@
 | 09-09 19:04 | **M0a** | 重派：--acp --model Kimi-K2.7-Code（健康）--timeout 1500，策略改为**先建骨架后增量落盘**，范围收敛到契约 1–4 节（5–9 节留 M0b）。日志 M0a_20260909_190418.log，退出写 M0a.done。套餐确认=Hobby（免费档）⇒ M3 定稿「惰性刷新」为主 | ⏳ 进行中 |
 | 09-09 19:10 | 机制变更 | 用户指令：**锁定 LinBlue/DeepSeek-V4-Flash-0.1（付费模型），抽风不死不休**。落地：`/root/omp-resilient.sh` 派工器（≤30次重试、单试超时、DONE哨兵、断点续做prompt）；SOP 更新进 PLAN §7。弃用 Kimi 试跑（其骨架成果保留），杀进程时踩坑：pkill -f 模式包含自身命令行＝自杀，改用 "[o]mp" 括号式。 | ✅ |
 | 09-09 19:10 | **M0a** | 派工器上线重派（pid 14104，try1/30 开始 19:10:50，单试超时 900s）。完成信号=logs/M0a.done 含 M0a-DONE | ⏳ |
+| 09-09 19:39 | M0a 纠偏 | try1 卡死 26 分钟无产出（omp-call 的 `--timeout` 只保护 chunk 收集循环，不覆盖 `session/prompt` 的阻塞读——模型抽风时看门狗失效，重试机制空转）。修复：`/root/omp-resilient.sh` 外层加 `timeout --kill-after=15 (TMO+90)` 硬杀 + 孤儿 acp 子进程清扫；19:40:27 重新起跑（pid 14885） | ✅ |
+
+## 监控体系上线 (20:30–21:12)
+- 发现 omp-call 两个结构 bug：req() 吞掉全部 session/update（日志恒 0B、永远"[ACP无返回]"）；turn 结束后空转满 timeout 才退。已修（读流+实时 trace 进 stderr→日志）。
+- 模型铁律再确认：ACP --model 必须裸名 DeepSeek-V4-Flash-0.1；带 LinBlue/ 前缀 = 静默挂死。
+- 监控三层：① OMP 官方 hook（~/.omp/agent/hooks/heartbeat.ts，经 --hook 显式加载——自动发现在 print/acp 无效）→ hb/heartbeat.jsonl 工具级事件流；② /root/omp-watchdog.sh cron 每分钟：wrapper 死了复活 / 日志+心跳双沉默>12min 戳子进程强制重试 / STATUS.md 状态行；暂停某任务 touch logs/<TAG>.paused；③ 可选推送 /root/omp-notify.conf NOTIFY_URL（ntfy 兼容，待用户 topic）。
+- M0a 进度：第 1 节已落盘（predict.py 引证抽查 3/3 属实）；try6 进行中；wrapper 30 次耗尽会被 watchdog 复活续跑。
