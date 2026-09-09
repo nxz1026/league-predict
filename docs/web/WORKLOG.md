@@ -38,3 +38,4 @@
 ## 队长文书 (23:45)
 - PLAN §7 SOP 修正：派工模型改裸名 DeepSeek-V4-Flash-0.1（带前缀=静默挂死，附 WORKLOG 事故链接）。
 - WO-M1.md 定稿：骨架+认证 11 交付物、6 红线、A-E 验收点；暂不加 apscheduler（留给 M3）。
+- 09-10 03:18:11  **M0b STALLED 3.5h 未出哨兵 → 流水线停车，待晨间人工处置** (auto-chain)
