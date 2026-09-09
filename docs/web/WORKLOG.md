@@ -19,3 +19,5 @@
 | 09-09 18:47 | M0 | OMP 仍在执行（pid 13197，LinBlue provider 已解析；--timeout 1200s 上限约 18:57 BJT）；已挂 watcher → docs/web/logs/M0.done；到期未完则重派或转队长自办 | ⏳ |
 | 09-09 19:02 | M0 事故 | 首次派工（LinBlue/DeepSeek-V4-Flash-0.1）19 分钟零产出：网关 /v1/models 正常(200/1.6s)，但该模型通道 503 no available channel；GLM-5.3 返回空 content。判读＝默认模型死通道导致 ACP 卡死。已杀进程 | ✅ |
 | 09-09 19:04 | **M0a** | 重派：--acp --model Kimi-K2.7-Code（健康）--timeout 1500，策略改为**先建骨架后增量落盘**，范围收敛到契约 1–4 节（5–9 节留 M0b）。日志 M0a_20260909_190418.log，退出写 M0a.done。套餐确认=Hobby（免费档）⇒ M3 定稿「惰性刷新」为主 | ⏳ 进行中 |
+| 09-09 19:10 | 机制变更 | 用户指令：**锁定 LinBlue/DeepSeek-V4-Flash-0.1（付费模型），抽风不死不休**。落地：`/root/omp-resilient.sh` 派工器（≤30次重试、单试超时、DONE哨兵、断点续做prompt）；SOP 更新进 PLAN §7。弃用 Kimi 试跑（其骨架成果保留），杀进程时踩坑：pkill -f 模式包含自身命令行＝自杀，改用 "[o]mp" 括号式。 | ✅ |
+| 09-09 19:10 | **M0a** | 派工器上线重派（pid 14104，try1/30 开始 19:10:50，单试超时 900s）。完成信号=logs/M0a.done 含 M0a-DONE | ⏳ |
