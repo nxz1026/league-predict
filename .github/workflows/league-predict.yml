@@ -1,8 +1,8 @@
 name: League Predict
 
 on:
-  schedule:
-    - cron: '33 13 * * *'  # 21:33 BJT (13:33 UTC)
+  # 2026-09-10: GHA 自动 cron 下线。每日预测改由 FastAPI Cloud 上的 web-dashboard 接管
+  # （https://league-predict.fastapicloud.dev，手动触发 + 懒刷新）。保留 workflow_dispatch 供应急手动跑。
   workflow_dispatch:
 
 jobs:
