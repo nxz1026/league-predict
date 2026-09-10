@@ -50,6 +50,28 @@ CORS_ORIGINS: list[str] = [
 # 默认落在 web/.data/（gitignore 已排除），绝不落入引擎数据目录。
 SESSION_DB_PATH: str = os.getenv("SESSION_DB_PATH", str(BASE_DIR / "web" / ".data" / "sessions.db"))
 
+# --- 任务触发（M3：jobs.py / 配额守卫）----------------------------------
+# 引擎子进程超时（秒），到点必杀。
+PREDICT_TIMEOUT_SECONDS: int = int(os.getenv("PREDICT_TIMEOUT_SECONDS", "600"))
+# 每日预测触发上限（BJT 日口径；默认 80，给手动操作留余量）。
+DAILY_TRIGGER_LIMIT: int = int(os.getenv("PREDICT_DAILY_LIMIT", "80"))
+# 同一天惰性自动刷新至多一次（predictions/today 缺数据时兜底）。
+AUTO_REFRESH_DAILY: bool = os.getenv("AUTO_REFRESH_DAILY", "1") in ("1", "true", "True")
+
+# --- AI 扩展（M3：ai.py，契约 §5）---------------------------------------
+# AI 端点响应限时（秒）；纯本地读文件，超时仅作防御。
+AI_RESPONSE_TIMEOUT: int = int(os.getenv("AI_RESPONSE_TIMEOUT", "8"))
+
+# --- apscheduler 可选件（默认关，避免 Hobby 平台常驻 cron 消耗配额）-----
+ENABLE_CRON: bool = os.getenv("ENABLE_CRON", "false") in ("1", "true", "True")
+CRON_HOUR: int = int(os.getenv("CRON_HOUR", "9"))  # BJT 小时，每日一次
+
+# --- M3 数据目录（web/.data/ 下，gitignore 已排除）-----------------------
+DATA_DIR: Path = BASE_DIR / "web" / ".data"
+JOBS_DIR: Path = Path(os.getenv("JOBS_DIR", str(DATA_DIR / "jobs")))
+JOBS_LOCK_FILE: Path = Path(os.getenv("JOBS_LOCK_FILE", str(DATA_DIR / "jobs.lock")))
+QUOTA_FILE: Path = Path(os.getenv("QUOTA_FILE", str(DATA_DIR / "quota.json")))
+
 
 def env_summary() -> dict:
     """暴露给 /health 的无敏感摘要（不含账号/密码）。"""
@@ -62,4 +84,8 @@ def env_summary() -> dict:
         "use_https": USE_HTTPS,
         "cors_origins": CORS_ORIGINS,
         "session_db_path": SESSION_DB_PATH,
+        "predict_timeout_seconds": PREDICT_TIMEOUT_SECONDS,
+        "daily_trigger_limit": DAILY_TRIGGER_LIMIT,
+        "enable_cron": ENABLE_CRON,
+        "cron_hour": CRON_HOUR,
     }

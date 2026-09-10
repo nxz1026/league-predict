@@ -1,16 +1,35 @@
 """web.routers.sources — 上游数据源状态（静态配置，require_auth）。
 
 GET /api/v1/sources/status
-返回：配置了哪些上游、各上游 env 键是否存在（绝不回传值）、联赛默认源映射。
+返回：配置了哪些上游、各上游 env 键是否存在（绝不回传值）、联赛默认源映射、
+当日预测配额用量与最近任务状态（M3：调度概览收进状态面）。
 """
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
 
 from web.auth import require_auth
+from web.services import jobs
 from web.services.datasource import SOURCE_KEYS, LEAGUES, DEFAULT_SOURCE
 
 router = APIRouter(prefix="/api/v1", tags=["sources"])
+
+
+def _recent_job_stats() -> dict:
+    rows = jobs.list_jobs(limit=50)
+    counts: dict[str, int] = {}
+    last: dict | None = None
+    for row in rows:
+        counts[row.get("status", "unknown")] = counts.get(row.get("status", "unknown"), 0) + 1
+        if last is None:
+            last = {
+                "id": row.get("id"),
+                "status": row.get("status"),
+                "trigger": row.get("trigger"),
+                "created_at": row.get("created_at"),
+                "finished_at": row.get("finished_at"),
+            }
+    return {"by_status": counts, "last": last}
 
 
 @router.get("/sources/status")
@@ -31,5 +50,11 @@ def sources_status(request: Request,
         "leagues": {
             league: {"name": info["name"], "data_source": info["data_source"]}
             for league, info in LEAGUES.items()
+        },
+        # M3：调度概览（配额 + 活跃/最近任务）。jobs 模块纯文件操作，零引擎依赖。
+        "jobs": {
+            "quota": jobs.quota_usage(),
+            "active": jobs.active_job(),
+            "recent": _recent_job_stats(),
         },
     }

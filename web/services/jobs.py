@@ -1,0 +1,315 @@
+"""web.services.jobs — 引擎子进程任务状态机 + 当日配额守卫（M3）。
+
+规格（WO-M3）：
+- 子进程跑 scripts/predict.py CLI（cwd=仓库根、sys.executable、独立 env、输出重定向 jobs/<id>.log）；
+- 文件锁 jobs.lock 保证同时只有一个生产者；默认超时 600s 到点必杀；
+- 状态机 queued/running/done/failed/timeout 写 jobs/<id>.json；
+- 配额守卫 quota.json：BJT 日计数，跨日自动重置；无预算 → 429 + 原因。
+
+测试安全网：本模块绝不 import scripts/ 引擎代码；子进程一律经 mock 的
+ spawn 逻辑消费（测试 monkeypatch _Popen），运行时才真实执行。
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import subprocess
+import sys
+import time
+import uuid
+from contextlib import contextmanager
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+from web import config
+
+BJT = ZoneInfo("Asia/Shanghai")
+STATUS_QUEUED = "queued"
+STATUS_RUNNING = "running"
+STATUS_DONE = "done"
+STATUS_FAILED = "failed"
+STATUS_TIMEOUT = "timeout"
+TERMINAL = frozenset({STATUS_DONE, STATUS_FAILED, STATUS_TIMEOUT})
+
+logger = logging.getLogger("web.jobs")
+
+
+# --- 路径/工具 ------------------------------------------------------------
+
+def _now_epoch() -> float:
+    return time.time()
+
+
+def _bjt_day_key() -> str:
+    return datetime.now(BJT).strftime("%Y-%m-%d")
+
+
+def job_id() -> str:
+    return uuid.uuid4().hex[:12]
+
+
+def _job_file(jid: str) -> Path:
+    return config.JOBS_DIR / f"{jid}.json"
+
+
+def _log_file(jid: str) -> Path:
+    return config.JOBS_DIR / f"{jid}.log"
+
+
+# --- 配额守卫（BJT 日口径）------------------------------------------------
+
+def load_quota() -> dict:
+    """读 quota.json；坏文件/缺目录 → 空计数（幂等重置）。"""
+    if not config.QUOTA_FILE.is_file():
+        return {"day": _bjt_day_key(), "count": 0}
+    try:
+        with open(config.QUOTA_FILE, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        logger.warning("坏配额文件，重置: %s", config.QUOTA_FILE)
+        return {"day": _bjt_day_key(), "count": 0}
+    if not isinstance(data, dict):
+        return {"day": _bjt_day_key(), "count": 0}
+    return data
+
+
+def save_quota(data: dict) -> None:
+    config.QUOTA_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = config.QUOTA_FILE.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False)
+    os.replace(tmp, config.QUOTA_FILE)
+
+
+def quota_usage() -> dict:
+    """当日配额用量（跨 BJT 日自动重置）。"""
+    data = load_quota()
+    today = _bjt_day_key()
+    if data.get("day") != today:
+        data = {"day": today, "count": 0}
+    return {"day": today, "used": int(data.get("count", 0)), "limit": config.DAILY_TRIGGER_LIMIT}
+
+
+def quota_consume() -> bool:
+    """原子消费一次配额（读-改-写带文件锁）；超限返回 False。"""
+    today = _bjt_day_key()
+    with _exclusive_lock(config.QUOTA_FILE.with_suffix(".lock"), timeout=5):
+        data = load_quota()
+        if data.get("day") != today:
+            data = {"day": today, "count": 0}
+        count = int(data.get("count", 0))
+        if count >= config.DAILY_TRIGGER_LIMIT:
+            return False
+        data["count"] = count + 1
+        save_quota(data)
+        return True
+
+
+# --- 文件锁 ---------------------------------------------------------------
+
+class LockTimeout(Exception):
+    pass
+
+
+@contextmanager
+def _exclusive_lock(lock_path: Path, timeout: float = 10.0):
+    """跨进程排他锁（O_CREAT|O_EXCL + stale 检测）；同进程可重入由调用方保证。"""
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, str(os.getpid()).encode())
+            os.close(fd)
+            break
+        except FileExistsError:
+            _drop_stale_lock(lock_path)
+            if time.monotonic() >= deadline:
+                raise LockTimeout(f"lock busy: {lock_path}")
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        try:
+            os.unlink(lock_path)
+        except OSError:
+            pass
+
+
+def _drop_stale_lock(lock_path: Path) -> None:
+    """锁文件持 PID 超过 10 分钟视为 stale（进程被杀残留），删除。"""
+    try:
+        pid = int(lock_path.read_text().strip() or "0")
+    except (OSError, ValueError):
+        return
+    if pid <= 0:
+        return
+    try:
+        os.kill(pid, 0)
+        alive = True
+    except ProcessLookupError:
+        alive = False
+    except PermissionError:
+        alive = True
+    stale = not alive and (time.time() - lock_path.stat().st_mtime > 120)
+    if stale:
+        logger.warning("删除 stale 锁: %s", lock_path)
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass
+
+
+# --- 状态机读/写 ----------------------------------------------------------
+
+def _read_job(jid: str) -> dict | None:
+    path = _job_file(jid)
+    if not path.is_file():
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _write_job(jid: str, data: dict) -> None:
+    config.JOBS_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = _job_file(jid).with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False)
+    os.replace(tmp, _job_file(jid))
+
+
+def create_job(args: list[str], trigger: str = "manual") -> dict:
+    """登记 queued 任务（写状态文件），返回 job 记录。"""
+    jid = job_id()
+    now = _now_epoch()
+    job = {
+        "id": jid,
+        "status": STATUS_QUEUED,
+        "trigger": trigger,
+        "args": args,
+        "created_at": now,
+        "started_at": None,
+        "finished_at": None,
+        "exit_code": None,
+        "timeout": config.PREDICT_TIMEOUT_SECONDS,
+    }
+    _write_job(jid, job)
+    return job
+
+
+def get_job(jid: str) -> dict | None:
+    return _read_job(jid)
+
+
+def list_jobs(limit: int = 20) -> list[dict]:
+    if not config.JOBS_DIR.is_dir():
+        return []
+    rows = []
+    for path in sorted(config.JOBS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)[:limit]:
+        data = _read_job(path.name.replace(".json", ""))
+        if data:
+            rows.append(data)
+    return rows
+
+
+def _spin_state(jid: str, status: str, **extra) -> dict:
+    """带锁的状态迁移（同进程并发安全；跨进程由文件锁兜底）。"""
+    with _exclusive_lock(_job_file(jid).with_suffix(".state.lock"), timeout=5):
+        job = _read_job(jid) or {
+            "id": jid, "status": STATUS_QUEUED, "args": [],
+            "created_at": _now_epoch(), "started_at": None, "finished_at": None,
+            "exit_code": None, "timeout": config.PREDICT_TIMEOUT_SECONDS,
+        }
+        job["status"] = status
+        job.update(extra)
+        _write_job(jid, job)
+        return job
+
+
+# --- 子进程执行 -----------------------------------------------------------
+
+def _build_env() -> dict:
+    """独立 env：继承 os.environ（生产 key 在此流入引擎），可被测试注入覆盖。"""
+    return dict(os.environ)
+
+
+def _build_cmd(args: list[str]) -> list[str]:
+    """argv 白名单外（校验在 router 层完成），此处仅拼 CLI。"""
+    return [sys.executable, str(config.BASE_DIR / "scripts" / "predict.py"), *args]
+
+
+def run_job(jid: str) -> None:
+    """执行一个 queued 任务到终态（同步；调用方负责不阻塞请求线程）。"""
+    with _exclusive_lock(config.JOBS_LOCK_FILE, timeout=10):
+        job = _read_job(jid)
+        if job is None or job.get("status") not in (STATUS_QUEUED, STATUS_RUNNING):
+            return
+        _spin_state(jid, STATUS_RUNNING, started_at=_now_epoch())
+        cmd = _build_cmd(list(job.get("args", [])))
+        log_path = _log_file(jid)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        started = _now_epoch()
+        try:
+            proc = subprocess.Popen(
+                cmd, cwd=str(config.BASE_DIR), env=_build_env(),
+                stdout=open(log_path, "wb"), stderr=subprocess.STDOUT, text=False,
+            )
+        except OSError as exc:
+            _spin_state(jid, STATUS_FAILED, finished_at=_now_epoch(),
+                        exit_code=-1, error=f"spawn failed: {exc}")
+            return
+        try:
+            code = proc.wait(timeout=config.PREDICT_TIMEOUT_SECONDS)
+            _spin_state(jid, STATUS_DONE if code == 0 else STATUS_FAILED,
+                        finished_at=_now_epoch(), exit_code=code)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            _spin_state(jid, STATUS_TIMEOUT, finished_at=_now_epoch(),
+                        exit_code=None, error="timeout killed")
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+            logger.info("job %s done in %.1fs", jid, _now_epoch() - started)
+
+
+def read_job_log(jid: str, tail: int = 200) -> str:
+    path = _log_file(jid)
+    if not path.is_file():
+        return ""
+    try:
+        data = path.read_bytes().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+    return "\n".join(data.splitlines()[-tail:])
+
+
+def active_job() -> dict | None:
+    """当前 running/queued 的任务（有则拒绝并发新任务）。"""
+    for row in list_jobs(limit=100):
+        if row.get("status") not in TERMINAL:
+            return row
+    return None
+
+
+def trigger_predict(args: list[str], trigger: str = "manual") -> tuple[dict | None, str | None]:
+    """提交一个新任务：配额守卫 + 并发守卫。返回 (job 或 None, 拒绝原因)。
+
+    契约：任务提交即占配额；并发有新任务时返回 (None, "already_running")。
+    """
+    if not quota_consume():
+        return None, "quota_exhausted"
+    existing = active_job()
+    if existing is not None:
+        return existing, "already_running"
+    job = create_job(args, trigger=trigger)
+    return job, None
