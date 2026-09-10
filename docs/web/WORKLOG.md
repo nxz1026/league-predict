@@ -92,3 +92,14 @@
 - 若证实 OMP 非流式：下一招 streamify（shim 把请求改 stream:true 发出，SSE 重组成完整
   JSON 回给 OMP——对客户端完全透明）。
 - try16 阵亡(14:21 rc=0 挂死指纹)、try17 裸奔老配置收尾中；try18 起带盾。
+
+## 14:33 BJT — ⚰️ LinBlue 余额耗尽（goal 停机条件命中，全线暂停）
+- 死证：M2 try1-4（新wrapper计数）每发 10-20 秒杀，ACP 明文
+  「402 Add credits to continue, or switch to a free model」（见 logs/M2_try2..5，4/4 命中）。
+- 鉴别：517B/40token 小请求仍 200/5.5s —— relay 活着，是**账户余额撑不起 38k token
+  业务上下文**。此前 14:00-14:20 的"降级窗口"524 挂起疑为欠费前夜的限流表现（存疑不追）。
+- 处置：touch M2.paused + wrapper/子进程收摊（3379 未动）；垫片+watchdog v2+gw_probe 全套
+  基础设施留存，充值即插即用：rm docs/web/logs/M2.paused && 重启 wrapper（垫片在位时
+  gw_probe 走 shim 已连过 4 拍，闸门自开）。
+- 账面：M0b/M1 已交付；M2 差五红（简报与弹药已上膛，tests/web 43 用例中 38 绿）。
+- 用户预言应验：「不用消费监控，用完自然就报错了」—— 确实自然报错，零监控成本。
