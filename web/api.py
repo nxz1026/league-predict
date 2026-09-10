@@ -18,6 +18,8 @@ from fastapi.staticfiles import StaticFiles
 from web import config
 from web import errors
 from web.auth import router as auth_router
+from web.routers.predictions import router as predictions_router
+from web.routers.sources import router as sources_router
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 APP_TITLE = "league-predict Web Dashboard"
@@ -62,6 +64,8 @@ def create_app() -> FastAPI:
         return RedirectResponse(url="/static/login.html", status_code=302)
 
     app.include_router(auth_router)
+    app.include_router(predictions_router)
+    app.include_router(sources_router)
     return app
 
 

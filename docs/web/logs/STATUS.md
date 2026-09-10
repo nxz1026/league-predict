@@ -1,60 +1,60 @@
-09-10 09:40 | M1 wrapper=up lag=599s hb=599s last=[try 17/20 start=20260910_092921]
-09-10 09:41 | M1 wrapper=up lag=659s hb=659s last=[try 17/20 start=20260910_092921]
-09-10 09:42 | M1 wrapper=up lag=719s hb=719s last=[try 17/20 start=20260910_092921]
-09-10 09:43 | M1 wrapper=up lag=779s hb=779s last=[try 17/20 start=20260910_092921]
-09-10 09:44 | M1 wrapper=up lag=6s hb=6s last=[try 18/20 start=20260910_094321]
-09-10 09:45 | M1 wrapper=up lag=66s hb=66s last=[try 18/20 start=20260910_094321]
-09-10 09:46 | M1 wrapper=up lag=126s hb=126s last=[try 18/20 start=20260910_094321]
-09-10 09:47 | M1 wrapper=up lag=186s hb=186s last=[try 18/20 start=20260910_094321]
-09-10 09:48 | M1 wrapper=up lag=246s hb=246s last=[try 18/20 start=20260910_094321]
-09-10 09:49 | M1 wrapper=up lag=306s hb=306s last=[try 18/20 start=20260910_094321]
-09-10 09:50 | M1 wrapper=up lag=366s hb=366s last=[try 18/20 start=20260910_094321]
-09-10 09:51 | M1 wrapper=up lag=427s hb=427s last=[try 18/20 start=20260910_094321]
-09-10 09:52 | M1 wrapper=up lag=486s hb=486s last=[try 18/20 start=20260910_094321]
-09-10 09:53 | M1 wrapper=up lag=546s hb=546s last=[try 18/20 start=20260910_094321]
-09-10 09:54 | M1 wrapper=up lag=606s hb=606s last=[try 18/20 start=20260910_094321]
-09-10 09:55 | M1 wrapper=up lag=666s hb=666s last=[try 18/20 start=20260910_094321]
-09-10 09:56 | M1 wrapper=up lag=726s hb=726s last=[try 18/20 start=20260910_094321]
-09-10 09:57 | M1 wrapper=up lag=20s hb=20s last=[try 19/20 start=20260910_095621]
-09-10 09:58 | M1 wrapper=up lag=80s hb=80s last=[try 19/20 start=20260910_095621]
-09-10 09:59 | M1 wrapper=up lag=140s hb=140s last=[try 19/20 start=20260910_095621]
-09-10 10:00 | M1 wrapper=up lag=200s hb=200s last=[try 19/20 start=20260910_095621]
-09-10 10:01 | M1 wrapper=up lag=260s hb=260s last=[try 19/20 start=20260910_095621]
-09-10 10:02 | M1 wrapper=up lag=320s hb=320s last=[try 19/20 start=20260910_095621]
-09-10 10:03 | M1 wrapper=up lag=380s hb=380s last=[try 19/20 start=20260910_095621]
-09-10 10:04 | M1 wrapper=up lag=440s hb=440s last=[try 19/20 start=20260910_095621]
-09-10 10:05 | M1 wrapper=up lag=501s hb=501s last=[try 19/20 start=20260910_095621]
-09-10 10:06 | M1 wrapper=up lag=560s hb=560s last=[try 19/20 start=20260910_095621]
-09-10 10:07 | M1 wrapper=up lag=620s hb=620s last=[try 19/20 start=20260910_095621]
-09-10 10:08 | M1 wrapper=up lag=680s hb=680s last=[try 19/20 start=20260910_095621]
-09-10 10:09 | M1 wrapper=up lag=740s hb=740s last=[try 19/20 start=20260910_095621]
-09-10 10:10 | M1 wrapper=up lag=9s hb=9s last=[try 20/20 start=20260910_100921]
-09-10 10:11 | M1 wrapper=up lag=69s hb=69s last=[try 20/20 start=20260910_100921]
-09-10 10:12 | M1 wrapper=up lag=129s hb=129s last=[try 20/20 start=20260910_100921]
-09-10 10:13 | M1 wrapper=up lag=189s hb=189s last=[try 20/20 start=20260910_100921]
-09-10 10:14 | M1 wrapper=up lag=249s hb=249s last=[try 20/20 start=20260910_100921]
-09-10 10:15 | M1 wrapper=up lag=309s hb=309s last=[try 20/20 start=20260910_100921]
-09-10 10:16 | M1 wrapper=up lag=369s hb=369s last=[try 20/20 start=20260910_100921]
-09-10 10:17 | M1 wrapper=up lag=429s hb=429s last=[try 20/20 start=20260910_100921]
-09-10 10:18 | M1 wrapper=up lag=489s hb=489s last=[try 20/20 start=20260910_100921]
-09-10 10:19 | M1 wrapper=up lag=549s hb=549s last=[try 20/20 start=20260910_100921]
-09-10 10:20 | M1 wrapper=up lag=609s hb=609s last=[try 20/20 start=20260910_100921]
-09-10 10:21 | M1 wrapper=up lag=669s hb=669s last=[try 20/20 start=20260910_100921]
-09-10 10:22 | M1 wrapper=up lag=729s hb=729s last=[try 20/20 start=20260910_100921]
-09-10 10:23 | M1 wrapper=up lag=60s hb=60s last=[try 1/20 start=20260910_102301]
-09-10 10:24 | M1 wrapper=up lag=46s hb=46s last=[try 1/20 start=20260910_102301]
-09-10 10:25 | M1 wrapper=up lag=106s hb=106s last=[try 1/20 start=20260910_102301]
-09-10 10:26 | M1 wrapper=up lag=166s hb=166s last=[try 1/20 start=20260910_102301]
-09-10 10:27 | M1 wrapper=up lag=226s hb=226s last=[try 1/20 start=20260910_102301]
-09-10 10:28 | M1 wrapper=up lag=286s hb=286s last=[try 1/20 start=20260910_102301]
-09-10 10:29 | M1 wrapper=up lag=346s hb=346s last=[try 1/20 start=20260910_102301]
-09-10 10:30 | M1 wrapper=up lag=406s hb=406s last=[try 1/20 start=20260910_102301]
-09-10 10:31 | M1 wrapper=up lag=466s hb=466s last=[try 1/20 start=20260910_102301]
-09-10 10:32 | M1 wrapper=up lag=526s hb=526s last=[try 1/20 start=20260910_102301]
-09-10 10:33 | M1 wrapper=up lag=586s hb=586s last=[try 1/20 start=20260910_102301]
-09-10 10:34 | M1 wrapper=up lag=646s hb=646s last=[try 1/20 start=20260910_102301]
-09-10 10:35 | M1 wrapper=up lag=5s hb=1s last=[try 2/20 start=20260910_103451]
-09-10 10:36 | M1 wrapper=up lag=6s hb=6s last=[try 2 rc=0 end=10:35:55]
-09-10 10:37 | M1 wrapper=up lag=27s hb=27s last=[try 3/20 start=20260910_103615]
-09-10 10:38 | M1 wrapper=up lag=87s hb=87s last=[try 3/20 start=20260910_103615]
-09-10 10:39 | M1 wrapper=up lag=147s hb=147s last=[try 3/20 start=20260910_103615]
+09-10 19:18 | M2 | DEAD | log=704s hb=704s | try 2/20 start=20260910_190525
+09-10 19:18 | M2 | DEAD | log=705s hb=705s | try 2/20 start=20260910_190525
+09-10 19:19 | M2 | DEAD | log=765s hb=765s | try 2/20 start=20260910_190525
+09-10 19:20 | M2 | up | log=56s hb=56s | try 1/20 start=20260910_192003
+09-10 19:20 | M2 | up | log=-12s hb=46s | try 1/20 start=20260910_192003
+09-10 19:21 | M2 | up | log=-9s hb=-9s | try 2/20 start=20260910_192053
+09-10 19:22 | M2 | up | log=51s hb=51s | try 2/20 start=20260910_192053
+09-10 19:23 | M2 | up | log=111s hb=111s | try 2/20 start=20260910_192053
+09-10 19:24 | M2 | up | log=171s hb=171s | try 2/20 start=20260910_192053
+09-10 19:25 | M2 | up | log=231s hb=231s | try 2/20 start=20260910_192053
+09-10 19:26 | M2 | up | log=291s hb=291s | try 2/20 start=20260910_192053
+09-10 19:27 | M2 | up | log=351s hb=351s | try 2/20 start=20260910_192053
+09-10 19:28 | M2 | up | log=411s hb=411s | try 2/20 start=20260910_192053
+09-10 19:29 | M2 | up | log=471s hb=471s | try 2/20 start=20260910_192053
+09-10 19:30 | M2 | up | log=531s hb=531s | try 2/20 start=20260910_192053
+09-10 19:31 | M2 | up | log=591s hb=591s | try 2/20 start=20260910_192053
+09-10 19:32 | M2 | up | log=651s hb=651s | try 2/20 start=20260910_192053
+09-10 19:33 | M2 | up | log=711s hb=711s | try 2/20 start=20260910_192053
+09-10 19:34 | M2 | up | log=771s hb=771s | try 2/20 start=20260910_192053
+09-10 19:35 | M2 | up | log=18s hb=18s | try 3/20 start=20260910_193426
+09-10 19:36 | M2 | up | log=78s hb=78s | try 3/20 start=20260910_193426
+09-10 19:37 | M2 | up | log=138s hb=138s | try 3/20 start=20260910_193426
+09-10 19:38 | M2 | up | log=198s hb=198s | try 3/20 start=20260910_193426
+09-10 19:39 | M2 | up | log=0s hb=0s | try 3/20 start=20260910_193426
+09-10 19:40 | M2 | up | log=24s hb=24s | try 1/20 start=20260910_193904
+09-10 19:41 | M2 | up | log=84s hb=84s | try 1/20 start=20260910_193904
+09-10 19:42 | M2 | up | log=144s hb=144s | try 1/20 start=20260910_193904
+09-10 19:43 | M2 | up | log=204s hb=204s | try 1/20 start=20260910_193904
+09-10 19:44 | M2 | up | log=264s hb=264s | try 1/20 start=20260910_193904
+09-10 19:45 | M2 | up | log=324s hb=324s | try 1/20 start=20260910_193904
+09-10 19:46 | M2 | up | log=384s hb=384s | try 1/20 start=20260910_193904
+09-10 19:47 | M2 | up | log=444s hb=444s | try 1/20 start=20260910_193904
+09-10 19:48 | M2 | up | log=504s hb=504s | try 1/20 start=20260910_193904
+09-10 19:49 | M2 | up | log=564s hb=564s | try 1/20 start=20260910_193904
+09-10 19:50 | M2 | up | log=624s hb=624s | try 1/20 start=20260910_193904
+09-10 19:51 | M2 | up | log=684s hb=684s | try 1/20 start=20260910_193904
+09-10 19:52 | M2 | up | log=744s hb=744s | try 1/20 start=20260910_193904
+09-10 19:53 | M2 | up | log=1s hb=1s | try 2/20 start=20260910_195243
+09-10 19:54 | M2 | up | log=61s hb=61s | try 2/20 start=20260910_195243
+09-10 19:55 | M2 | up | log=121s hb=121s | try 2/20 start=20260910_195243
+09-10 19:56 | M2 | up | log=181s hb=181s | try 2/20 start=20260910_195243
+09-10 19:57 | M2 | up | log=241s hb=241s | try 2/20 start=20260910_195243
+09-10 19:58 | M2 | up | log=301s hb=301s | try 2/20 start=20260910_195243
+09-10 19:59 | M2 | up | log=361s hb=361s | try 2/20 start=20260910_195243
+09-10 20:00 | M2 | up | log=421s hb=421s | try 2/20 start=20260910_195243
+09-10 20:01 | M2 | up | log=481s hb=481s | try 2/20 start=20260910_195243
+09-10 20:02 | M2 | up | log=541s hb=541s | try 2/20 start=20260910_195243
+09-10 20:03 | M2 | up | log=601s hb=601s | try 2/20 start=20260910_195243
+09-10 20:04 | M2 | up | log=661s hb=661s | try 2/20 start=20260910_195243
+09-10 20:05 | M2 | up | log=721s hb=721s | try 2/20 start=20260910_195243
+09-10 20:06 | M2 | up | log=14s hb=14s | try 3/20 start=20260910_200529
+09-10 20:07 | M2 | up | log=12s hb=12s | try 3 rc=0 end=20:06:49
+09-10 20:08 | M2 | up | log=-24s hb=-24s | try 5/20 start=20260910_200820
+09-10 20:09 | M2 | up | log=-23s hb=-3s | try 6/20 start=20260910_200924
+09-10 20:10 | M2 | up | log=-8s hb=-8s | try 6/20 start=20260910_200924
+09-10 20:11 | M2 | up | log=0s hb=0s | try 6/20 start=20260910_200924
+09-10 20:12 | M2 | up | log=50s hb=50s | try 6/20 start=20260910_200924
+09-10 20:13 | M2 | up | log=7s hb=7s | try 6 rc=0 end=20:12:54
+09-10 20:14 | M2 | up | log=-3s hb=5s | try 7/20 start=20260910_201314
+09-10 20:15 | M2 | up | log=13s hb=13s | try 7/20 start=20260910_201314
