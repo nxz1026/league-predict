@@ -77,8 +77,8 @@ def create_app() -> FastAPI:
         token = request.cookies.get(COOKIE_NAME, "")
         if not token or not session_store.validate_token(token):
             return RedirectResponse(url="/login", status_code=302)
-        # M1 无业务页；已登录访问 / 也先指向 /login 骨架（M4 换 index.html）。
-        return RedirectResponse(url="/login", status_code=302)
+        # M4：已登录进入单文件 SPA。
+        return RedirectResponse(url="/static/index.html", status_code=302)
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
