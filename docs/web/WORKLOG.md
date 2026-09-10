@@ -113,3 +113,31 @@
   （欠费降权或额度封顶，机制存疑但复现率 100%）。
 - 结论：goal 停机条件成立（业务弹药耗尽）。M2 维持 paused + 现场封存；
   小请求幸存说明这不是临时窗口，充值/提额前重启派工=空烧。
+
+## 2026-09-10 20:20 BJT —— M2 收口：真凶不是网关，是权限黑洞（队长自纠全过程）
+
+**结果**：M2 SUCCESS（try7 @20:15:51 UTC 哨兵），pytest 43/43 绿，uvicorn 真机烟测
+（/api/v1/predictions 200 / 坏日期 400 / 未登录 401），验收提交 `4d8d89e`。
+
+**根因链（三条，全部今天实锤）**：
+1. **网关 100s 长生成割线**（18:3x 发现）：LinBlue relay 对超 ~100s 的生成切断。
+   V4F 高 effort 千字 thinking 挤占预算 → toolCall 参数流不全 → OMP 不发执行。
+   处置：config.yml maxEffort high→low（19:36）——生效后 toolCall 30s 内必达。
+2. **bash 权限黑洞 300s**（19:56 对照实验实锤）：omp-call 客户端对
+   session/request_permission 不响应，OMP 300s 超时后才兜底执行。上午一切"慢"、
+   下午一切"死"皆源于此（edit/read 类工具不触发权限，故文件编辑一直正常）。
+3. **队长自伤**（20:0x）：我给 omp-call 打 AUTO-APPROVE 补丁时按 Zed 旧 schema 回
+   `{"outcomeSelected":...}`，OMP 回 `unknown option ID: undefined` → fail-closed，
+   比 300s 黑洞更糟。20:14 抓 PERM-RAW 原始 options 对照后改为顶层
+   `{"outcome":"selected","optionId":...}`（双 schema 并发），一发即通。
+   教训：**协议响应格式必须以对方实际 option/字段样本为准，先抓 raw 再写 handler**。
+
+**基础设施变更**（全部队长侧，不触业务码）：
+- omp-call：request_permission 自动 allow_once + failed 状态全量 dump + PERM-RAW 探针日志
+  （备份 omp-call.bak-preautoapprove）。
+- m2_finalize.sh：客观条件盖章（守卫 grep + 43 passed 必过才写 M2.done）——v10 交卷闭环成立。
+- 撤销待办：PERM-RAW/failed dump 属临时探针，M4 收口后降为 trace-only 或删除。
+
+**遗留澄清**：17:52 后 "agent 全灭" 假象 = 黑洞+割线叠加；LinBlue 全程计费正常，
+"额度耗尽" 结论维持撤销。11:53:04 predictions.py 那次 mtime 写入未能归因（无内容变化），
+记录在案不追。
