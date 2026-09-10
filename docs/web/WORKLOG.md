@@ -82,3 +82,13 @@
   try 预算从此只在网关健康时消耗。M1 成品劫持案的 gate 修复不变。
 - 停车线 14:14:53 到点无碍：哨兵可后补，队长人工过闸（goal 值守中）。
 - 09-10 14:14:59  **M2 STALLED 3.5h 未出哨兵 → 流水线停车，待晨间人工处置** (auto-chain)
+
+## 14:28 BJT — 重试垫片 retry_proxy 上线（goal 值守第二战）
+- 观察：同 payload 时快(2.5s)时慢(40s黑洞)，且 SSE-toolhist 过 / JSON-toolhist 挂的不对称
+  → 主嫌 = relay 对非流式工具历史请求选择性黑洞（OMP 疑似非流式，待 try18 嗅探证实）。
+- 队长基础设施 /root/retry_proxy.py:8799：透明转发+首字节前静默重试（15×22s/3s退避），
+  SSE 首块后即转发；models.yml LinBlue baseUrl→shim（原值备份 .bak-preshim）；
+  watchdog 加垫片保活；gw_probe 改走 shim（探针与派工同路，绿=真绿）。
+- 若证实 OMP 非流式：下一招 streamify（shim 把请求改 stream:true 发出，SSE 重组成完整
+  JSON 回给 OMP——对客户端完全透明）。
+- try16 阵亡(14:21 rc=0 挂死指纹)、try17 裸奔老配置收尾中；try18 起带盾。
