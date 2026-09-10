@@ -103,3 +103,13 @@
   gw_probe 走 shim 已连过 4 拍，闸门自开）。
 - 账面：M0b/M1 已交付；M2 差五红（简报与弹药已上膛，tests/web 43 用例中 38 绿）。
 - 用户预言应验：「不用消费监控，用完自然就报错了」—— 确实自然报错，零监控成本。
+
+## 14:55 BJT — 死因复核（修正上文：402 系 OMP 内部 kilo 维护路由，非 LinBlue；判决不变）
+- 验尸澄清：try6/7 秒杀的 "402 Add credits" 来自 OMP agent_end maintenance 路由（provider=kilo,
+  claude-opus-4.8，models.yml 无此键=内置兜底）——LinBlue 从未亲口报 402。
+- 但业务通道实弹判决：62k-token（≈OMP turn2 体量）非流式+工具历史 2/2 全灭
+  （HTTP 554/109s、524/107s，空体；/root/big38k_test.py）；同日 13k/1.2k/40token 能过。
+  ACP 全天 turn2 挂死 30+ 发同属此症。→ LinBlue 对本账户大体量请求已失去服务能力
+  （欠费降权或额度封顶，机制存疑但复现率 100%）。
+- 结论：goal 停机条件成立（业务弹药耗尽）。M2 维持 paused + 现场封存；
+  小请求幸存说明这不是临时窗口，充值/提额前重启派工=空烧。
