@@ -141,3 +141,29 @@
 **遗留澄清**：17:52 后 "agent 全灭" 假象 = 黑洞+割线叠加；LinBlue 全程计费正常，
 "额度耗尽" 结论维持撤销。11:53:04 predictions.py 那次 mtime 写入未能归因（无内容变化），
 记录在案不追。
+
+## 2026-09-10 23:xx BJT —— M5 上线成功：https://league-predict.fastapicloud.dev
+
+**平台事实（全部实测，写死为教条）**：
+1. deploy token（fcd_）走 `FASTAPI_CLOUD_TOKEN`+`FASTAPI_CLOUD_APP_ID`，deploy 命令免设备码；
+   但 **env 管理与 logs/stream 仅 user token**（API 层 401/拒绝，REST 换路径也无效）。
+2. 打包上传**屏蔽点文件 .env**（CLI 默认 ignore 规则；`.fastapicloudignore` 的 `!.env` 实测无效）。
+3. 运行时导入按 `[tool.fastapi] entrypoint`（小写！repo 里的驼峰 `entryPoint` 是无效键，
+   但本 app 靠顶层 `main.py::app` 兜底成功——deploy4 起 Ready the chicken）。
+4. 平台从 **/app 源码目录**运行（health 里 session_db_path=/app/web/.data 证实），
+   `pip install .` 只是装依赖的副产物 → staging pyproject `packages=[]` 正确。
+5. Hobby scale-to-zero：冷启动探针 404@0.4s=未路由；Ready 后正常。
+
+**排障路径**（三步定音）：deploy1 setuptools 多包自动发现炸 → packages=[]；deploy2/3 缺顶层
+入口 → main.py bootstrap；deploy5-7 .env 被 ignore 链吞 → config.env（不带点）+ 打包时注入
+`web/__init__.py` 显式 load_dotenv（staging-only，仓库零污染，deploy8 环境全对）。
+
+**发布工具链（队长基建）**：`/root/build_league_web.sh`（组装 staging）+
+source `deploy/.env` 后 `fastapi cloud deploy /root/build/league-web`。
+重部署 = 两行命令。**已知瑕疵**：staging main.py 挂着 /_diag/env 诊断路由（键名已脱敏，
+当前不被执行）；repo 的 `entryPoint` 驼峰键待 OMP 顺手改 `entrypoint`（不影响运行）。
+
+**验证矩阵（线上）**：/health 200·env 注入生效(host=0.0.0.0/CORS 域名/cron off)、
+登录 200/错密 401、index.html 200、predictions/today 200、jobs 200、ai/status 200。
+凭据：admin / `deploy/runtime.env`（git 不跟踪）。
+**待用户点头**：GHA prediction cron 下线（M1–M5 全 PASS 前提已凑齐）。
