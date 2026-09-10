@@ -1,0 +1,7 @@
+# league-predict Web 层依赖（M1；M3 再加 apscheduler）
+# 与引擎 requirements.txt 完全隔离；禁止 pandas/sklearn/xgboost。
+fastapi[standard]>=0.115
+uvicorn>=0.30
+pydantic>=2.7
+python-dotenv>=1.0
+loguru>=0.7
