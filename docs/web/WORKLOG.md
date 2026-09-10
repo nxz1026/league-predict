@@ -45,3 +45,13 @@
 - 修复：三脚本哨兵检查全部 grep -qi；M0b.job 摘除、halt 清除、wrapper 20972 停止。流水线重启，M0b 将走过闸提交，继续 M1→M4。
 - 教训入 skill：完成信号字符串必须机器可判、检查一律大小写不敏感。
 - 09-10 05:49:08  **M0b GATE-FAIL（原因见 pipeline.log）→ 流水线停车，越权文件已移 /tmp/forensics/M0b** (auto-chain)
+- 09-10 05:52:21  **M0b 过闸并提交（机械检查；队长全面复核在晨间）** (auto-chain)
+
+## 队长巡检 07:15 BJT (09-10)
+- M0b ✅ SUCCESS try=8（哨兵 01:35）。
+- M1 try1~4 全部卡死于同一模式：开场 40s 内 11~34 个 tool 事件后 LLM 通道整段静默直至被杀。try1 已写全 11 件交付物，缺 report+sentinel。
+- 网关实锤：后端直连探针（100s 超时的最小请求）两次均 0 回复 → DeepSeek-V4-Flash-0.1 线路此刻不通，非上下文/文件问题。
+- 监控栈根治：watchdog/resilient 的进程 kill pattern `[o]mp acp` 与真实 cmdline（omp --hook … acp）不匹配 → 12 分钟止损从未生效，此前每轮卡死白烧满 22min。改 `local/bin/[o]mp --hook`（跳过 3379/内部 worker），备份 .bak。修复当分钟即砍死 try4（rc=143），try5 上线。
+- M1 prompt 追加《硬性节奏令》：禁止通读、T+14min 前必须落盘 report+sentinel、落盘优先。
+- 态势：卡死轮次现约 12.5min/轮自动巡检网关；全线失败则 09:22 流水线自动停车，仓库无损。晨间队长总复核。
+- 09-10 09:22:26  **M1 STALLED 3.5h 未出哨兵 → 流水线停车，待晨间人工处置** (auto-chain)
