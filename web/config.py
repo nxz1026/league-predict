@@ -58,10 +58,6 @@ DAILY_TRIGGER_LIMIT: int = int(os.getenv("PREDICT_DAILY_LIMIT", "80"))
 # 同一天惰性自动刷新至多一次（predictions/today 缺数据时兜底）。
 AUTO_REFRESH_DAILY: bool = os.getenv("AUTO_REFRESH_DAILY", "1") in ("1", "true", "True")
 
-# --- AI 扩展（M3：ai.py，契约 §5）---------------------------------------
-# AI 端点响应限时（秒）；纯本地读文件，超时仅作防御。
-AI_RESPONSE_TIMEOUT: int = int(os.getenv("AI_RESPONSE_TIMEOUT", "8"))
-
 # --- apscheduler 可选件（默认关，避免 Hobby 平台常驻 cron 消耗配额）-----
 ENABLE_CRON: bool = os.getenv("ENABLE_CRON", "false") in ("1", "true", "True")
 CRON_HOUR: int = int(os.getenv("CRON_HOUR", "9"))  # BJT 小时，每日一次

@@ -18,8 +18,8 @@ router = APIRouter(prefix="/api/v1", tags=["ai"])
 
 @router.get("/ai/status")
 def ai_get_status(request: Request, _: None = Depends(require_auth)) -> dict:
-    """AI 模块状态 + 概览（限时降级）。"""
-    return ai.try_ai_status()
+    """AI 模块状态 + 概览（降级语义）。"""
+    return ai.ai_status()
 
 
 @router.get("/ai/details")

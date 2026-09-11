@@ -55,7 +55,7 @@ def app(tmp_path, monkeypatch):
 
     import web.services.jobs as jobs_mod
     monkeypatch.setattr(jobs_mod, "_build_env", lambda: {})
-    monkeypatch.setattr(jobs_mod, "_build_cmd", lambda args: ["python3", "predict.py", *args])
+    monkeypatch.setattr(jobs_mod, "_build_cmd", lambda args, script="predict": ["python3", "predict.py", *args])
 
     from web.api import create_app
     return create_app()

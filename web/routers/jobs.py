@@ -43,7 +43,6 @@ _VALUE_ARGS = {
     "--n-simulations": None,  # 正整数，单独校验
     "--dates": None,          # YYYYMMDD-YYYYMMDD，正则校验
 }
-_FORBIDDEN = {"--backtest", "--cleanup", "--train-ml", "--no-fetch", "--update-rankings", "--help"}
 
 
 def _validate_args(params: dict) -> list[str]:
@@ -128,7 +127,7 @@ def jobs_predict(body: dict | None, request: Request,
 
 @router.post("/jobs/ai-enrich", status_code=202)
 def jobs_ai_enrich(request: Request, _: None = Depends(require_auth)) -> JSONResponse:
-    """提交 AI 摘要重生成任务（脚本 scripts/ai_enrich_gha.py，无 body 参数）。
+    """提交 AI 摘要重生成任务（python -m web.enrich，无 body 参数）。
 
     语义与 /jobs/predict 一致：202 + job / 409 already_running / 429 quota_exhausted。
     配额与 predict 共享同一计数器。

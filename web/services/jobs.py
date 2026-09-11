@@ -256,7 +256,7 @@ def run_job(jid: str) -> None:
         _spin_state(jid, STATUS_RUNNING, started_at=_now_epoch())
         args = list(job.get("args", []))
         script = job.get("script", "predict")  # 老 job 文件缺字段 → predict 容错
-        cmd = _build_cmd(args) if script == "predict" else _build_cmd(args, script)
+        cmd = _build_cmd(args, script)
         log_path = _log_file(jid)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         started = _now_epoch()
@@ -327,5 +327,5 @@ def trigger_predict(args: list[str], trigger: str = "manual") -> tuple[dict | No
 
 
 def trigger_ai_enrich(trigger: str = "manual") -> tuple[dict | None, str | None]:
-    """提交 AI 富化任务（脚本 scripts/ai_enrich_gha.py，argv 固定为空）。"""
+    """提交 AI 富化任务（python -m web.enrich，argv 固定为空）。"""
     return _spawn("ai_enrich", [], trigger)

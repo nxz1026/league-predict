@@ -2,7 +2,7 @@
 
 设计：AI 是「扩展」而非主流程依赖。
 - try-import/try-call：加载失败或调用异常一律降级 {available:false, reason}；
-- 不阻塞/拖垮主流程：端点响应限时（默认 8s，config.AI_RESPONSE_TIMEOUT）；
+- 不阻塞/拖垮主流程：ai_status 内部全量捕获异常，永不抛穿；
 - 引擎侧 LLM 失败已降级为 no-op（契约 §5.5），web 侧只读持久化产物
   （ai_scores.json，仓库根 predictions/，契约 §9-11），绝不 import scripts/ ai/。
 """
@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
 from pathlib import Path
 
 from web import config
@@ -53,23 +52,6 @@ def ai_status() -> dict:
         "by_league": dict(sorted(by_league.items())),
         "source": str(AI_SCORES_FILE),
     }
-
-
-def try_ai_status(timeout: float | None = None) -> dict:
-    """限时版 ai_status：超时降级（防御性；纯本地读文件几乎不会超时）。"""
-    limit = config.AI_RESPONSE_TIMEOUT if timeout is None else timeout
-    result: dict = {"available": False, "reason": "timeout"}
-    box: list[dict] = []
-
-    def _run():
-        box.append(ai_status())
-
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
-    t.join(timeout=limit)
-    if box:
-        return box[0]
-    return result
 
 
 def ai_details() -> dict:
