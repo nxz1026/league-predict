@@ -194,3 +194,4 @@ source `deploy/.env` 后 `fastapi cloud deploy /root/build/league-web`。
 - **M6S**（云端实证缺陷）：analyse_batch 位置 zip 配对致摘要串位（EPL 批实锤）→ 按名 join+兼容回退+prompt 要求 match 回显。**本地真调 agnes 铁证：5/5 摘要置信度数值与 store 真值逐一对齐**。
 - 测试轨迹 56→63→65→68 绿。deploy13 曾把错位中文摘要上线（10条含串位）→ deploy14 修。
 - Hobby 限制：ai_scores.json 云端写回不跨 scale-to-zero 持久（冷启回退 git 种子）；种子已更新 5 条中文 csl 样例。
+- **deploy14(5a603aab) 云端终验过**：predict epl 7场→enrich 10项 exit 0；中文摘要配对铁证双向核验（队名切尔西/利物浦自指 + "本组最高"=真值最高 conf 0.177 伯恩茅斯行）；deploy13 式串位清零。用户指令 4（AI 中文）+5（触发验证）就此闭环。
