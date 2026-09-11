@@ -7,3 +7,15 @@ select = ["E", "F", "W", "I"]
 
 [tool.ruff.format]
 quote-style = "double"
+
+[project.optional-dependencies]
+web = [
+    "fastapi[standard]>=0.115",
+    "uvicorn>=0.30",
+    "pydantic>=2.7",
+    "python-dotenv>=1.0",
+    "loguru>=0.7",
+]
+
+[tool.fastapi]
+entryPoint = "web.api:app"

@@ -1,0 +1,91 @@
+"""web.config — 全应用唯一环境变量读取点。
+
+约定（见 .env.example，清单唯一出处）：
+- 所有 env 读取集中在此模块；其他模块一律 `from web import config`。
+- 默认值一律安全：默认仅本机可访问、https 开关默认关（cookie secure 随之关，
+  避免本地开发被 secure cookie 卡死）。
+- 时间存储一律 UTC epoch 秒（float/int）；展示层才换算 BJT。
+"""
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# 仓库根目录（web/config.py 的父目录的父目录）。
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+# .env 存在即加载；不存在（如全新 venv 裸启动）时走默认值。
+load_dotenv(BASE_DIR / ".env")
+
+# --- 服务 ---------------------------------------------------------------
+HOST: str = os.getenv("WEB_HOST", "127.0.0.1")  # 默认仅本机可访
+PORT: int = int(os.getenv("WEB_PORT", "8000"))
+
+# --- 会话认证 -----------------------------------------------------------
+# 单账号模型：账号信息全部来自 env，仓库内不落任何真实值。
+AUTH_USERNAME: str = os.getenv("AUTH_USERNAME", "admin")
+AUTH_PASSWORD: str = os.getenv("AUTH_PASSWORD", "unit-test-password-placeholder")
+
+# 会话 TTL（秒），默认 12 小时。
+SESSION_TTL_SECONDS: int = int(os.getenv("SESSION_TTL_SECONDS", "43200"))
+# 会话过期后立即删除；同时惰性清理过期行。
+SESSION_CLEANUP_ON_ACCESS: bool = os.getenv("SESSION_CLEANUP_ON_ACCESS", "1") in ("1", "true", "True")
+
+# --- 登录限速：连续失败 N 次 → 锁定窗口 W 秒内一律 429 ------------------
+LOGIN_MAX_FAILURES: int = int(os.getenv("LOGIN_MAX_FAILURES", "5"))
+LOGIN_LOCKOUT_SECONDS: int = int(os.getenv("LOGIN_LOCKOUT_SECONDS", "600"))
+
+# --- Cookie / CORS ------------------------------------------------------
+# 部署在 https 后面时置 true：cookie 加 Secure，CORS 只放行 https 来源。
+USE_HTTPS: bool = os.getenv("USE_HTTPS", "0") in ("1", "true", "True")
+CORS_ORIGINS: list[str] = [
+    o.strip()
+    for o in os.getenv("CORS_ORIGINS", "").split(",")
+    if o.strip()
+]  # 空列表 = 不启用 CORS 中间件（默认同源，最安全）。
+
+# --- 会话存储 -----------------------------------------------------------
+# 默认落在 web/.data/（gitignore 已排除），绝不落入引擎数据目录。
+SESSION_DB_PATH: str = os.getenv("SESSION_DB_PATH", str(BASE_DIR / "web" / ".data" / "sessions.db"))
+
+# --- 任务触发（M3：jobs.py / 配额守卫）----------------------------------
+# 引擎子进程超时（秒），到点必杀。
+PREDICT_TIMEOUT_SECONDS: int = int(os.getenv("PREDICT_TIMEOUT_SECONDS", "600"))
+# 每日预测触发上限（BJT 日口径；默认 80，给手动操作留余量）。
+DAILY_TRIGGER_LIMIT: int = int(os.getenv("PREDICT_DAILY_LIMIT", "80"))
+# 同一天惰性自动刷新至多一次（predictions/today 缺数据时兜底）。
+AUTO_REFRESH_DAILY: bool = os.getenv("AUTO_REFRESH_DAILY", "1") in ("1", "true", "True")
+
+# --- AI 扩展（M3：ai.py，契约 §5）---------------------------------------
+# AI 端点响应限时（秒）；纯本地读文件，超时仅作防御。
+AI_RESPONSE_TIMEOUT: int = int(os.getenv("AI_RESPONSE_TIMEOUT", "8"))
+
+# --- apscheduler 可选件（默认关，避免 Hobby 平台常驻 cron 消耗配额）-----
+ENABLE_CRON: bool = os.getenv("ENABLE_CRON", "false") in ("1", "true", "True")
+CRON_HOUR: int = int(os.getenv("CRON_HOUR", "9"))  # BJT 小时，每日一次
+
+# --- M3 数据目录（web/.data/ 下，gitignore 已排除）-----------------------
+DATA_DIR: Path = BASE_DIR / "web" / ".data"
+JOBS_DIR: Path = Path(os.getenv("JOBS_DIR", str(DATA_DIR / "jobs")))
+JOBS_LOCK_FILE: Path = Path(os.getenv("JOBS_LOCK_FILE", str(DATA_DIR / "jobs.lock")))
+QUOTA_FILE: Path = Path(os.getenv("QUOTA_FILE", str(DATA_DIR / "quota.json")))
+
+
+def env_summary() -> dict:
+    """暴露给 /health 的无敏感摘要（不含账号/密码）。"""
+    return {
+        "host": HOST,
+        "port": PORT,
+        "session_ttl_seconds": SESSION_TTL_SECONDS,
+        "login_max_failures": LOGIN_MAX_FAILURES,
+        "login_lockout_seconds": LOGIN_LOCKOUT_SECONDS,
+        "use_https": USE_HTTPS,
+        "cors_origins": CORS_ORIGINS,
+        "session_db_path": SESSION_DB_PATH,
+        "predict_timeout_seconds": PREDICT_TIMEOUT_SECONDS,
+        "daily_trigger_limit": DAILY_TRIGGER_LIMIT,
+        "enable_cron": ENABLE_CRON,
+        "cron_hour": CRON_HOUR,
+    }

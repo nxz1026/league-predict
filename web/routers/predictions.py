@@ -1,0 +1,136 @@
+"""web.routers.predictions — 只读数据 API（全部 require_auth）。
+
+端点：
+- GET /api/v1/predictions/today     BJT 比赛日、按联赛分组
+- GET /api/v1/predictions/{date}    指定 BJT 日期（YYYY-MM-DD）
+- GET /api/v1/championship          每联赛最新劳模模拟（monte_carlo）
+- GET /api/v1/accuracy              每联赛最新命中率（accuracy_summary）
+- GET /api/v1/history               每联赛历史预测文件清单
+
+响应 key 冻结为前端契约（M4 消费）。只读、不触发引擎子进程。
+"""
+from __future__ import annotations
+
+from datetime import date
+
+from fastapi import APIRouter, Depends, Request
+
+from web.auth import require_auth
+from web.services import store
+from web.services.datasource import LEAGUES
+
+router = APIRouter(prefix="/api/v1", tags=["predictions"])
+
+
+def _league_names() -> list[str]:
+    return sorted(LEAGUES)
+
+
+def _prediction_summary(doc: dict, day) -> dict:
+    """单场预测精简视图（契约 §2.2 字段对齐）。"""
+    return {
+        "match": doc.get("match", ""),
+        "home": doc.get("home", ""),
+        "away": doc.get("away", ""),
+        "direction": doc.get("direction", ""),
+        "stars": doc.get("stars", ""),
+        "confidence_score": doc.get("confidence_score"),
+        "predicted_score": doc.get("predicted_score", ""),
+        "over_under": doc.get("over_under", ""),
+        "btts": doc.get("btts", ""),
+        "kickoff_utc": doc.get("kickoff_utc", ""),
+        "data_window": doc.get("data_window", ""),
+    }
+
+
+def _group_for_day(day) -> dict:
+    """按联赛分组某 BJT 日的预测；无数据联赛给空列表（前端契约）。"""
+    out = {league: [] for league in _league_names()}
+    for league, doc in store.latest_by_league().items():
+        if league not in out:
+            continue
+        data = doc.get("data", {})
+        if not store.covers_date(data, day):
+            continue
+        for p in data.get("predictions", []):
+            out[league].append(_prediction_summary(p, day))
+    return out
+
+
+@router.get("/predictions/today")
+def predictions_today(request: Request,
+                      _: None = Depends(require_auth)) -> dict:
+    """今日（BJT）各联赛预测，按联赛分组。"""
+    day = store.bjt_today()
+    return {"date": day.isoformat(), "leagues": _group_for_day(day)}
+
+
+@router.get("/predictions/{date_str}")
+def predictions_by_date(date_str: str, request: Request,
+                        _: None = Depends(require_auth)) -> dict:
+    """指定 BJT 日期（YYYY-MM-DD）各联赛预测，按联赛分组。"""
+    try:
+        day = date.fromisoformat(date_str)
+    except ValueError:
+        from web.errors import ApiError
+        raise ApiError(http_status=400, code="invalid_date",
+                       message=f"日期格式须为 YYYY-MM-DD: {date_str}")
+    return {"date": day.isoformat(), "leagues": _group_for_day(day)}
+
+
+@router.get("/championship")
+def championship(request: Request,
+                 _: None = Depends(require_auth)) -> dict:
+    """每联赛最新蒙特卡洛夺冠概率（无数据 → 空 dict，200）。"""
+    out: dict = {}
+    for league, doc in store.latest_by_league().items():
+        data = doc.get("data", {})
+        mc = data.get("monte_carlo")
+        if not isinstance(mc, dict) or not mc.get("champion_probs"):
+            continue
+        out[league] = {
+            "generated_at": data.get("generated_at"),
+            "data_window": data.get("data_window"),
+            "champion_probs": mc.get("champion_probs", {}),
+            "round_reach_probs": mc.get("round_reach_probs", {}),
+            "simulation_count": mc.get("simulation_count"),
+        }
+    return {"leagues": out}
+
+
+@router.get("/accuracy")
+def accuracy(request: Request,
+             _: None = Depends(require_auth)) -> dict:
+    """每联赛最新命中率（accuracy_summary 7d/30d；无数据 → 空 dict）。"""
+    out: dict = {}
+    for league, doc in store.latest_by_league().items():
+        data = doc.get("data", {})
+        acc = data.get("accuracy_summary")
+        if not isinstance(acc, dict):
+            continue
+        out[league] = {
+            "generated_at": data.get("generated_at"),
+            "data_window": data.get("data_window"),
+            **{k: v for k, v in acc.items() if isinstance(v, dict)},
+        }
+    return {"leagues": out}
+
+
+@router.get("/history")
+def history(request: Request,
+            _: None = Depends(require_auth)) -> dict:
+    """每联赛历史预测文件清单（按 generated_at 降序）。"""
+    out: dict = {}
+    for league, docs in store.history_by_league().items():
+        out[league] = [
+            {
+                "name": doc["name"],
+                "path": str(doc["path"]),
+                "generated_at": doc.get("generated_at_iso"),
+                "data_window": doc.get("data", {}).get("data_window"),
+                "status": doc.get("data", {}).get("status"),
+                "n_predictions": len(doc.get("data", {}).get("predictions", [])),
+            }
+            for doc in docs
+        ]
+    return {"leagues": out}

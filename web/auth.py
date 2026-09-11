@@ -1,0 +1,110 @@
+"""web.auth — 单账号会话认证。
+
+- POST /api/v1/login  : 校验账号（恒定时间比较）→ 建会话 → Set-Cookie。
+- POST /api/v1/logout : 主动失效会话。
+- GET  /api/v1/me     : 当前会话信息。
+- require_auth        : FastAPI Depends，供 M2/M3 业务路由复用。
+
+登录限速：进程内字典，按客户端 IP 记连续失败次数；失败 >= LOGIN_MAX_FAILURES
+后进入 LOGIN_LOCKOUT_SECONDS 锁定窗口，窗口内一律 429。
+"""
+from __future__ import annotations
+
+import hmac
+import time
+
+from fastapi import Depends, Request, Response
+from fastapi.routing import APIRouter
+
+from web import config
+from web import session_store
+from web.errors import ApiError
+
+router = APIRouter(prefix="/api/v1", tags=["auth"])
+
+COOKIE_NAME = "lp_session"
+_failures: dict[str, dict] = {}  # ip -> {"count": int, "lockout_until": float}
+
+
+def _client_ip(request: Request) -> str:
+    # 信任代理头会引入伪造风险；默认用直连地址（本机部署场景足够）。
+    return request.client.host if request.client else "unknown"
+
+
+def _check_lockout(ip: str) -> None:
+    rec = _failures.get(ip)
+    if rec and rec["lockout_until"] > time.time():
+        raise ApiError(
+            "rate_limited",
+            "登录失败次数过多，请稍后再试",
+            http_status=429,
+        )
+
+
+def _record_failure(ip: str) -> None:
+    rec = _failures.setdefault(ip, {"count": 0, "lockout_until": 0.0})
+    rec["count"] += 1
+    if rec["count"] >= config.LOGIN_MAX_FAILURES:
+        rec["lockout_until"] = time.time() + config.LOGIN_LOCKOUT_SECONDS
+        rec["count"] = 0
+
+
+def _clear_failures(ip: str) -> None:
+    _failures.pop(ip, None)
+
+
+def _set_session_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        COOKIE_NAME,
+        token,
+        max_age=config.SESSION_TTL_SECONDS,
+        httponly=True,
+        samesite="lax",
+        secure=config.USE_HTTPS,
+    )
+
+
+@router.post("/login")
+def login(request: Request, response: Response,
+          body: dict | None = None) -> dict:
+    """校验账号并签发会话 cookie。body: {username, password}。"""
+    ip = _client_ip(request)
+    _check_lockout(ip)
+    body = body or {}
+    username = str(body.get("username", ""))
+    password = str(body.get("password", ""))
+    ok_user = hmac.compare_digest(username, config.AUTH_USERNAME)
+    ok_pass = hmac.compare_digest(password, config.AUTH_PASSWORD)
+    if not (ok_user and ok_pass):
+        _record_failure(ip)
+        raise ApiError("unauthorized", "用户名或密码错误", http_status=401)
+    _clear_failures(ip)
+    token = session_store.create_session()
+    _set_session_cookie(response, token)
+    return {"message": "ok", "expires_in": config.SESSION_TTL_SECONDS}
+
+
+def _current_token(request: Request) -> str:
+    token = request.cookies.get(COOKIE_NAME, "")
+    if not token or not session_store.validate_token(token):
+        raise ApiError("unauthorized", "未登录或会话已过期", http_status=401)
+    return token
+
+
+@router.post("/logout")
+def logout(request: Request, response: Response) -> dict:
+    token = _current_token(request)
+    session_store.delete_session(token)
+    response.delete_cookie(COOKIE_NAME)
+    return {"message": "ok"}
+
+
+@router.get("/me")
+def me(request: Request) -> dict:
+    _current_token(request)
+    return {"username": config.AUTH_USERNAME, "authenticated": True}
+
+
+def require_auth(request: Request) -> None:
+    """FastAPI 依赖：未登录抛 401（统一 JSON 错误）。"""
+    _current_token(request)

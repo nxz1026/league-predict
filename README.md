@@ -2,7 +2,7 @@
 
 联赛预测引擎。多数据源融合 + 信号模型 + ELO + Dixon-Coles 双变量泊松 + 蒙特卡洛模拟。
 
-零外部依赖，纯 Python stdlib。每日 21:33 (BJT) 通过 GHA 自动运行。
+零外部依赖，纯 Python stdlib。统一运行在 FastAPI Cloud（见「运行与部署」）。GitHub Actions 已于 2026-09-11 下线。
 
 ## 架构
 
@@ -88,6 +88,30 @@ vec = extract_features(match, {"elo_ratings": elo})
 # 训练集
 X, y = build_training_set(past_matches, {"elo_ratings": elo})
 ```
+
+## 运行与部署
+
+本项目统一在 **FastAPI Cloud** 上运行，不再使用 GitHub Actions。
+
+| 项 | 值 |
+|---|---|
+| 线上地址 | https://league-predict.fastapicloud.dev |
+| 平台 | FastAPI Cloud Hobby（scale-to-zero，免费档） |
+| App ID | `b94a43da-be9f-47da-bfde-18188c489dad` |
+| 看板鉴权 | 用户名 `admin`（口令见运维机 `deploy/runtime.env`，**不入库**） |
+
+**部署链路**（运维机 `/root/projects/league-predict`）：
+1. `deploy/runtime.env`（gitignore）存凭据：`AUTH_*`、`API_FOOTBALL_KEY`、`FOOTBALL_DATA_API_KEY`、`LLM_API_KEY/BASE/MODEL`。
+2. `bash /root/build_league_web.sh` 组装 staging 到 `/root/build/league-web`（拷 web/static/scripts/ai/… + 写 pyproject `[tool.fastapi] entrypoint="web.api:app"` + 顶层 `main.py` 引导 + `.env`→`config.env` + 注入 `web/__init__.py` load_dotenv）。
+3. 用部署 token 免登录发布：`FASTAPI_CLOUD_TOKEN=<deploy token> FASTAPI_CLOUD_APP_ID=<id> fastapi cloud deploy /root/build/league-web`。
+4. 核验：`GET https://api.fastapicloud.com/api/v1/apps/<id>` → `latest_deployment.status == success`。
+
+**运行时预测/富化**（在 Web 界面触发，或 API）：
+- `POST /api/v1/jobs/predict`（选联赛/数据源/蒙特卡洛）跑 `scripts/predict.py`。
+- `POST /api/v1/jobs/ai-enrich` 跑 `python -m web.enrich` 生成中文 AI 摘要（LLM 走 agnes-ai，OpenAI 兼容）。
+- 每日配额共享计数；容器 scale-to-zero，结果 JSON 不跨冷启持久（冷启回退 git 种子）。
+
+> 关键约束（实测）：平台部署链会**静默丢弃 dotfile `.env`**，故凭据经 `config.env` 上传并在 `web/__init__.py` 用 `load_dotenv(override=True)` 注入；runtime 日志/环境变量接口需 user token（deploy token 只够发布 + 读构建日志）。
 
 ## 快速开始
 
