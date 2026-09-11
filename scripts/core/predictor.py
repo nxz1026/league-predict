@@ -223,6 +223,17 @@ def _derive_lambdas_and_grid(
     lambda_home = max(raw_home * _lambda_mult, THRESHOLDS["lambda_lower_bound"])
     lambda_away = max(raw_away * _lambda_mult, THRESHOLDS["lambda_lower_bound"])
 
+    return lambda_home, lambda_away, raw_home, raw_away, *_score_grid(
+        lambda_home, lambda_away, use_dixon_coles, dc_rho)
+
+
+def _score_grid(
+    lambda_home: float,
+    lambda_away: float,
+    use_dixon_coles: bool,
+    dc_rho: float,
+) -> tuple[str, list, float, float, list]:
+    """9×9 泊松比分网格 → 最可能比分/top3/BTTS/O2.5。纯函数。"""
     # ── Dixon-Coles 或独立泊松比分预测 ──
     if use_dixon_coles:
         dc_result = dixon_coles_match_probs(lambda_home, lambda_away, rho=dc_rho)
@@ -246,7 +257,7 @@ def _derive_lambdas_and_grid(
         btts_prob = sum(s[2] for s in all_scores if s[0] > 0 and s[1] > 0)
         over_25_prob = sum(s[2] for s in all_scores if s[0] + s[1] > 2)
 
-    return lambda_home, lambda_away, raw_home, raw_away, predicted_score, top3, btts_prob, over_25_prob, all_scores
+    return predicted_score, top3, btts_prob, over_25_prob, all_scores
 
 
 def _resolve_direction_winner(dir_str: str, match_ctx: dict) -> str | None:
