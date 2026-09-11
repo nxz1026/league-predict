@@ -19,7 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-AI_ENRICH_SCRIPT = "ai_enrich_gha.py"
+AI_ENRICH_SCRIPT = "web.enrich"
 
 
 def _fake_sp(proc_cls) -> types.SimpleNamespace:
@@ -130,7 +130,7 @@ def test_ai_enrich_202_queued_with_script(client, monkeypatch):
 
 
 def test_ai_enrich_spawns_correct_script(client, monkeypatch):
-    """子进程 argv 指向 scripts/ai_enrich_gha.py（非 predict.py）。"""
+    """子进程 argv 为 `python -m web.enrich`（web 原生执行体，非 GHA 脚本）。"""
     import web.services.jobs as jobs_mod
     recorded = []
     gate = threading.Event()
@@ -153,8 +153,11 @@ def test_ai_enrich_spawns_correct_script(client, monkeypatch):
                 break
             time.sleep(0.05)
         assert len(recorded) == 1
-        assert recorded[0][-1].endswith(AI_ENRICH_SCRIPT)
-        assert recorded[0][-1].endswith("predict.py") is False
+        cmd = recorded[0]
+        assert "-m" in cmd
+        assert cmd[-1] == AI_ENRICH_SCRIPT
+        assert "ai_enrich_gha.py" not in cmd
+        assert "predict.py" not in cmd
     finally:
         gate.set()
 
@@ -239,3 +242,67 @@ def test_prompt_build_output_contains_directive(monkeypatch):
     )
     assert "简体中文" in prompt
     assert "Return:" in prompt
+
+
+# --- M6R：web 原生执行体离线用例（严禁 live LLM/网络） ---------------------
+
+def test_enrich_collect_items_maps_fields(monkeypatch):
+    """collect_items：两联赛 doc → 每联赛前 5 条、字段映射正确。"""
+    import web.enrich as enrich_mod
+    docs = {
+        "EPL": {"data": {"predictions": [
+            {"match": f"EPL match {i}", "stars": f"{i}-star",
+             "confidence_score": 0.6 + i / 10,
+             "direction": "曼城 胜" if i % 2 == 0 else "利物浦 胜"}
+            for i in range(7)  # 7 条 → 截断前 5
+        ]}},
+        "LALIGA": {"data": {"predictions": [
+            {"match": "LALIGA match 0", "stars": "1-star", "confidence_score": 0.61,
+             "direction": "皇马 胜"}
+        ]}},
+    }
+    monkeypatch.setattr(enrich_mod.store, "latest_by_league", lambda leagues=None: docs)
+    items = enrich_mod.collect_items()
+    assert len(items) == 6  # 5 + 1
+    epl = [it for it in items if it["league"] == "EPL"]
+    assert len(epl) == 5
+    assert epl[0]["name"] == "EPL match 0"
+    assert epl[0]["date_found"] == ""
+    assert epl[0]["stars"] == "0-star"
+    assert epl[0]["confidence"] == 0.6
+    assert epl[0]["direction"] == "曼城 胜"
+    assert epl[1]["direction"] == "利物浦 胜"
+    laliga = [it for it in items if it["league"] == "LALIGA"][0]
+    assert laliga["direction"] == "皇马 胜"  # 方向原样透传，不再归约
+
+
+def test_enrich_main_writes_back_and_returns_zero(monkeypatch, capsys):
+    """main：假 analyse_batch（带中文 summary）+ 假 save_ai_scores → 返回 0、写回被调用。"""
+    import web.enrich as enrich_mod
+    saved = {}
+
+    def fake_collect():
+        return [{"name": "A vs B", "league": "EPL", "date_found": "",
+                 "direction": "home", "stars": 1, "confidence": "c"}]
+
+    def fake_analyse(items, **kw):
+        assert items == fake_collect()
+        assert kw["context"] == ""
+        assert kw["preference_prompt"] == ""
+        assert kw["config"]["ai"]["model"]
+        return [{"name": "A vs B", "ai_score": 0.9, "ai_summary": "主队胜算高",
+                 "ai_notes": "", "source": "test"}]
+
+    def fake_save(enriched, league_key=""):
+        saved["enriched"] = enriched
+        saved["league_key"] = league_key
+
+    monkeypatch.setattr(enrich_mod, "collect_items", fake_collect)
+    monkeypatch.setattr("ai.batch_pipeline.analyse_batch", fake_analyse, raising=False)
+    monkeypatch.setattr("ai.feedback_loop.save_ai_scores", fake_save, raising=False)
+    assert enrich_mod.main() == 0
+    assert saved["league_key"] == ""
+    assert len(saved["enriched"]) == 1
+    assert "主队胜算高" in saved["enriched"][0]["ai_summary"]
+    out = capsys.readouterr().out
+    assert "processed 1 items, wrote back 1" in out

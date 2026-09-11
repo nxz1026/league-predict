@@ -241,9 +241,10 @@ def _build_env() -> dict:
 
 
 def _build_cmd(args: list[str], script: str = "predict") -> list[str]:
-    """按脚本名拼 CLI（默认 predict.py；ai_enrich → ai_enrich_gha.py）。"""
-    name = "predict.py" if script == "predict" else "ai_enrich_gha.py"
-    return [sys.executable, str(config.BASE_DIR / "scripts" / name), *args]
+    """按脚本名拼 CLI（默认 predict.py；ai_enrich → python -m web.enrich）。"""
+    if script == "predict":
+        return [sys.executable, str(config.BASE_DIR / "scripts" / "predict.py"), *args]
+    return [sys.executable, "-m", "web.enrich"]
 
 
 def run_job(jid: str) -> None:

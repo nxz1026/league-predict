@@ -84,3 +84,51 @@ ai/batch_pipeline.py: max = 44 (analyse_batch)
 ## 兼容性说明
 
 - M3 测试 `app` fixture 单参 monkeypatch `_build_cmd=lambda args: ...`：`run_job` 对 predict 脚本保持单参调用，对 ai_enrich 走双参分支，M3 测试全量不受影响（事实：63 passed 全绿）。
+---
+
+# M6R 返工记录
+
+## 原因
+
+M6 把 ai-enrich job 执行体指到 `scripts/ai_enrich_gha.py`，其输入是 GHA 专属的 `/tmp/predict_output.txt`，云端运行时该文件永不存在 → job exit 0 但零产出。改为 web 原生执行体，数据直接读 `web.services.store`。
+
+## 改动摘要（4 文件）
+
+| 文件 | 改动 |
+|---|---|
+| `web/enrich.py`（新建） | `collect_items()` 调 `store.latest_by_league()`，每联赛 `data.predictions` 前 5 条映射为 `{name, league, date_found, direction, stars, confidence}`；`main()` 内延迟 import `ai.batch_pipeline.analyse_batch` / `ai.feedback_loop.save_ai_scores`（顶层零 import ai/），空集打印 `[AI Enrich] no items` 返 0，异常捕获返 1；`__main__` 走 `raise SystemExit(main())` |
+| `web/services/jobs.py` | `_build_cmd` ai_enrich 分支改为 `[sys.executable, "-m", "web.enrich"]`（cwd 已是 BASE_DIR，可 -m）；predict 分支不变 |
+| `tests/web/test_m6_ai_enrich.py` | 202/argv 用例锚点改断言 `-m` + `web.enrich`（不再指向 `ai_enrich_gha.py`）；新增 2 个离线用例：`collect_items` 字段映射与每联赛前 5 截断、`main` 假 analyse_batch（中文 summary）/假 save_ai_scores 断言写回且返 0 |
+| `docs/web/M6_report.md` | 追加本节 |
+
+## 测试结果
+
+```
+cd /root/projects/league-predict && /root/venvs/web/bin/python -m pytest tests/web -q
+65 passed, 2 warnings in 10.07s
+```
+
+## ast 行数自查
+
+```
+web/enrich.py::collect_items: 22 行
+web/enrich.py::main: 28 行
+web/services/jobs.py::_build_cmd: 5 行
+ALL < 50 LINES
+```
+
+## 红线自查
+
+- 仅动工单 4 文件；`ai/`、`scripts/`、`static/` 零触碰（含 M6 已授权行未再动）。
+- 未执行 git commit/push；无新依赖。
+
+## 字段映射修正（M6R2）
+
+`web/enrich.py::collect_items` 内层循环原用 `pred.get("pick")` 三元归约 `direction`，但预测 dict 真实键为 `direction`（值如"挪威 胜"）、`stars`、`confidence_score`，不存在 `pick` / `confidence`。修正：
+- 删除 `direction` 局部变量块与 `stars`/`confidence` 的旧 `.get()` 行；
+- 改为 `"direction": pred.get("direction", "?")`、`"stars": pred.get("stars", "?")`、`"confidence": pred.get("confidence_score", "")`；
+- 测试 fixture 同步改用真实键（`direction="曼城 胜"`、`stars="2-star"`、`confidence_score=0.61`），断言对应更新。
+```
+cd /root/projects/league-predict && /root/venvs/web/bin/python -m pytest tests/web -q
+65 passed, 2 warnings in 12.69s
+```
