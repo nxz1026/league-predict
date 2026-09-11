@@ -712,5 +712,40 @@
     "ai_notes": "Udinese vs Lazio is a tricky fixture; without data, the home win signal is unreliable.",
     "league": "seriea",
     "source": "seriea"
+  },
+  "Qingdao Hainiu vs Tianjin Jinmen Tiger": {
+    "ai_score": 20,
+    "ai_summary": "置信度极低（0.196）且仅为单星评级，属于弱势预测信号。尽管符合“弱势方”偏好，但数据支撑严重不足，不建议参考。",
+    "ai_notes": "最低置信度条目，风险极高。",
+    "league": "",
+    "source": ""
+  },
+  "Liaoning Tieren vs Qingdao West Coast": {
+    "ai_score": 30,
+    "ai_summary": "置信度0.273为这组中最高，但仍处于弱区间。方向信号明确为主胜接近，但缺乏足够的统计强度支持高确信度投注。",
+    "ai_notes": "组内相对最强，但整体仍偏弱。",
+    "league": "",
+    "source": ""
+  },
+  "Shanghai Port vs Shanghai Shenhua": {
+    "ai_score": 28,
+    "ai_summary": "作为德比战，置信度仅0.252，显示出预测模型对该赛果的不确定性。虽指向主胜，但低星级意味着波动性大。",
+    "ai_notes": "德比战变数多，置信度未随热度提升。",
+    "league": "",
+    "source": ""
+  },
+  "Wuhan Three Towns vs Chongqing Tonglianglong": {
+    "ai_score": 25,
+    "ai_summary": "置信度0.235，中等偏低。武汉三镇作为主队被看好接近取胜，但数据力度不足以构成强力推荐。",
+    "ai_notes": "常规低置信度预测。",
+    "league": "",
+    "source": ""
+  },
+  "Yunnan Yukun vs Shenzhen Xinpengcheng": {
+    "ai_score": 23,
+    "ai_summary": "置信度0.221，低于平均水平。方向指向云南玉昆主胜接近，但证据链薄弱，难以满足高信心或清晰信号的要求。",
+    "ai_notes": "置信度偏低，信号模糊。",
+    "league": "",
+    "source": ""
   }
 }

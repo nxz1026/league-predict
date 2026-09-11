@@ -184,3 +184,13 @@ source `deploy/.env` 后 `fastapi cloud deploy /root/build/league-web`。
   `ai/batch_pipeline.py::_build_prompt`。要云端出中文 AI 摘要需三件套：
   ①prompt 中文化（OMP 工单）②LLM_API_KEY/BASE/MODEL 进 runtime.env（用户给 key）
   ③enrichment 步骤接入云端触发链（当前断，因 GHA 恰是唯一 regen 通道）。
+
+## M6 系列：AI 摘要云端化+中文化（2026-09-11，deploy10-14）
+- **LLM 选型 agnes-ai**（OpenAI 兼容，json_object 实测四绿）；三件套进 runtime.env→config.env（git 外）。LinBlue=OMP agent 大脑（余额续用至耗尽），agnes=应用 AI 层，用途隔离。
+- **M6**(OMP)：prompt 中文指令行（授权引擎例外）+ /jobs/ai-enrich 端点 + _spawn 公共链 + SPA 按钮。
+- **验收揭穿 GHA 幽灵**：ai_enrich_gha.py 输入是 GHA 专属 /tmp/predict_output.txt，云端 job 静默空转 exit 0。
+- **M6R**：执行体改 `python -m web.enrich`（直读 store.latest_by_league，ai 延迟 import，请求路径保持纯净）；staging pyproject 补 requests（云端镜像实证必需）。
+- **M6R2**：collect_items 字段映射修正（pick/confidence 不存在→direction/stars/confidence_score）。
+- **M6S**（云端实证缺陷）：analyse_batch 位置 zip 配对致摘要串位（EPL 批实锤）→ 按名 join+兼容回退+prompt 要求 match 回显。**本地真调 agnes 铁证：5/5 摘要置信度数值与 store 真值逐一对齐**。
+- 测试轨迹 56→63→65→68 绿。deploy13 曾把错位中文摘要上线（10条含串位）→ deploy14 修。
+- Hobby 限制：ai_scores.json 云端写回不跨 scale-to-zero 持久（冷启回退 git 种子）；种子已更新 5 条中文 csl 样例。

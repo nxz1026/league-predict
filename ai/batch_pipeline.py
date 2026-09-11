@@ -49,8 +49,9 @@ def analyse_batch(
         result = generate(prompt, model=model, rate_limit=rate_limit)
         analyses = result.get("analyses", [])
 
-        for j, item in enumerate(batch):
-            ai = analyses[j] if j < len(analyses) else {}
+        analyses_by_name = _pair_batch(analyses, batch)
+        for item in batch:
+            ai = analyses_by_name.get(item.get("name"))
             if ai:
                 score = max(0, min(100, int(ai.get("score", 0))))
                 if min_score and score < min_score:
@@ -65,6 +66,21 @@ def analyse_batch(
                 enriched.append(item)
 
     return enriched
+
+
+def _pair_batch(analyses: list[dict], batch: list[dict]) -> dict:
+    """Pair analyses to batch items by name; fall back to position.
+
+    Prefer `a["match"] == item["name"]`. 兼容回退：所有 analysis 都无
+    match 键且数量与 batch 相等时，退回按位置配对（旧行为）。
+    """
+    if not analyses:
+        return {}
+    if all("match" not in a for a in analyses):
+        if len(analyses) == len(batch):
+            return {item.get("name"): a for item, a in zip(batch, analyses)}
+        return {}
+    return {a["match"]: a for a in analyses if a.get("match") is not None}
 
 
 def _build_prompt(batch, context, preference_prompt, config):
@@ -85,6 +101,7 @@ def _build_prompt(batch, context, preference_prompt, config):
 {chr(10).join(f"- {p}" for p in priorities)}
 {preference_prompt}
 # Instructions
-Return: {{"analyses": [{{"score": <0-100>, "summary": "<2 sentences>", "notes": ""}} for each item in order]}}
+Return: {{"analyses": [{{"match": "<对应条目的 name 原样照抄>", "score": <0-100>, "summary": "<2 sentences>", "notes": ""}} for each item in order]}}
+analyses 必须覆盖全部条目，match 原样照抄，不得改写。
 所有 summary 与 notes 必须使用简体中文撰写（JSON 键名保持英文）。
 {scoring_rubric}"""

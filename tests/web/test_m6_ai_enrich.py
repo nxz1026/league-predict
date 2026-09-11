@@ -306,3 +306,63 @@ def test_enrich_main_writes_back_and_returns_zero(monkeypatch, capsys):
     assert "主队胜算高" in saved["enriched"][0]["ai_summary"]
     out = capsys.readouterr().out
     assert "processed 1 items, wrote back 1" in out
+
+
+# --- M6S：按名配对（修 analyses 位置错配，线上实证 2026-09-11） -------------
+
+def _load_batch_pipeline(monkeypatch):
+    """注入假 ai.llm_client 后加载 ai.batch_pipeline（零 requests/LLM 依赖）。"""
+    import types
+    fake_llm = types.ModuleType("ai.llm_client")
+    fake_llm.generate = lambda *a, **k: {"analyses": []}
+    monkeypatch.setitem(sys.modules, "ai.llm_client", fake_llm)
+    monkeypatch.delitem(sys.modules, "ai.batch_pipeline", raising=False)
+    import ai.batch_pipeline as bp
+    return bp
+
+
+def test_analyse_batch_pairs_by_name(monkeypatch):
+    """LLM 返回乱序带 match 键的 analyses → 按名配对而非按位置。"""
+    bp = _load_batch_pipeline(monkeypatch)
+    monkeypatch.setattr(bp, "generate", lambda prompt, **k: {"analyses": [
+        {"match": "B vs C", "score": 90, "summary": "乙队胜", "notes": ""},
+        {"match": "A vs B", "score": 70, "summary": "甲队胜", "notes": ""},
+    ]})
+    out = bp.analyse_batch(
+        [{"name": "A vs B", "league": "EPL"}, {"name": "B vs C", "league": "EPL"}],
+        config={},
+    )
+    assert [o["name"] for o in out] == ["A vs B", "B vs C"]
+    assert [o["ai_summary"] for o in out] == ["甲队胜", "乙队胜"]
+    assert [o["ai_score"] for o in out] == [70, 90]
+
+
+def test_analyse_batch_missing_analysis_keeps_item_plain(monkeypatch):
+    """analyses 缺一条 → 缺失项原样保留、不串位（无 ai_ 字段）。"""
+    bp = _load_batch_pipeline(monkeypatch)
+    monkeypatch.setattr(bp, "generate", lambda prompt, **k: {"analyses": [
+        {"match": "A vs B", "score": 80, "summary": "甲队胜", "notes": ""},
+    ]})
+    out = bp.analyse_batch(
+        [{"name": "A vs B", "league": "EPL"}, {"name": "B vs C", "league": "EPL"}],
+        config={},
+    )
+    assert out[0]["ai_summary"] == "甲队胜"
+    assert out[1]["name"] == "B vs C"
+    assert "ai_score" not in out[1]
+    assert "ai_summary" not in out[1]
+    assert "ai_notes" not in out[1]
+
+
+def test_analyse_batch_falls_back_to_position_without_match(monkeypatch):
+    """所有 analyses 无 match 键且数量相等 → 兼容回退按位置配对（旧行为）。"""
+    bp = _load_batch_pipeline(monkeypatch)
+    monkeypatch.setattr(bp, "generate", lambda prompt, **k: {"analyses": [
+        {"score": 60, "summary": "丙队胜", "notes": ""},
+        {"score": 65, "summary": "丁队胜", "notes": ""},
+    ]})
+    out = bp.analyse_batch(
+        [{"name": "C vs D", "league": "EPL"}, {"name": "D vs E", "league": "EPL"}],
+        config={},
+    )
+    assert [o["ai_summary"] for o in out] == ["丙队胜", "丁队胜"]

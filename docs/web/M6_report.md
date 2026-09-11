@@ -132,3 +132,40 @@ ALL < 50 LINES
 cd /root/projects/league-predict && /root/venvs/web/bin/python -m pytest tests/web -q
 65 passed, 2 warnings in 12.69s
 ```
+
+---
+
+# M6S 返工记录：AI 摘要按名对齐
+
+## 根因
+
+`analyse_batch` 用位置配对 LLM 返回的 analyses（`analyses[j]` ↔ `batch[j]`）；模型输出顺序漂移即整批错位（线上实证：水晶宫条目配了伯恩茅斯摘要）。
+
+## 改动摘要（2 文件）
+
+| 文件 | 改动 |
+|---|---|
+| `ai/batch_pipeline.py` | `_build_prompt` Return 模板每条件加 `"match": "<对应条目的 name 原样照抄>"` + 新指令行「analyses 必须覆盖全部条目，match 原样照抄，不得改写。」；`analyse_batch` 内层配对改为 `_pair_batch(analyses, batch)` 按名 join（查到→填 ai_* 字段；查不到→原样 append 不串位），新拆 `_pair_batch` 小函数（13 行） |
+| `tests/web/test_m6_ai_enrich.py` | 追加 3 离线用例：乱序带 match 键按名配对正确；analyses 缺一条→缺失项无 ai_ 字段不串位；全无 match 键且数量相等→兼容回退按位置配对。注入假 `ai.llm_client`/monkeypatch `generate`，零 LLM 调用 |
+
+`_pair_batch` 回退语义：所有 analysis 均无 `match` 键且 `len(analyses)==len(batch)` → 按位置配对（旧行为）；否则空字典（缺失项原样保留）。
+
+## 测试结果
+
+```
+cd /root/projects/league-predict && /root/venvs/web/bin/python -m pytest tests/web -q
+68 passed, 2 warnings in 10.53s
+```
+
+## ast 行数自查
+
+```
+ai/batch_pipeline.py: max = 45 (analyse_batch)
+tests/web/test_m6_ai_enrich.py: max = 31
+ALL < 50 LINES
+```
+
+## 红线自查
+
+- 仅动工单 2 文件（`ai/batch_pipeline.py`、`tests/web/test_m6_ai_enrich.py`）；未 git commit/push；中文指令行未删改（新增行另加）。
+- 哨兵：`docs/web/logs/M6S.done` 已写。
