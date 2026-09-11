@@ -251,14 +251,14 @@ def test_prompt_build_output_contains_directive(monkeypatch):
 # --- M6R：web 原生执行体离线用例（严禁 live LLM/网络） ---------------------
 
 def test_enrich_collect_items_maps_fields(monkeypatch):
-    """collect_items：两联赛 doc → 每联赛前 5 条、字段映射正确。"""
+    """collect_items：两联赛 doc → 每联赛 [:40] 全量、字段映射正确。"""
     import web.enrich as enrich_mod
     docs = {
         "EPL": {"data": {"predictions": [
             {"match": f"EPL match {i}", "stars": f"{i}-star",
              "confidence_score": 0.6 + i / 10,
              "direction": "曼城 胜" if i % 2 == 0 else "利物浦 胜"}
-            for i in range(7)  # 7 条 → 截断前 5
+            for i in range(7)  # 7 条 → 全量窗口 [:40]
         ]}},
         "LALIGA": {"data": {"predictions": [
             {"match": "LALIGA match 0", "stars": "1-star", "confidence_score": 0.61,
@@ -267,9 +267,9 @@ def test_enrich_collect_items_maps_fields(monkeypatch):
     }
     monkeypatch.setattr(enrich_mod.store, "latest_by_league", lambda leagues=None: docs)
     items = enrich_mod.collect_items()
-    assert len(items) == 6  # 5 + 1
+    assert len(items) == 8  # 7 + 1（M8t2b: [:5]→[:40] 全量窗口，两联赛共 8 条）
     epl = [it for it in items if it["league"] == "EPL"]
-    assert len(epl) == 5
+    assert len(epl) == 7  # M8t2b: [:5]→[:40] 全量窗口
     assert epl[0]["name"] == "EPL match 0"
     assert epl[0]["date_found"] == ""
     assert epl[0]["stars"] == "0-star"

@@ -1,6 +1,7 @@
 """web.enrich — AI 摘要富化批处理 CLI（python -m web.enrich），仅 job 子进程使用。"""
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from pathlib import Path
@@ -12,15 +13,28 @@ if str(REPO_ROOT) not in sys.path:
 from web.services import store
 
 LP_AI_PRIORITIES = os.environ.get("LP_AI_PRIORITIES", "")
+logger = logging.getLogger(__name__)
+
+
+def _prediction_time(pred: dict) -> str:
+    return str(pred.get("kickoff_utc") or pred.get("kickoff_date") or "")
+
+
+def _limited_predictions(preds: list[dict], league_key: str) -> list[dict]:
+    if any(_prediction_time(pred) for pred in preds):
+        preds = sorted(preds, key=lambda pred: _prediction_time(pred) or "\uffff")
+    if len(preds) > 40:
+        logger.warning("league %s has %d predictions; limiting AI enrichment to 40", league_key, len(preds))
+    return preds[:40]
 
 
 def collect_items() -> list[dict]:
-    """从 store 取每联赛最新预测，每联赛取前 5 场构造富化项。"""
+    """从 store 取每联赛最新预测，按开球时间最多取 40 场构造富化项。"""
     by_league = store.latest_by_league()
     items: list[dict] = []
     for league_key, doc in by_league.items():
-        preds = doc.get("data", {}).get("predictions", [])
-        for pred in preds[:5]:
+        preds = _limited_predictions(doc.get("data", {}).get("predictions", []), league_key)
+        for pred in preds:
             match = pred.get("match", "")
             items.append({
                 "name": match,
