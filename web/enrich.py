@@ -69,6 +69,7 @@ def main() -> int:
 
     try:
         enriched = analyse_batch(items, context="", preference_prompt="", config=cfg)
+        enriched = [ai for ai in enriched if isinstance(ai, dict)]
         save_ai_scores(enriched, league_key="")
         print(f"[AI Enrich] processed {len(items)} items, wrote back {len(enriched)}")
         return 0
