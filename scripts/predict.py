@@ -230,82 +230,9 @@ def _print_summary(predictions: list, calibration: dict, calibration_offset: dic
     print(f"{'='*60}", file=sys.stderr)
 
 
-def run_league(league_key: str, args, now_utc, dates_str, silent: bool = False) -> dict | None:
-    data_source = args.data_source
-    run_monte_carlo = args.monte_carlo
-    n_simulations = args.n_simulations
-    run_backtest = args.backtest
-    use_dc = not args.no_dc
-    skip_fetch = args.no_fetch
-
-    _t_start = time.time()
-
-    league_config = LEAGUE_CONFIG.get(league_key, LEAGUE_CONFIG["epl"])
-    host_country = league_config.get("host_country")
-    tournament_type = league_config.get("tournament_type", "league")
-
-    logger.info(f"League: {league_key} ({league_config['name']}), source: {data_source}, type: {tournament_type}")
-
-    # 1. 获取并解析赛事数据
-    events, past, future, in_prog = _fetch_and_parse(league_key, data_source, dates_str, now_utc, skip_fetch)
-
-    # 1.5 累计历史完赛记录（供线上 ML 训练 / calibration 跨运行累计，P5）
-    try:
-        from core.calibration import append_historical_past_matches
-        _added = append_historical_past_matches(league_key, past)
-        if _added:
-            logger.info(f"Accumulated {_added} historical past matches (league={league_key})")
-    except Exception as e:
-        logger.warning(f"Failed to accumulate historical past matches: {e}")
-
-    # 2. ELO 评分初始化与更新
-    fifa_rankings = fetch_fifa_rankings()
-    logger.info(f"FIFA rankings loaded: {len(fifa_rankings)} teams")
-    elo_ratings = _update_elo(past, fifa_rankings, force_refresh=args.update_rankings)
-
-    if not future and not past:
-        logger.info("No matches found in window")
-        return {
-            "generated_at": now_utc.isoformat(), "data_window": dates_str,
-            "status": "no_matches", "league": league_key,
-            "tournament_type": tournament_type,
-            "message": f"No matches in window ({dates_str})",
-            "calibration": {"note": "no data"}, "past_matches": [], "predictions": [],
-        }
-
-    if not future and not run_backtest:
-        logger.info("No future matches to predict")
-        calibration = build_calibration(past, future)
-        output = {
-            "generated_at": now_utc.isoformat(), "data_window": dates_str,
-            "status": "no_future_matches", "league": league_key,
-            "tournament_type": tournament_type,
-            "message": f"No matches to predict in window ({dates_str})",
-            "calibration": calibration, "past_matches": past, "predictions": [],
-        }
-        reconciliation = reconcile_predictions(past)
-        if reconciliation:
-            output["reconciliation"] = reconciliation
-        return output
-
-    # 3. 校准
-    calibration, calibration_offset = _compute_calibration(past, future, league_key)
-
-    # 4. Dixon-Coles ρ 拟合
-    fitted_rho = DC_RHO
-    if use_dc:
-        try:
-            fitted_rho = fit_dc_rho(past)
-        except Exception as e:
-            logger.info(f"DC rho fit failed: {e}, using default")
-
-    # 5. 生成预测（AI 反馈分数按联赛隔离加载，P4）
-    ai_adjustments = load_ai_adjustments(league_key)
-    predictions = _generate_predictions(
-        future, calibration_offset, fifa_rankings, host_country,
-        use_dc, fitted_rho, elo_ratings, league_key, ai_adjustments,
-    )
-
+def _annotate_monte_carlo(predictions: list, run_monte_carlo: bool, n_simulations: int, fitted_rho: float, tournament_type: str) -> dict | None:
+    """蒙特卡洛冠军概率并写回 predictions。返回冠军榜 dict（未启用/无数据时 None）。
+    """
     # 6. Monte Carlo（可选）
     monte_carlo_result = None
     if run_monte_carlo and predictions:
@@ -323,7 +250,12 @@ def run_league(league_key: str, args, now_utc, dates_str, silent: bool = False) 
             rho=fitted_rho, tournament_type=tournament_type,
         )
         logger.info(f"Monte Carlo complete. Top champion: {list(monte_carlo_result['champion_probs'].items())[:3]}")
+    return monte_carlo_result
 
+
+def _build_league_output(now_utc, dates_str, league_key, tournament_type, data_source, use_dc, fitted_rho, calibration, calibration_offset, past, predictions, _t_start, monte_carlo_result, args) -> tuple[dict, dict]:
+    """组装联赛输出 dict：reconciliation、命中率小结、静态 Dashboard 触发。
+    """
     # 7. 构建输出
     output = {
         "generated_at": now_utc.isoformat(), "data_window": dates_str,
@@ -365,14 +297,73 @@ def run_league(league_key: str, args, now_utc, dates_str, silent: bool = False) 
             logger.info(f"Dashboard generated: {dash_path}")
         except Exception as e:
             logger.warning(f"Dashboard generation failed: {e}")
+    return output, accuracy_summary
 
-    # 8. 回测（可选）
-    if run_backtest:
-        pred_file = _save_output(output, calibration_offset, now_utc)
-        bt = backtest_with_live_results(str(pred_file))
-        output["backtest"] = bt
-        logger.info(f"Backtest: {bt.get('status')} matched={bt.get('matched_matches')} acc={bt.get('accuracy')}")
 
+def _setup_league_run(league_key: str, args, now_utc, dates_str):
+    """第一阶段：参数解包、获取并解析赛事数据、ELO 初始化。返回后续阶段所需全部数据。
+    """
+    data_source = args.data_source
+    run_monte_carlo = args.monte_carlo
+    n_simulations = args.n_simulations
+    run_backtest = args.backtest
+    use_dc = not args.no_dc
+    skip_fetch = args.no_fetch
+
+    _t_start = time.time()
+
+    league_config = LEAGUE_CONFIG.get(league_key, LEAGUE_CONFIG["epl"])
+    host_country = league_config.get("host_country")
+    tournament_type = league_config.get("tournament_type", "league")
+
+    logger.info(f"League: {league_key} ({league_config['name']}), source: {data_source}, type: {tournament_type}")
+
+    # 1. 获取并解析赛事数据
+    events, past, future, in_prog = _fetch_and_parse(league_key, data_source, dates_str, now_utc, skip_fetch)
+
+    # 1.5 累计历史完赛记录（供线上 ML 训练 / calibration 跨运行累计，P5）
+    try:
+        from core.calibration import append_historical_past_matches
+        _added = append_historical_past_matches(league_key, past)
+        if _added:
+            logger.info(f"Accumulated {_added} historical past matches (league={league_key})")
+    except Exception as e:
+        logger.warning(f"Failed to accumulate historical past matches: {e}")
+
+    # 2. ELO 评分初始化与更新
+    fifa_rankings = fetch_fifa_rankings()
+    logger.info(f"FIFA rankings loaded: {len(fifa_rankings)} teams")
+    elo_ratings = _update_elo(past, fifa_rankings, force_refresh=args.update_rankings)
+    return (data_source, run_monte_carlo, n_simulations, run_backtest, use_dc,
+            _t_start, host_country, tournament_type, past, future, fifa_rankings, elo_ratings)
+
+
+def _compute_and_predict(past, future, league_key, fifa_rankings, host_country, use_dc, elo_ratings):
+    """校准、DC ρ 拟合与预测生成。返回 (calibration, calibration_offset, fitted_rho, predictions)。
+    """
+    # 3. 校准
+    calibration, calibration_offset = _compute_calibration(past, future, league_key)
+
+    # 4. Dixon-Coles ρ 拟合
+    fitted_rho = DC_RHO
+    if use_dc:
+        try:
+            fitted_rho = fit_dc_rho(past)
+        except Exception as e:
+            logger.info(f"DC rho fit failed: {e}, using default")
+
+    # 5. 生成预测（AI 反馈分数按联赛隔离加载，P4）
+    ai_adjustments = load_ai_adjustments(league_key)
+    predictions = _generate_predictions(
+        future, calibration_offset, fifa_rankings, host_country,
+        use_dc, fitted_rho, elo_ratings, league_key, ai_adjustments,
+    )
+    return calibration, calibration_offset, fitted_rho, predictions
+
+
+def _finalize_league_output(silent, output, calibration_offset, now_utc, predictions, calibration, monte_carlo_result, n_simulations, accuracy_summary, _t_start):
+    """收尾：打印 JSON、落盘、摘要与运行时统计（stderr）。
+    """
     # 9. 输出
     if not silent:
         print(json.dumps(output, indent=2, ensure_ascii=False))
@@ -383,6 +374,53 @@ def run_league(league_key: str, args, now_utc, dates_str, silent: bool = False) 
     _elapsed = (time.time() - _t_start) * 1000
     print(f"Total runtime: {_elapsed:.0f}ms", file=sys.stderr)
     print(f"{'='*60}", file=sys.stderr)
+
+
+def run_league(league_key: str, args, now_utc, dates_str, silent: bool = False) -> dict | None:
+    data_source, run_monte_carlo, n_simulations, run_backtest, use_dc, _t_start, host_country, tournament_type, past, future, fifa_rankings, elo_ratings = _setup_league_run(league_key, args, now_utc, dates_str)
+
+    if not future and not past:
+        logger.info("No matches found in window")
+        return {
+            "generated_at": now_utc.isoformat(), "data_window": dates_str,
+            "status": "no_matches", "league": league_key,
+            "tournament_type": tournament_type,
+            "message": f"No matches in window ({dates_str})",
+            "calibration": {"note": "no data"}, "past_matches": [], "predictions": [],
+        }
+
+    if not future and not run_backtest:
+        logger.info("No future matches to predict")
+        calibration = build_calibration(past, future)
+        output = {
+            "generated_at": now_utc.isoformat(), "data_window": dates_str,
+            "status": "no_future_matches", "league": league_key,
+            "tournament_type": tournament_type,
+            "message": f"No matches to predict in window ({dates_str})",
+            "calibration": calibration, "past_matches": past, "predictions": [],
+        }
+        reconciliation = reconcile_predictions(past)
+        if reconciliation:
+            output["reconciliation"] = reconciliation
+        return output
+
+    # 3. 校准
+    calibration, calibration_offset, fitted_rho, predictions = _compute_and_predict(past, future, league_key, fifa_rankings, host_country, use_dc, elo_ratings)
+
+    # 6. Monte Carlo（可选）
+    monte_carlo_result = _annotate_monte_carlo(predictions, run_monte_carlo, n_simulations, fitted_rho, tournament_type)
+
+    # 7. 构建输出
+    output, accuracy_summary = _build_league_output(now_utc, dates_str, league_key, tournament_type, data_source, use_dc, fitted_rho, calibration, calibration_offset, past, predictions, _t_start, monte_carlo_result, args)
+
+    # 8. 回测（可选）
+    if run_backtest:
+        pred_file = _save_output(output, calibration_offset, now_utc)
+        bt = backtest_with_live_results(str(pred_file))
+        output["backtest"] = bt
+        logger.info(f"Backtest: {bt.get('status')} matched={bt.get('matched_matches')} acc={bt.get('accuracy')}")
+
+    _finalize_league_output(silent, output, calibration_offset, now_utc, predictions, calibration, monte_carlo_result, n_simulations, accuracy_summary, _t_start)
 
     return output
 
