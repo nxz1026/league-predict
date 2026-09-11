@@ -4,7 +4,6 @@ AI Feedback Loop — bridge between AI enrichment and prediction engine.
 Flow:
   Day N:  predict.py → ai_enrich_gha.py → save_ai_scores()
   Day N+1: predict.py → load_ai_scores() → adjust prediction confidence → predict
-  After match: reconcile_results() → track metrics
 
 Usage:
   from ai.feedback_loop import load_ai_adjustments, save_ai_scores
@@ -12,12 +11,10 @@ Usage:
   # pass adjustments into calculate_prediction()
 """
 import json
-import os
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 AI_SCORES_FILE = REPO_ROOT / "predictions" / "ai_scores.json"
-METRICS_FILE = REPO_ROOT / "results" / "metrics_history.json"
 
 
 def load_ai_adjustments(league_key: str = "") -> dict[str, dict]:
@@ -114,125 +111,3 @@ def adjust_prediction(prediction: dict, ai_adjustments: dict[str, dict]) -> dict
         prediction["stars"] = "1-star"
 
     return prediction
-
-
-def reconcile_results(predictions: list[dict], actual_results: list[dict]) -> dict:
-    """Compare predictions against actual match results.
-
-    Args:
-        predictions: list of prediction dicts (from predict.py output)
-        actual_results: list of past match dicts with score field
-
-    Returns metrics dict.
-    """
-
-    # Build a lookup of actual results by match name
-    actual_by_name = {}
-    for m in actual_results:
-        name = m.get("name", "")
-        score = m.get("score", "")
-        if name and score:
-            actual_by_name[name] = m
-
-    correct = 0
-    total = 0
-    ai_correct = 0
-    ai_total = 0
-    details = []
-
-    for p in predictions:
-        match_name = p.get("match", "")
-        actual = actual_by_name.get(match_name)
-        if not actual:
-            continue
-
-        total += 1
-        predicted_dir = p.get("direction", "")
-        actual_score = actual.get("score", "0-0")
-
-        # Parse actual result
-        try:
-            home_goals = int(actual_score.split("-")[0])
-            away_goals = int(actual_score.split("-")[1])
-        except (ValueError, IndexError):
-            continue
-
-        # Determine actual direction
-        if home_goals > away_goals:
-            actual_dir = f"{actual.get('home','')} 胜"
-        elif home_goals < away_goals:
-            actual_dir = f"{actual.get('away','')} 胜"
-        else:
-            actual_dir = "平局"
-
-        is_correct = predicted_dir == actual_dir or (
-            "胜" in predicted_dir and "胜" in actual_dir
-            and predicted_dir.split("胜")[0].strip() == actual_dir.split("胜")[0].strip()
-        )
-
-        if is_correct:
-            correct += 1
-            if p.get("ai_adjusted"):
-                ai_correct += 1
-
-        if p.get("ai_adjusted"):
-            ai_total += 1
-
-        details.append({
-            "match": match_name,
-            "predicted": predicted_dir,
-            "actual": actual_dir,
-            "score": actual_score,
-            "correct": is_correct,
-            "ai_adjusted": p.get("ai_adjusted", False),
-            "ai_score": p.get("ai_score_used"),
-            "confidence": p.get("confidence_score"),
-        })
-
-    metrics = {
-        "total_matches": total,
-        "correct": correct,
-        "accuracy": round(correct / total, 3) if total else 0,
-        "ai_adjusted_total": ai_total,
-        "ai_adjusted_correct": ai_correct,
-        "ai_adjusted_accuracy": round(ai_correct / ai_total, 3) if ai_total else None,
-        "details": details,
-    }
-
-    # Save to metrics history
-    METRICS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    history = []
-    if METRICS_FILE.exists():
-        try:
-            with open(METRICS_FILE) as f:
-                history = json.load(f)
-        except (json.JSONDecodeError):
-            pass
-
-    from datetime import datetime, timezone
-    metrics["timestamp"] = datetime.now(timezone.utc).isoformat()
-    history.append(metrics)
-
-    # Keep last 100 entries
-    if len(history) > 100:
-        history = history[-100:]
-
-    with open(METRICS_FILE, "w") as f:
-        json.dump(history, f, indent=2, ensure_ascii=False)
-
-    return metrics
-
-
-def print_metrics_summary(metrics: dict) -> str:
-    """Format metrics as human-readable string."""
-    lines = [
-        "=== AI Feedback Metrics ===",
-        f"Matches: {metrics['total_matches']}",
-        f"Accuracy: {metrics['accuracy']:.1%} ({metrics['correct']}/{metrics['total_matches']})",
-    ]
-    if metrics.get("ai_adjusted_total"):
-        lines.append(
-            f"AI-adjusted accuracy: {metrics['ai_adjusted_accuracy']:.1%} "
-            f"({metrics['ai_adjusted_correct']}/{metrics['ai_adjusted_total']})"
-        )
-    return "\n".join(lines)
