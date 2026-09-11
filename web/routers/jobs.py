@@ -35,7 +35,8 @@ _FLAG_ARGS = {
     "--dashboard": False,
 }
 _VALUE_ARGS = {
-    "--league": sorted(LEAGUES),
+    "--league": sorted(league for league, info in LEAGUES.items()
+                       if info.get("active", True)),
     "--data-source": ("football-data", "espn", "api-football", ""),
     "--n-simulations": None,  # 正整数，单独校验
     "--dates": None,          # YYYYMMDD-YYYYMMDD，正则校验
@@ -177,7 +178,7 @@ def _today_has_data() -> bool:
     docs = store.latest_by_league()
     return all(
         league in docs and store.covers_date(docs[league].get("data", {}), day)
-        for league in LEAGUES
+        for league in LEAGUES if LEAGUES[league].get("active", True)
     )
 
 

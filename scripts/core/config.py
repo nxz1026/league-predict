@@ -40,3 +40,11 @@ from core.leagues import (                      # noqa: F401
     LEAGUE_DC_RHO,
     LEAGUE_LAMBDA_MULTIPLIER,
 )
+ 
+LEAGUE_CONFIG["nba"] = {
+    "name": "NBA",
+    "name_cn": "NBA",
+    "data_source": "the-odds",
+    "sport": "basketball",
+    "active": False,
+}

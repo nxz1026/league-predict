@@ -19,6 +19,7 @@ LEAGUES: dict[str, dict] = {
     "bundesliga": {"name": "Bundesliga", "data_source": "football-data"},
     "seriea": {"name": "Serie A", "data_source": "football-data"},
     "ligue1": {"name": "Ligue 1", "data_source": "football-data"},
+    "nba": {"name": "NBA", "data_source": "the-odds", "active": False},
 }
 
 DEFAULT_SOURCE = "football-data"
