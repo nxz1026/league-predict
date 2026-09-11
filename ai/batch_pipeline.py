@@ -86,4 +86,5 @@ def _build_prompt(batch, context, preference_prompt, config):
 {preference_prompt}
 # Instructions
 Return: {{"analyses": [{{"score": <0-100>, "summary": "<2 sentences>", "notes": ""}} for each item in order]}}
+所有 summary 与 notes 必须使用简体中文撰写（JSON 键名保持英文）。
 {scoring_rubric}"""

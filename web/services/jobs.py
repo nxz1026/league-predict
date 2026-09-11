@@ -184,14 +184,15 @@ def _write_job(jid: str, data: dict) -> None:
     os.replace(tmp, _job_file(jid))
 
 
-def create_job(args: list[str], trigger: str = "manual") -> dict:
-    """登记 queued 任务（写状态文件），返回 job 记录。"""
+def create_job(args: list[str], trigger: str = "manual", script: str = "predict") -> dict:
+    """登记 queued 任务（写状态文件），返回 job 记录。script: predict|ai_enrich。"""
     jid = job_id()
     now = _now_epoch()
     job = {
         "id": jid,
         "status": STATUS_QUEUED,
         "trigger": trigger,
+        "script": script,
         "args": args,
         "created_at": now,
         "started_at": None,
@@ -239,9 +240,10 @@ def _build_env() -> dict:
     return dict(os.environ)
 
 
-def _build_cmd(args: list[str]) -> list[str]:
-    """argv 白名单外（校验在 router 层完成），此处仅拼 CLI。"""
-    return [sys.executable, str(config.BASE_DIR / "scripts" / "predict.py"), *args]
+def _build_cmd(args: list[str], script: str = "predict") -> list[str]:
+    """按脚本名拼 CLI（默认 predict.py；ai_enrich → ai_enrich_gha.py）。"""
+    name = "predict.py" if script == "predict" else "ai_enrich_gha.py"
+    return [sys.executable, str(config.BASE_DIR / "scripts" / name), *args]
 
 
 def run_job(jid: str) -> None:
@@ -251,7 +253,9 @@ def run_job(jid: str) -> None:
         if job is None or job.get("status") not in (STATUS_QUEUED, STATUS_RUNNING):
             return
         _spin_state(jid, STATUS_RUNNING, started_at=_now_epoch())
-        cmd = _build_cmd(list(job.get("args", [])))
+        args = list(job.get("args", []))
+        script = job.get("script", "predict")  # 老 job 文件缺字段 → predict 容错
+        cmd = _build_cmd(args) if script == "predict" else _build_cmd(args, script)
         log_path = _log_file(jid)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         started = _now_epoch()
@@ -301,15 +305,26 @@ def active_job() -> dict | None:
     return None
 
 
-def trigger_predict(args: list[str], trigger: str = "manual") -> tuple[dict | None, str | None]:
-    """提交一个新任务：配额守卫 + 并发守卫。返回 (job 或 None, 拒绝原因)。
+def _spawn(script: str, extra_argv: list[str], trigger: str = "manual") -> tuple[dict | None, str | None]:
+    """公共提交链路：配额守卫 + 并发守卫 + 登记。返回 (job 或 None, 拒绝原因)。
 
-    契约：任务提交即占配额；并发有新任务时返回 (None, "already_running")。
+    契约：任务提交即占配额（predict 与 ai_enrich 共享同一计数器）；
+    并发有新任务时返回 (existing, "already_running")。
     """
     if not quota_consume():
         return None, "quota_exhausted"
     existing = active_job()
     if existing is not None:
         return existing, "already_running"
-    job = create_job(args, trigger=trigger)
+    job = create_job(extra_argv, trigger=trigger, script=script)
     return job, None
+
+
+def trigger_predict(args: list[str], trigger: str = "manual") -> tuple[dict | None, str | None]:
+    """提交预测任务（脚本 scripts/predict.py）。"""
+    return _spawn("predict", args, trigger)
+
+
+def trigger_ai_enrich(trigger: str = "manual") -> tuple[dict | None, str | None]:
+    """提交 AI 富化任务（脚本 scripts/ai_enrich_gha.py，argv 固定为空）。"""
+    return _spawn("ai_enrich", [], trigger)

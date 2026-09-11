@@ -93,6 +93,7 @@ def _job_view(job: dict) -> dict:
         "id": job.get("id"),
         "status": job.get("status"),
         "trigger": job.get("trigger"),
+        "script": job.get("script", "predict"),
         "args": job.get("args", []),
         "created_at": job.get("created_at"),
         "started_at": job.get("started_at"),
@@ -121,6 +122,29 @@ def jobs_predict(body: dict | None, request: Request,
             "job": _job_view(job),
         })
     # 异步执行（fire-and-forget：失败只写状态文件，绝不抛回请求线程）。
+    _executor.submit(jobs.run_job, job["id"])
+    return JSONResponse(status_code=202, content={"job": _job_view(job)})
+
+
+@router.post("/jobs/ai-enrich", status_code=202)
+def jobs_ai_enrich(request: Request, _: None = Depends(require_auth)) -> JSONResponse:
+    """提交 AI 摘要重生成任务（脚本 scripts/ai_enrich_gha.py，无 body 参数）。
+
+    语义与 /jobs/predict 一致：202 + job / 409 already_running / 429 quota_exhausted。
+    配额与 predict 共享同一计数器。
+    """
+    job, reason = jobs.trigger_ai_enrich(trigger="manual")
+    if reason == "quota_exhausted":
+        usage = jobs.quota_usage()
+        raise errors.ApiError("quota_exhausted",
+                              f"今日任务配额已用尽（{usage['used']}/{usage['limit']}）",
+                              http_status=429)
+    if reason == "already_running":
+        return JSONResponse(status_code=409, content={
+            "code": "already_running",
+            "message": "已有任务在运行，请稍后再试",
+            "job": _job_view(job),
+        })
     _executor.submit(jobs.run_job, job["id"])
     return JSONResponse(status_code=202, content={"job": _job_view(job)})
 

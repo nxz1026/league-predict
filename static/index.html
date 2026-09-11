@@ -154,8 +154,41 @@ async function loadAI(){
     }
     const det=await api("/ai/details");
     if(!det.available||!det.items||!det.items.length){ zone.innerHTML="<div class=\"ai-msg\">暂无 AI 富化数据</div>"; return; }
-    zone.innerHTML=det.items.map(it=>"<details class=\"ai\"><summary>"+esc(it.match||"")+" <span class=\"badge\">score "+(it.ai_score==null?"—":it.ai_score)+"</span></summary><div class=\"ai-msg ok\">"+esc(it.ai_summary||"")+(it.ai_notes?("\n\n"+esc(it.ai_notes)):"")+"</div></details>").join("");
+    zone.innerHTML="<div style=\"margin-bottom:8px\"><button class=\"btn\" id=\"regen-ai\">🧠 重新生成AI摘要</button><span id=\"regen-status\" class=\"small mut\" style=\"margin-left:10px\"></span></div>"+
+      det.items.map(it=>"<details class=\"ai\"><summary>"+esc(it.match||"")+" <span class=\"badge\">score "+(it.ai_score==null?"—":it.ai_score)+"</span></summary><div class=\"ai-msg ok\">"+esc(it.ai_summary||"")+(it.ai_notes?("\n\n"+esc(it.ai_notes)):"")+"</div></details>").join("");
+    document.getElementById("regen-ai").addEventListener("click",runAiEnrich);
   }catch(e){ zone.innerHTML="<div class=\"ai-msg\">AI 解读暂不可用"+(e.message?("："+esc(e.message)):"")+"</div>"; }
+}
+async function runAiEnrich(){
+  const btn=document.getElementById("regen-ai"); if(!btn) return;
+  btn.disabled=true;
+  const st=document.getElementById("regen-status"); if(!st) return;
+  st.textContent="提交中…";
+  try{
+    const res=await api("/jobs/ai-enrich",{method:"POST",body:"{}"});
+    st.textContent="已提交任务 "+esc(res.job&&res.job.id||"")+"，开始轮询…";
+    pollAiJob(res.job.id);
+  }catch(e){
+    if(e.status===429){ st.innerHTML="<span class=\"err\">配额已用尽："+esc(e.message)+"</span>"; }
+    else if(e.status===409){ st.innerHTML="<span class=\"warn\">已有任务在运行："+esc(e.message)+"</span>"; }
+    else { st.innerHTML="<span class=\"err\">"+esc(e.message)+"</span>"; }
+    btn.disabled=false;
+  }
+}
+function pollAiJob(jid){
+  if(!jid) return;
+  const st=document.getElementById("regen-status"); if(!st) return;
+  const tick=async()=>{
+    try{
+      const r=await api("/jobs/"+encodeURIComponent(jid));
+      const j=r.job||{};
+      st.textContent="任务 "+jid+"："+j.status;
+      if(j.status==="done"){ st.innerHTML="<span class=\"badge ok\">done</span> 摘要已重新生成"; loadAI(); return; }
+      if(j.status==="failed"||j.status==="timeout"){ st.innerHTML="<span class=\"badge err\">"+j.status+"</span> "+(j.error||""); const b=document.getElementById("regen-ai"); if(b) b.disabled=false; return; }
+      setTimeout(tick,3000);
+    }catch(e){ st.innerHTML="<span class=\"err\">轮询失败："+esc(e.message)+"</span>"; }
+  };
+  tick();
 }
 /* ---- tab: 历史预测 ---- */
 function leagueSelectTag(cur){
