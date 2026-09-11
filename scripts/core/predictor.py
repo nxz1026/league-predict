@@ -182,6 +182,73 @@ def _unified_strength_probs(market_home: float, market_draw: float, market_away:
     return home_prob, draw_prob_calc, away_prob
 
 
+def _derive_lambdas_and_grid(
+    league_key: str,
+    hp: float, ap: float,
+    home_onside: float, away_onside: float,
+    sm_capped: float, onside_weight: float,
+    elo_ratings: dict | None,
+    elo_home_expected: float | None, elo_away_expected: float | None,
+    ELO_WEIGHT: float,
+    hfs: float, hrs: float, afs: float, ars: float,
+    use_dixon_coles: bool, dc_rho: float,
+) -> tuple[float, float, float, float, str, list, float, float]:
+    """P0-2：统一权重推导 DC 强度 λ，展开 9×9 泊松网格 → 比分/top3/BTTS/O2.5。纯函数。"""
+    _lambda_mult = THRESHOLDS["lambda_multiplier"]
+    # P1-C: 联赛差异化 λ 映射系数（覆盖全局默认值）
+    from core.config import LEAGUE_LAMBDA_MULTIPLIER
+    if league_key in LEAGUE_LAMBDA_MULTIPLIER:
+        _lambda_mult = LEAGUE_LAMBDA_MULTIPLIER[league_key]
+
+    # 统一的 raw strength（与方向概率同一套信号）
+    raw_home_unified = (
+        hp * MARKET_ODDS_WEIGHT
+        + home_onside * onside_weight
+        + sm_capped * 0.5
+    )
+    raw_away_unified = (
+        ap * MARKET_ODDS_WEIGHT
+        + away_onside * onside_weight
+        + (-sm_capped) * 0.5
+    )
+
+    if elo_ratings and elo_home_expected is not None:
+        raw_home_unified += elo_home_expected * ELO_WEIGHT
+        raw_away_unified += elo_away_expected * ELO_WEIGHT
+
+    # 加入 form/record 作为补充微调（保留但降权）
+    raw_home = raw_home_unified * 0.75 + (hfs * 0.15 + hrs * 0.10)
+    raw_away = raw_away_unified * 0.75 + (afs * 0.15 + ars * 0.10)
+
+    lambda_home = max(raw_home * _lambda_mult, THRESHOLDS["lambda_lower_bound"])
+    lambda_away = max(raw_away * _lambda_mult, THRESHOLDS["lambda_lower_bound"])
+
+    # ── Dixon-Coles 或独立泊松比分预测 ──
+    if use_dixon_coles:
+        dc_result = dixon_coles_match_probs(lambda_home, lambda_away, rho=dc_rho)
+        all_scores = dc_result["score_probs"]
+        top3 = [(s[0], s[1], round(s[2], 4)) for s in all_scores[:3]]
+        predicted_score = f"{top3[0][0]}-{top3[0][1]}"
+
+        # 从 DC 模型计算 BTTS 和 Over/2.5
+        btts_prob = sum(s[2] for s in all_scores if s[0] > 0 and s[1] > 0)
+        over_25_prob = sum(s[2] for s in all_scores if s[0] + s[1] > 2)
+    else:
+        all_scores = []
+        for h in range(9):
+            for a in range(9):
+                p = poisson_pmf(h, lambda_home) * poisson_pmf(a, lambda_away)
+                if p >= 0.001:
+                    all_scores.append((h, a, p))
+        all_scores.sort(key=lambda x: -x[2])
+        top3 = [(s[0], s[1], round(s[2], 4)) for s in all_scores[:3]]
+        predicted_score = f"{top3[0][0]}-{top3[0][1]}"
+        btts_prob = sum(s[2] for s in all_scores if s[0] > 0 and s[1] > 0)
+        over_25_prob = sum(s[2] for s in all_scores if s[0] + s[1] > 2)
+
+    return lambda_home, lambda_away, raw_home, raw_away, predicted_score, top3, btts_prob, over_25_prob, all_scores
+
+
 def calculate_prediction(
     match: dict,
     weights: dict | None = None,
@@ -270,62 +337,10 @@ def calculate_prediction(
     direction, confidence_raw, confidence_note, stars = _decide_direction_and_stars(
         home_prob, draw_prob_calc, away_prob, match)
 
-    # ══════════════════════════════════════════════════════
-    # P0-2 修复: λ 计算现在使用与方向相同的统一权重体系
-    # 旧代码: raw = market*40% + form*20% + record*15% + spread*25%
-    # 新代码: 与方向一致 — market + onside + elo + spread
-    # ══════════════════════════════════════════════════════
-    _lambda_mult = THRESHOLDS["lambda_multiplier"]
-    # P1-C: 联赛差异化 λ 映射系数（覆盖全局默认值）
-    from core.config import LEAGUE_LAMBDA_MULTIPLIER
-    if league_key in LEAGUE_LAMBDA_MULTIPLIER:
-        _lambda_mult = LEAGUE_LAMBDA_MULTIPLIER[league_key]
-
-    # 统一的 raw strength（与方向概率同一套信号）
-    raw_home_unified = (
-        hp * MARKET_ODDS_WEIGHT
-        + home_onside * onside_weight
-        + sm_capped * 0.5
-    )
-    raw_away_unified = (
-        ap * MARKET_ODDS_WEIGHT
-        + away_onside * onside_weight
-        + (-sm_capped) * 0.5
-    )
-
-    if elo_ratings and elo_home_expected is not None:
-        raw_home_unified += elo_home_expected * ELO_WEIGHT
-        raw_away_unified += elo_away_expected * ELO_WEIGHT
-
-    # 加入 form/record 作为补充微调（保留但降权）
-    raw_home = raw_home_unified * 0.75 + (hfs * 0.15 + hrs * 0.10)
-    raw_away = raw_away_unified * 0.75 + (afs * 0.15 + ars * 0.10)
-
-    lambda_home = max(raw_home * _lambda_mult, THRESHOLDS["lambda_lower_bound"])
-    lambda_away = max(raw_away * _lambda_mult, THRESHOLDS["lambda_lower_bound"])
-
-    # ── Dixon-Coles 或独立泊松比分预测 ──
-    if use_dixon_coles:
-        dc_result = dixon_coles_match_probs(lambda_home, lambda_away, rho=dc_rho)
-        all_scores = dc_result["score_probs"]
-        top3 = [(s[0], s[1], round(s[2], 4)) for s in all_scores[:3]]
-        predicted_score = f"{top3[0][0]}-{top3[0][1]}"
-
-        # 从 DC 模型计算 BTTS 和 Over/2.5
-        btts_prob = sum(s[2] for s in all_scores if s[0] > 0 and s[1] > 0)
-        over_25_prob = sum(s[2] for s in all_scores if s[0] + s[1] > 2)
-    else:
-        all_scores = []
-        for h in range(9):
-            for a in range(9):
-                p = poisson_pmf(h, lambda_home) * poisson_pmf(a, lambda_away)
-                if p >= 0.001:
-                    all_scores.append((h, a, p))
-        all_scores.sort(key=lambda x: -x[2])
-        top3 = [(s[0], s[1], round(s[2], 4)) for s in all_scores[:3]]
-        predicted_score = f"{top3[0][0]}-{top3[0][1]}"
-        btts_prob = sum(s[2] for s in all_scores if s[0] > 0 and s[1] > 0)
-        over_25_prob = sum(s[2] for s in all_scores if s[0] + s[1] > 2)
+    lambda_home, lambda_away, raw_home, raw_away, predicted_score, top3, btts_prob, over_25_prob, all_scores = _derive_lambdas_and_grid(
+        league_key, hp, ap, home_onside, away_onside, sm_capped, onside_weight,
+        elo_ratings, elo_home_expected, elo_away_expected, ELO_WEIGHT,
+        hfs, hrs, afs, ars, use_dixon_coles, dc_rho)
 
     # ── 方向一致性检查（P1-4：结构化枚举 + 主客胜全覆盖） ──
     def _resolve_direction_winner(dir_str: str, match_ctx: dict) -> str | None:
