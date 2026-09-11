@@ -310,39 +310,16 @@ def _elo_expectations(elo_ratings: dict | None, home_en: str, away_en: str) -> t
 
 
 def _assemble_result(
-    match: dict,
-    direction: str,
-    stars: str,
-    confidence_raw: float,
-    predicted_score: str,
-    top3: list[tuple[int, int, float]],
-    lambda_home: float,
-    lambda_away: float,
-    raw_home: float,
-    raw_away: float,
-    btts_prob: float,
-    over_25_prob: float,
-    ml_proba: list[float] | None,
-    home_prob: float,
-    draw_prob_calc: float,
-    away_prob: float,
-    hfs: float,
-    hrs: float,
-    afs: float,
-    ars: float,
-    sm: float,
-    home_onside: float,
-    away_onside: float,
-    elo_home_expected: float | None,
-    elo_ratings: dict[str, float] | None,
-    use_dixon_coles: bool,
-    dc_rho: float | None,
-    league_key: str,
-    onside: dict,
-    confidence_note: str | None,
-    hp: float,
-    dp: float,
-    ap: float,
+    match: dict, direction: str, stars: str, confidence_raw: float,
+    predicted_score: str, top3: list[tuple[int, int, float]],
+    lambda_home: float, lambda_away: float, raw_home: float, raw_away: float,
+    btts_prob: float, over_25_prob: float, ml_proba: list[float] | None,
+    home_prob: float, draw_prob_calc: float, away_prob: float,
+    hfs: float, hrs: float, afs: float, ars: float, sm: float,
+    home_onside: float, away_onside: float, elo_home_expected: float | None,
+    elo_ratings: dict[str, float] | None, use_dixon_coles: bool,
+    dc_rho: float | None, league_key: str, onside: dict,
+    confidence_note: str | None, hp: float, dp: float, ap: float,
 ) -> dict:
     """组装最终预测结果字典（含 95% CI 与 Over/Under）。纯函数。"""
     # 95% 置信区间
@@ -357,27 +334,37 @@ def _assemble_result(
         ou = f"Under {ou_total}"
 
     result = {
-        "direction": direction,
-        "stars": stars,
+        "direction": direction, "stars": stars,
         "confidence_score": round(confidence_raw, 3),
         "predicted_score": predicted_score,
-        "poisson_top3": [
-            {"score": f"{h}-{a}", "prob": round(p, 4)} for h, a, p in top3
-        ],
-        "lambda_home": round(lambda_home, 2),
-        "lambda_away": round(lambda_away, 2),
-        "lambda_home_ci95": ci_home,
-        "lambda_away_ci95": ci_away,
-        "over_under": f"{ou}",
-        "btts": "Yes" if btts_prob > 0.5 else "No",
+        "poisson_top3": [{"score": f"{h}-{a}", "prob": round(p, 4)} for h, a, p in top3],
+        "lambda_home": round(lambda_home, 2), "lambda_away": round(lambda_away, 2),
+        "lambda_home_ci95": ci_home, "lambda_away_ci95": ci_away,
+        "over_under": f"{ou}", "btts": "Yes" if btts_prob > 0.5 else "No",
         "dixon_coles_used": use_dixon_coles,
         "dixon_coles_rho": dc_rho if use_dixon_coles else None,
         "ml_model_used": ml_proba is not None,
         "ml_proba": [round(p, 4) for p in ml_proba] if ml_proba else None,
         "dixon_coles_league_rho": LEAGUE_DC_RHO.get(league_key, DC_RHO),  # P0-3: 报告使用的 ρ 来源
-        "onside_signals": onside,
-        "confidence_note": confidence_note,
+        "onside_signals": onside, "confidence_note": confidence_note,
         "odds_data_available": match.get("odds_data_available", False),
+    }
+    result.update(_debug_fields(hfs, hrs, afs, ars, sm, home_onside,
+        away_onside, home_prob, draw_prob_calc, away_prob,
+        elo_home_expected, elo_ratings, raw_home, raw_away,
+        hp, dp, ap))
+    return result
+
+
+def _debug_fields(
+    hfs: float, hrs: float, afs: float, ars: float, sm: float,
+    home_onside: float, away_onside: float, home_prob: float,
+    draw_prob_calc: float, away_prob: float, elo_home_expected: float | None,
+    elo_ratings: dict[str, float] | None, raw_home: float, raw_away: float,
+    hp: float, dp: float, ap: float,
+) -> dict:
+    """构造调试/审计字段（暴露输入便于调试）。纯函数。"""
+    return {
         "reasoning_factors": {
             "home_ml_true_prob": round(hp, 3),
             "draw_true_prob": round(dp, 3),
@@ -397,7 +384,6 @@ def _assemble_result(
             "raw_lambda_away": round(raw_away, 4),   # P0-2: 暴露原始 λ 输入便于调试
         },
     }
-    return result
 
 
 # Args:
