@@ -145,6 +145,43 @@ def _apply_market_calibration(hp: float, dp: float, ap: float,
     return hp, dp, ap, dc_val, ohc, oac, home_onside, away_onside, calibration_note
 
 
+def _unified_strength_probs(market_home: float, market_draw: float, market_away: float,
+                            home_onside: float, away_onside: float, sm_capped: float,
+                            onside_weight: float, elo_ratings: bool,
+                            elo_home_expected: float | None, elo_away_expected: float | None,
+                            ELO_WEIGHT: float, dc_val: float, calibration_offset: dict | None
+                            ) -> tuple[float, float, float]:
+    """P0-2：方向概率与 λ 使用同一套加权信号 → home/draw/away 概率。纯函数。"""
+
+    # ── 方向概率计算 ──
+    home_strength = (
+        market_home * MARKET_ODDS_WEIGHT
+        + home_onside * onside_weight
+        + sm_capped * 0.5
+    )
+    away_strength = (
+        market_away * MARKET_ODDS_WEIGHT
+        + away_onside * onside_weight
+        + (-sm_capped) * 0.5
+    )
+
+    # ELO 加成
+    if elo_ratings and elo_home_expected is not None:
+        home_strength += elo_home_expected * ELO_WEIGHT
+        away_strength += elo_away_expected * ELO_WEIGHT
+
+    # P0-C 修复: Calibration 的 draw_correction 现在应用到 draw_strength
+    _dc_draw = dc_val if calibration_offset else 1.0
+    draw_strength = max(0, (market_draw * _dc_draw) * MARKET_ODDS_WEIGHT + THRESHOLDS["draw_base_score"])
+
+    total = max(home_strength + draw_strength + away_strength, 0.05)
+    home_prob = home_strength / total
+    draw_prob_calc = draw_strength / total
+    away_prob = away_strength / total
+
+    return home_prob, draw_prob_calc, away_prob
+
+
 def calculate_prediction(
     match: dict,
     weights: dict | None = None,
@@ -207,6 +244,7 @@ def calculate_prediction(
 
     # ── ELO 信号（可选） ──
     elo_home_expected = None
+    elo_away_expected = None
     if elo_ratings:
         home_elo = elo_ratings.get(home_en, DEFAULT_ELO)
         away_elo = elo_ratings.get(away_en, DEFAULT_ELO)
@@ -217,38 +255,11 @@ def calculate_prediction(
     # ══════════════════════════════════════════════════════
     # P0-2 统一权重体系：方向概率和 λ 使用同一套加权信号
     # ══════════════════════════════════════════════════════
-    
     onside_weight = (1 - MARKET_ODDS_WEIGHT) * (1 - ELO_WEIGHT if elo_ratings else 1.0)
-
-    # ── 方向概率计算 ──
-    market_home = hp
-    market_draw = dp
-    market_away = ap
-
-    home_strength = (
-        market_home * MARKET_ODDS_WEIGHT
-        + home_onside * onside_weight
-        + sm_capped * 0.5
-    )
-    away_strength = (
-        market_away * MARKET_ODDS_WEIGHT
-        + away_onside * onside_weight
-        + (-sm_capped) * 0.5
-    )
-
-    # ELO 加成
-    if elo_ratings and elo_home_expected is not None:
-        home_strength += elo_home_expected * ELO_WEIGHT
-        away_strength += elo_away_expected * ELO_WEIGHT
-
-    # P0-C 修复: Calibration 的 draw_correction 现在应用到 draw_strength
-    _dc_draw = dc_val if calibration_offset else 1.0
-    draw_strength = max(0, (market_draw * _dc_draw) * MARKET_ODDS_WEIGHT + THRESHOLDS["draw_base_score"])
-
-    total = max(home_strength + draw_strength + away_strength, 0.05)
-    home_prob = home_strength / total
-    draw_prob_calc = draw_strength / total
-    away_prob = away_strength / total
+    home_prob, draw_prob_calc, away_prob = _unified_strength_probs(
+        hp, dp, ap, home_onside, away_onside, sm_capped, onside_weight,
+        elo_ratings, elo_home_expected, elo_away_expected,
+        ELO_WEIGHT, dc_val, calibration_offset)
 
     # ── ML 概率融合（P1/ML: 26 维特征分类器与主模型概率做加权融合）──
     home_prob, draw_prob_calc, away_prob, ml_proba = _blend_ml_probs(
