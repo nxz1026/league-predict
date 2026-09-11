@@ -172,12 +172,13 @@ def jobs_list(request: Request, _: None = Depends(require_auth)) -> dict:
 # --- 惰性刷新（predictions/today 缺数据兜底）-----------------------------
 
 def _today_has_data() -> bool:
-    """今天各联赛预测是否齐全（任一联赛有 today 窗口数据即视为有数据）。"""
+    """今天各联赛预测是否齐全：**每个**注册联赛的最新文档都覆盖今日才算齐全。"""
     day = store.bjt_today()
-    for league, doc in store.latest_by_league().items():
-        if league in LEAGUES and store.covers_date(doc.get("data", {}), day):
-            return True
-    return False
+    docs = store.latest_by_league()
+    return all(
+        league in docs and store.covers_date(docs[league].get("data", {}), day)
+        for league in LEAGUES
+    )
 
 
 def _lazy_auto_trigger() -> dict:
