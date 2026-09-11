@@ -68,6 +68,17 @@ def _elo_to_approx_rank(elo: float) -> int:
     return max(1, int(round(r)))
 
 
+def _onside_weighted_score(fifa_score: float, league_score: float, host_score: float, conf_score: float) -> float:
+    """按 ONSIDE_WEIGHTS 加权求和单边 Onside 得分（与原 compute_onside_signals 内联计算一致）。"""
+    w = ONSIDE_WEIGHTS
+    return (
+        fifa_score * w["fifa_ranking"]
+        + league_score * w["league_footprint"]
+        + host_score * w["host_advantage"]
+        + conf_score * w["confederation"]
+    )
+
+
 def compute_onside_signals(home_team: str, away_team: str, fifa_rankings: dict[str, int], host_country: str | None = None, elo_ratings: dict[str, float] | None = None) -> dict[str, Any]:
     fifa_default = THRESHOLDS.get("fifa_rank_default", 200)
     home_rank = fifa_rankings.get(home_team, fifa_default)
@@ -93,19 +104,8 @@ def compute_onside_signals(home_team: str, away_team: str, fifa_rankings: dict[s
     home_conf = confederation_score(home_team)
     away_conf = confederation_score(away_team)
 
-    w = ONSIDE_WEIGHTS
-    home_onside = (
-        home_fifa * w["fifa_ranking"]
-        + home_league * w["league_footprint"]
-        + home_host * w["host_advantage"]
-        + home_conf * w["confederation"]
-    )
-    away_onside = (
-        away_fifa * w["fifa_ranking"]
-        + away_league * w["league_footprint"]
-        + away_host * w["host_advantage"]
-        + away_conf * w["confederation"]
-    )
+    home_onside = _onside_weighted_score(home_fifa, home_league, home_host, home_conf)
+    away_onside = _onside_weighted_score(away_fifa, away_league, away_host, away_conf)
 
     return {
         "home": {

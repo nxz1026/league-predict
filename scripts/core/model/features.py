@@ -60,6 +60,51 @@ FEATURE_COLUMNS: list[str] = [
 NUM_FEATURES = len(FEATURE_COLUMNS)
 
 
+def _append_derived_features(
+    vec: list[float],
+    match: dict[str, Any],
+    context: dict[str, Any],
+    hfs: float,
+    afs: float,
+    hrs: float,
+    ars: float,
+    hp: float,
+    ap: float,
+    home_onside: float,
+    away_onside: float,
+) -> None:
+    """ELO 与工程特征按 FEATURE_COLUMNS 顺序追加（数值与原 extract_features 内联计算完全一致）。"""
+    elo_ratings = context.get("elo_ratings")
+    home_en = match.get("home_en", match.get("home", ""))
+    away_en = match.get("away_en", match.get("away", ""))
+    if elo_ratings:
+        home_elo = elo_ratings.get(home_en, DEFAULT_ELO)
+        away_elo = elo_ratings.get(away_en, DEFAULT_ELO)
+        elo_home_exp = expected_score(home_elo, away_elo, home_adv=True)
+        elo_diff = home_elo - away_elo
+    else:
+        home_elo = DEFAULT_ELO
+        away_elo = DEFAULT_ELO
+        elo_home_exp = 0.5
+        elo_diff = 0.0
+
+    form_diff = hfs - afs
+    record_diff = hrs - ars
+    form_x_record_h = hfs * hrs
+    form_x_record_a = afs * ars
+    odds_elo_diff = (hp - ap) - (elo_home_exp - 0.5)
+    onside_elo_diff = (home_onside - away_onside) - (elo_home_exp - 0.5)
+    is_host = 1.0 if context.get("host_country") and home_en == context["host_country"] else 0.0
+
+    vec.extend([
+        elo_home_exp, home_elo, away_elo, elo_diff,
+        form_diff, record_diff,
+        form_x_record_h, form_x_record_a,
+        odds_elo_diff, onside_elo_diff,
+        is_host,
+    ])
+
+
 def extract_features(match: dict[str, Any], context: dict[str, Any] | None = None) -> list[float]:
     """Convert a single match dict into a feature vector (list of floats)."""
     context = context or {}
@@ -91,41 +136,14 @@ def extract_features(match: dict[str, Any], context: dict[str, Any] | None = Non
     home_fifa = (onside.get("home") or {}).get("fifa_score", 0.5)
     away_fifa = (onside.get("away") or {}).get("fifa_score", 0.5)
 
-    # ELO features
-    elo_ratings = context.get("elo_ratings")
-    home_en = match.get("home_en", match.get("home", ""))
-    away_en = match.get("away_en", match.get("away", ""))
-    if elo_ratings:
-        home_elo = elo_ratings.get(home_en, DEFAULT_ELO)
-        away_elo = elo_ratings.get(away_en, DEFAULT_ELO)
-        elo_home_exp = expected_score(home_elo, away_elo, home_adv=True)
-        elo_diff = home_elo - away_elo
-    else:
-        home_elo = DEFAULT_ELO
-        away_elo = DEFAULT_ELO
-        elo_home_exp = 0.5
-        elo_diff = 0.0
-
-    # Engineering features
-    form_diff = hfs - afs
-    record_diff = hrs - ars
-    form_x_record_h = hfs * hrs
-    form_x_record_a = afs * ars
-    odds_elo_diff = (hp - ap) - (elo_home_exp - 0.5)
-    onside_elo_diff = (home_onside - away_onside) - (elo_home_exp - 0.5)
-    is_host = 1.0 if context.get("host_country") and home_en == context["host_country"] else 0.0
-
-    return [
+    vec = [
         hp, dp, ap, odds_avail,
         hfs, afs, hrs, ars,
         sm, hmi, di,
         home_onside, away_onside, home_fifa, away_fifa,
-        elo_home_exp, home_elo, away_elo, elo_diff,
-        form_diff, record_diff,
-        form_x_record_h, form_x_record_a,
-        odds_elo_diff, onside_elo_diff,
-        is_host,
     ]
+    _append_derived_features(vec, match, context, hfs, afs, hrs, ars, hp, ap, home_onside, away_onside)
+    return vec
 
 
 def feature_dict(match: dict[str, Any], context: dict[str, Any] | None = None) -> dict[str, float]:
