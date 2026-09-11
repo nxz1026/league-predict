@@ -156,17 +156,11 @@ def append_historical_past_matches(league: str, past_matches: list[dict[str, Any
     return added
 
 
-def compute_calibration_offset(past_matches: list[dict[str, Any]], league: str | None = None) -> dict[str, Any] | None:
-    """
-    从累积 past_matches 计算 calibration 修正因子。
-    用实际赛果分布 vs 均匀分布(1/3)的比率做软修正。
+def _collect_calibration_samples(past_matches: list[dict[str, Any]]) -> tuple[int, int, int]:
+    """收集/过滤窗口期比赛样本：解析比分并统计主胜/平局/客胜场次。
 
-    P0-1 修复: 指数平滑现在会真正执行，通过 _load_prev_offset / _save_offset 持久化。
-    P1-2 修复: league 参数使指数平滑按联赛独立进行，不再跨联赛污染。
+    非法比分（缺 '-'、非两段数字）自动跳过。返回 (home_wins, draws, away_wins)。
     """
-    if len(past_matches) < 5:
-        return None
-
     home_wins = draws = away_wins = 0
 
     for m in past_matches:
@@ -184,15 +178,15 @@ def compute_calibration_offset(past_matches: list[dict[str, Any]], league: str |
         else:
             away_wins += 1
 
-    total = home_wins + draws + away_wins
-    if total < 5:
-        logger.debug(f"Calibration: only {total} finished matches (<5), skipping offset")
-        return None
+    return home_wins, draws, away_wins
 
-    actual_home_rate = home_wins / total
-    actual_draw_rate = draws / total
-    actual_away_rate = away_wins / total
 
+def _derive_offsets(actual_home_rate: float, actual_draw_rate: float, actual_away_rate: float,
+                    total: int, league: str | None = None) -> dict[str, Any]:
+    """从实际赛果分布推导校准修正系数（含样本量加权与指数平滑 P0-1/P1-2）。
+
+    产出字段收进返回 dict：home/draw/away 及 onside 修正、样本统计与真实分布。
+    """
     # 使用足球联赛实际分布作为基线（主胜~45%, 平局~25%, 客胜~30%）
     _baseline_home = 0.45
     _baseline_draw = 0.25
@@ -219,7 +213,7 @@ def compute_calibration_offset(past_matches: list[dict[str, Any]], league: str |
     onside_home_correction = 1.0 + (home_correction - 1.0) * sample_weight * 0.5
     onside_away_correction = 1.0 + (away_correction - 1.0) * sample_weight * 0.5
 
-    result = {
+    return {
         "home_correction": round(home_correction, 3),
         "draw_correction": round(draw_correction, 3),
         "away_correction": round(away_correction, 3),
@@ -232,14 +226,39 @@ def compute_calibration_offset(past_matches: list[dict[str, Any]], league: str |
         "actual_away_rate": round(actual_away_rate, 3),
     }
 
+
+def compute_calibration_offset(past_matches: list[dict[str, Any]], league: str | None = None) -> dict[str, Any] | None:
+    """
+    从累积 past_matches 计算 calibration 修正因子。
+    用实际赛果分布 vs 均匀分布(1/3)的比率做软修正。
+
+    P0-1 修复: 指数平滑现在会真正执行，通过 _load_prev_offset / _save_offset 持久化。
+    P1-2 修复: league 参数使指数平滑按联赛独立进行，不再跨联赛污染。
+    """
+    if len(past_matches) < 5:
+        return None
+
+    home_wins, draws, away_wins = _collect_calibration_samples(past_matches)
+
+    total = home_wins + draws + away_wins
+    if total < 5:
+        logger.debug(f"Calibration: only {total} finished matches (<5), skipping offset")
+        return None
+
+    actual_home_rate = home_wins / total
+    actual_draw_rate = draws / total
+    actual_away_rate = away_wins / total
+
+    offsets = _derive_offsets(actual_home_rate, actual_draw_rate, actual_away_rate, total, league)
+
     # ── P0-1 修复: 持久化当前校准值 ──
-    _save_offset(result, league)
+    _save_offset(offsets, league)
 
-    logger.info(f"Calibration offset(n={total}, weight={sample_weight:.2f}): "
-                f"home×{home_correction:.3f} draw×{draw_correction:.3f} away×{away_correction:.3f} | "
-                f"onside_home×{onside_home_correction:.3f} onside_away×{onside_away_correction:.3f}")
+    logger.info(f"Calibration offset(n={total}, weight={offsets['sample_weight']:.2f}): "
+                f"home×{offsets['home_correction']:.3f} draw×{offsets['draw_correction']:.3f} away×{offsets['away_correction']:.3f} | "
+                f"onside_home×{offsets['onside_home_correction']:.3f} onside_away×{offsets['onside_away_correction']:.3f}")
 
-    return result
+    return offsets
 
 
 def _parse_score(score_str: str | None) -> tuple[int, int] | None:
