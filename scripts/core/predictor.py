@@ -59,6 +59,51 @@ def _blend_ml_probs(home_prob: float, draw_prob: float, away_prob: float,
     return home_prob, draw_prob, away_prob, ml_proba
 
 
+def _decide_direction_and_stars(home_prob: float, draw_prob: float,
+                                away_prob: float, match: dict) -> tuple[str, float, str | None, str]:
+    """方向判断 + 置信度钳位 + 无盘口降级 + 星级映射。纯函数。"""
+    if home_prob > THRESHOLDS["direction_min_prob"] and home_prob > away_prob * THRESHOLDS["direction_odds_ratio"]:
+        direction = f"{match['home']} 胜"
+        confidence_raw = (home_prob - 0.25) * 2
+    elif away_prob > THRESHOLDS["direction_min_prob"] and away_prob > home_prob * THRESHOLDS["direction_odds_ratio"]:
+        direction = f"{match['away']} 胜"
+        confidence_raw = (away_prob - 0.25) * 2
+    elif draw_prob > THRESHOLDS["draw_threshold"]:
+        direction = "平局"
+        confidence_raw = (draw_prob - 0.25) * 2
+    else:
+        if home_prob >= away_prob and home_prob >= draw_prob:
+            direction = f"{match['home']} 胜 (接近)"
+            confidence_raw = (home_prob - THRESHOLDS["near_mode_base"]) * 3
+        elif away_prob >= home_prob and away_prob >= draw_prob:
+            direction = f"{match['away']} 胜 (接近)"
+            confidence_raw = (away_prob - THRESHOLDS["near_mode_base"]) * 3
+        else:
+            direction = "平局 (接近)"
+            confidence_raw = (draw_prob - THRESHOLDS["near_mode_base"]) * 3
+
+    confidence_raw = min(max(confidence_raw, 0.0), 1.0)
+
+    # ── 盘口数据缺失降级 ──
+    if not match.get("odds_data_available", False):
+        confidence_raw = max(confidence_raw - 0.25, 0.0)
+        confidence_note = "无盘口数据，仅基本面参考"
+    else:
+        confidence_note = None
+
+    if confidence_raw >= THRESHOLDS["star_5"]:
+        stars = "5-star"
+    elif confidence_raw >= THRESHOLDS["star_4"]:
+        stars = "4-star"
+    elif confidence_raw >= THRESHOLDS["star_3"]:
+        stars = "3-star"
+    elif confidence_raw >= THRESHOLDS["star_2"]:
+        stars = "2-star"
+    else:
+        stars = "1-star"
+    return direction, confidence_raw, confidence_note, stars
+
+
 def calculate_prediction(
     match: dict,
     weights: dict | None = None,
@@ -197,45 +242,8 @@ def calculate_prediction(
         elo_ratings, host_country, league_key)
 
     # ── 方向判断 ──
-    if home_prob > THRESHOLDS["direction_min_prob"] and home_prob > away_prob * THRESHOLDS["direction_odds_ratio"]:
-        direction = f"{match['home']} 胜"
-        confidence_raw = (home_prob - 0.25) * 2
-    elif away_prob > THRESHOLDS["direction_min_prob"] and away_prob > home_prob * THRESHOLDS["direction_odds_ratio"]:
-        direction = f"{match['away']} 胜"
-        confidence_raw = (away_prob - 0.25) * 2
-    elif draw_prob_calc > THRESHOLDS["draw_threshold"]:
-        direction = "平局"
-        confidence_raw = (draw_prob_calc - 0.25) * 2
-    else:
-        if home_prob >= away_prob and home_prob >= draw_prob_calc:
-            direction = f"{match['home']} 胜 (接近)"
-            confidence_raw = (home_prob - THRESHOLDS["near_mode_base"]) * 3
-        elif away_prob >= home_prob and away_prob >= draw_prob_calc:
-            direction = f"{match['away']} 胜 (接近)"
-            confidence_raw = (away_prob - THRESHOLDS["near_mode_base"]) * 3
-        else:
-            direction = "平局 (接近)"
-            confidence_raw = (draw_prob_calc - THRESHOLDS["near_mode_base"]) * 3
-
-    confidence_raw = min(max(confidence_raw, 0.0), 1.0)
-
-    # ── 盘口数据缺失降级 ──
-    if not match.get("odds_data_available", False):
-        confidence_raw = max(confidence_raw - 0.25, 0.0)
-        confidence_note = "无盘口数据，仅基本面参考"
-    else:
-        confidence_note = None
-
-    if confidence_raw >= THRESHOLDS["star_5"]:
-        stars = "5-star"
-    elif confidence_raw >= THRESHOLDS["star_4"]:
-        stars = "4-star"
-    elif confidence_raw >= THRESHOLDS["star_3"]:
-        stars = "3-star"
-    elif confidence_raw >= THRESHOLDS["star_2"]:
-        stars = "2-star"
-    else:
-        stars = "1-star"
+    direction, confidence_raw, confidence_note, stars = _decide_direction_and_stars(
+        home_prob, draw_prob_calc, away_prob, match)
 
     # ══════════════════════════════════════════════════════
     # P0-2 修复: λ 计算现在使用与方向相同的统一权重体系
