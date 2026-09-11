@@ -91,3 +91,19 @@ web/ 层函数粒度全部达标（无 >50L），store.py 的宽容解析与 tmp
 - **WO-M7b 健壮性单**：D1–D8 + C 表前四个巨型函数拆分（predictor/parse_events/run_league/main），每项先补最小复现测试再改；C 表其余 7 个可作为 M7c 渐进还债。
 
 两单各自独立 commit、全量 pytest 绿 + 本地 `build_league_web.sh` + 云端 deploy15 冒烟（health/登录/ai-enrich 一轮）后合并。
+
+---
+
+## 处置结果（quality/m7 @ 2026-09-11，44 commits，验收人：队长复核）
+
+| 类 | 处置 | 证据 |
+|---|---|---|
+| A 死模块（4 个） | ✅ 已删（a1–a4），含关联测试同步移除 | 净 −700 行 |
+| B 死代码 | ✅ 已清（a5–a8），pyflakes 全仓 0 警告 | a8 收口 commit |
+| C 函数化 | ✅ **全仓 AST 扫描 >50L 归零**。注：原表列 11 个系扫描范围漏了数据源/回测/仪表盘层，实际 21 个超标，已全部拆完（c1a–l / c2a–c / c3a / c4a–d / c5a–d）。predictor 主函数 336→49，parse_events 173→达标，run_league 155→达标，generate_dashboard 165→达标 | 每刀 197 golden ×2 复跑（位级值断言护体），FAILED 计数 0 |
+| D1 孤儿任务 | ✅ b5：active_job 双阈值自愈（running>2×timeout / queued>300s） | 含孤儿测试 |
+| D2 spawn 竞态 / D5 配额竞态 | ⛔ **有意放弃**（两版实测否决：复用执行锁引发全局 503；加锁换序破坏 429 优先契约）。单用户面板触发需微秒级同刻提交，且最坏后果已被 D1 修复兜底 | revert `bc488d6`，记忆存档 |
+| D3 hmac / D4 锁超时+登录锁清理 / D6 语义 401 / D7 sqlite 句柄 / D8 配置守卫 | ✅ b1/b2/b4/b5/b7 各落 | 见 log |
+| D9 杂项（POST 化/marker BJT 统一/`print` 残留） | ✅ b7 + a 系列 | — |
+
+**遗留（非阻塞）**：跑 pytest 会弄脏 `docs/web/logs/STATUS.md` 与 `predictions/ai_scores.json`（测试写了运行时产物），建议后续把两者加入测试夹具隔离或 gitignore 产物名单。

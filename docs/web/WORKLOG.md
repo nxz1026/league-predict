@@ -205,3 +205,9 @@ source `deploy/.env` 后 `fastapi cloud deploy /root/build/league-web`。
 ## 代码质量审核（2026-09-12，用户指令：队长审核健壮性/函数化/死代码/死模块）
 - 产出 `docs/web/CODE_REVIEW.md`：4 死模块（ai_enrich_gha / feedback_memory / cache / .agents 389 文件污染）、20+ 死代码项（reconcile_results+print_metrics_summary 0 调用、_FORBIDDEN 常量化、try_ai_status 拆线、~15 未用导入）、11 个 >50L 函数（calculate_prediction 336L 居首，段注释即拆分刀口）、9 类健壮性缺陷（D1 孤儿任务全站 409 锁死最危）。
 - 处置：拆 WO-M7a（纯清理）→ WO-M7b（健壮性+前四大函数）两张工单派 OMP，待用户批准。审核手段：AST 测长 + pyflakes + import 图 + 人工审读 web 全量。
+
+## M7 质量战役执行记录（2026-09-11，OMP 执行 × 队长验收）
+- 模型：LinBlue/DeepSeek-V4-Flash；44 commits（a1–a8 清理 / b1–b5,b7 健壮性 / c1a–c5c 函数化 / .agents 反追踪 / 文档）。
+- 结果：全仓 AST >50 行函数清零（21 个，比审核原表多 10 个漏网）；197 测试每步双跑绿；净 −17 万行仓库污染（.agents）+ −700 行死代码。
+- 否决与放弃：b6（两版实测破契约，revert bc488d6 后 D2/D5 判"有意放弃"，理由入 CODE_REVIEW 处置表）。
+- 教训：哨兵不写≠没干活（3 次 override 收口）；grep '197 passed' 会匹配失败行，验收必 grep FAILED；bisect 后必查 branch。
