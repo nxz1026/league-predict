@@ -76,6 +76,14 @@ def delete_session(token: str) -> None:
         conn.commit()
 
 
-def _purge_expired(conn: sqlite3.Connection) -> None:
-    conn.execute("DELETE FROM sessions WHERE expires < ?", (time.time(),))
+def _purge_expired(conn: sqlite3.Connection) -> int:
+    cur = conn.execute("DELETE FROM sessions WHERE expires < ?", (time.time(),))
     conn.commit()
+    return cur.rowcount
+
+
+def purge_expired_sessions() -> int:
+    """启动清理口：建连接+建表+清理过期会话，返回删除行数（幂等兜底）。"""
+    with _connect() as conn:
+        _init_db(conn)
+        return _purge_expired(conn)

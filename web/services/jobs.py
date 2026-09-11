@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
 import os
@@ -184,22 +185,29 @@ def _write_job(jid: str, data: dict) -> None:
     os.replace(tmp, _job_file(jid))
 
 
-def create_job(args: list[str], trigger: str = "manual", script: str = "predict") -> dict:
-    """登记 queued 任务（写状态文件），返回 job 记录。script: predict|ai_enrich。"""
-    jid = job_id()
-    now = _now_epoch()
-    job = {
+def _default_job(jid: str) -> dict:
+    """新建/兜底共用的空任务字段（字段集与 create_job 一致）。"""
+    return {
         "id": jid,
         "status": STATUS_QUEUED,
-        "trigger": trigger,
-        "script": script,
-        "args": args,
-        "created_at": now,
+        "trigger": "manual",
+        "script": "predict",
+        "args": [],
+        "created_at": _now_epoch(),
         "started_at": None,
         "finished_at": None,
         "exit_code": None,
         "timeout": config.PREDICT_TIMEOUT_SECONDS,
     }
+
+
+def create_job(args: list[str], trigger: str = "manual", script: str = "predict") -> dict:
+    """登记 queued 任务（写状态文件），返回 job 记录。script: predict|ai_enrich。"""
+    jid = job_id()
+    job = _default_job(jid)
+    job["trigger"] = trigger
+    job["script"] = script
+    job["args"] = args
     _write_job(jid, job)
     return job
 
@@ -222,11 +230,7 @@ def list_jobs(limit: int = 20) -> list[dict]:
 def _spin_state(jid: str, status: str, **extra) -> dict:
     """带锁的状态迁移（同进程并发安全；跨进程由文件锁兜底）。"""
     with _exclusive_lock(_job_file(jid).with_suffix(".state.lock"), timeout=5):
-        job = _read_job(jid) or {
-            "id": jid, "status": STATUS_QUEUED, "args": [],
-            "created_at": _now_epoch(), "started_at": None, "finished_at": None,
-            "exit_code": None, "timeout": config.PREDICT_TIMEOUT_SECONDS,
-        }
+        job = _read_job(jid) or _default_job(jid)
         job["status"] = status
         job.update(extra)
         _write_job(jid, job)
@@ -285,6 +289,17 @@ def run_job(jid: str) -> None:
             if proc.poll() is None:
                 proc.kill()
             logger.info("job %s done in %.1fs", jid, _now_epoch() - started)
+
+
+# --- 线程池投递 -----------------------------------------------------------
+
+# 引擎子进程执行不阻塞请求线程（fire-and-forget：失败只写状态文件）。
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+
+
+def submit_job(jid: str) -> None:
+    """向线程池投递任务执行（调用方不等待结果）。"""
+    executor.submit(run_job, jid)
 
 
 def read_job_log(jid: str, tail: int = 200) -> str:

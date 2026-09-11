@@ -12,7 +12,6 @@
 """
 from __future__ import annotations
 
-import concurrent.futures
 import json
 from datetime import datetime, timezone
 
@@ -25,9 +24,6 @@ from web.services import jobs, store
 from web.services.datasource import LEAGUES
 
 router = APIRouter(prefix="/api/v1", tags=["jobs"])
-
-# 线程池：引擎子进程执行不阻塞请求线程（fire-and-forget 语义）。
-_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
 # 参数白名单（契约 §1.1 安全子集）：固定取值域校验，杜绝任意字符串注入 argv。
 _FLAG_ARGS = {
@@ -121,7 +117,7 @@ def jobs_predict(body: dict | None, request: Request,
             "job": _job_view(job),
         })
     # 异步执行（fire-and-forget：失败只写状态文件，绝不抛回请求线程）。
-    _executor.submit(jobs.run_job, job["id"])
+    jobs.submit_job(job["id"])
     return JSONResponse(status_code=202, content={"job": _job_view(job)})
 
 
@@ -144,7 +140,7 @@ def jobs_ai_enrich(request: Request, _: None = Depends(require_auth)) -> JSONRes
             "message": "已有任务在运行，请稍后再试",
             "job": _job_view(job),
         })
-    _executor.submit(jobs.run_job, job["id"])
+    jobs.submit_job(job["id"])
     return JSONResponse(status_code=202, content={"job": _job_view(job)})
 
 
@@ -197,7 +193,7 @@ def _lazy_auto_trigger() -> dict:
         return {"triggered": False, "reason": "already_running"}
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(json.dumps({"day": today, "job": job["id"]}, ensure_ascii=False), encoding="utf-8")
-    _executor.submit(jobs.run_job, job["id"])
+    jobs.submit_job(job["id"])
     return {"triggered": True, "job": job["id"]}
 
 
