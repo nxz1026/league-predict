@@ -295,6 +295,20 @@ def _reconcile_score_with_direction(predicted_score: str, direction: str,
     return predicted_score
 
 
+def _elo_expectations(elo_ratings: dict | None, home_en: str, away_en: str) -> tuple[float | None, float | None, float]:
+    """ELO 期望胜率信号（可选，无 elo_ratings 时返回 None）。纯函数。"""
+    # ── ELO 信号（可选） ──
+    elo_home_expected = None
+    elo_away_expected = None
+    if elo_ratings:
+        home_elo = elo_ratings.get(home_en, DEFAULT_ELO)
+        away_elo = elo_ratings.get(away_en, DEFAULT_ELO)
+        elo_home_expected = expected_score(home_elo, away_elo, home_adv=True)
+        elo_away_expected = 1.0 - elo_home_expected
+    ELO_WEIGHT = THRESHOLDS.get("elo_weight", 0.18)
+    return elo_home_expected, elo_away_expected, ELO_WEIGHT
+
+
 def _assemble_result(
     match: dict,
     direction: str,
@@ -386,6 +400,16 @@ def _assemble_result(
     return result
 
 
+# Args:
+#     match: 比赛数据字典
+#     weights: 权重字典（可选，默认 ONSIDE_WEIGHTS）
+#     calibration_offset: 校准偏移字典
+#     fifa_rankings: FIFA 排名字典
+#     host_country: 东道主国家
+#     use_dixon_coles: 是否使用 Dixon-Coles 模型
+#     dc_rho: Dixon-Coles ρ 参数，None 时按联赛自动选择 (P0-3)
+#     elo_ratings: ELO 评分表 {team: elo}，提供则加入信号融合
+#     league_key: 联赛键名，用于查找联赛特定参数 (P0-3)
 def calculate_prediction(
     match: dict,
     weights: dict | None = None,
@@ -397,20 +421,7 @@ def calculate_prediction(
     elo_ratings: dict[str, float] | None = None,
     league_key: str = "epl",  # P0-3: 传入联赛 key 用于差异化 ρ
 ) -> dict:
-    """
-    Onside 4 信号 + ELO + Dixon-Coles 预测 → 方向 + 信心 + 比分预测 + 95% CI
-
-    Args:
-        match: 比赛数据字典
-        weights: 权重字典（可选，默认 ONSIDE_WEIGHTS）
-        calibration_offset: 校准偏移字典
-        fifa_rankings: FIFA 排名字典
-        host_country: 东道主国家
-        use_dixon_coles: 是否使用 Dixon-Coles 模型
-        dc_rho: Dixon-Coles ρ 参数，None 时按联赛自动选择 (P0-3)
-        elo_ratings: ELO 评分表 {team: elo}，提供则加入信号融合
-        league_key: 联赛键名，用于查找联赛特定参数 (P0-3)
-    """
+    """Onside 4 信号 + ELO + Dixon-Coles 预测 → 方向 + 信心 + 比分预测 + 95% CI"""
     if weights is None:
         weights = ONSIDE_WEIGHTS
 
@@ -446,15 +457,8 @@ def calculate_prediction(
 
     sm_capped = max(-THRESHOLDS["spread_movement_cap"], min(THRESHOLDS["spread_movement_cap"], sm))
 
-    # ── ELO 信号（可选） ──
-    elo_home_expected = None
-    elo_away_expected = None
-    if elo_ratings:
-        home_elo = elo_ratings.get(home_en, DEFAULT_ELO)
-        away_elo = elo_ratings.get(away_en, DEFAULT_ELO)
-        elo_home_expected = expected_score(home_elo, away_elo, home_adv=True)
-        elo_away_expected = 1.0 - elo_home_expected
-    ELO_WEIGHT = THRESHOLDS.get("elo_weight", 0.18)
+    elo_home_expected, elo_away_expected, ELO_WEIGHT = _elo_expectations(
+        elo_ratings, home_en, away_en)
 
     # ══════════════════════════════════════════════════════
     # P0-2 统一权重体系：方向概率和 λ 使用同一套加权信号
