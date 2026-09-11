@@ -219,15 +219,8 @@ def _scores_from_results(results: list[str]) -> tuple[float, str, str, float]:
     return round(score, 3), form_str, record_summary, round(rec_score, 3)
 
 
-def parse_events(events: list, now_utc: datetime | None = None) -> tuple[list, list, list]:
-    """解析 ESPN events → 结束比赛列表 + 待预测比赛列表"""
-    if now_utc is None:
-        now_utc = datetime.now(timezone.utc)
-
-    past = []
-    future = []
-    in_progress = []
-
+def _warm_team_names(events: list) -> None:
+    """预热 LLM 队名翻译缓存（P6：队名统一中文，避免硬对照）。"""
     # 预热 LLM 队名翻译缓存（P6：队名统一中文，避免硬对照）
     try:
         from core.i18n import warm_translations
@@ -248,6 +241,18 @@ def parse_events(events: list, now_utc: datetime | None = None) -> tuple[list, l
         warm_translations(_names)
     except Exception as e:
         logger.warning(f"Team-name translation warm-up failed: {e}")
+
+
+def parse_events(events: list, now_utc: datetime | None = None) -> tuple[list, list, list]:
+    """解析 ESPN events → 结束比赛列表 + 待预测比赛列表"""
+    if now_utc is None:
+        now_utc = datetime.now(timezone.utc)
+
+    past = []
+    future = []
+    in_progress = []
+
+    _warm_team_names(events)
 
     for ev in events:
         en_name = ev.get("name", "")
