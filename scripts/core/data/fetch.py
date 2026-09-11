@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Data fetching layer: ESPN, football-data.org, API-Football, FIFA rankings."""
+
+from __future__ import annotations
 
 import json
 import urllib.request

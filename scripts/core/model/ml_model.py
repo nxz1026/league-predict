@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import math
+from pathlib import Path
 from typing import Any
 
 from core.config import ML_CONFIG
@@ -169,7 +170,7 @@ def train_all_league_models(elo_ratings: dict | None = None, days: int = 365,
     return results
 
 
-def _model_path(league_key: str, base_dir) -> "Path":
+def _model_path(league_key: str, base_dir) -> Path:
     from core.config import FOOTBALL_DIR
     base = base_dir or (FOOTBALL_DIR / "references")
     return base / f"ml_model_{league_key}.json"

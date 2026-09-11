@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """队名中文化：用 LLM 翻译并持久化缓存，避免硬编码对照表（P6）。
 
 - 国名：走稳定的 COUNTRY_CN（国名集合固定、不会变化）。
@@ -7,6 +5,8 @@ from __future__ import annotations
   references/team_translations.json 并跨运行复用（无需每次翻译，也保证一致性）。
 - LLM 不可用时优雅降级：返回原英文名。
 """
+
+from __future__ import annotations
 
 import json
 

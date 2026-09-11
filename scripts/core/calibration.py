@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 from typing import Any
 
 from core.config import PREDICTIONS_DIR, FOOTBALL_DIR
@@ -12,7 +13,7 @@ from core.log import logger
 
 # ── P0-1: Calibration 持久化路径 ────────────────────────
 # 每个联赛独立持久化，避免跨联赛指数平滑污染（P1-2 修复）
-def _calibration_cache_file(league: str | None = None) -> "Path":
+def _calibration_cache_file(league: str | None = None) -> Path:
     if league:
         return FOOTBALL_DIR / "references" / f".calibration_state_{league}.json"
     return FOOTBALL_DIR / "references" / ".calibration_state.json"
@@ -104,7 +105,7 @@ def load_historical_past_matches(days: int = 30, league: str | None = None) -> l
 
 
 def append_historical_past_matches(league: str, past_matches: list[dict[str, Any]],
-                                   base_dir: "Path | None" = None) -> int:
+                                   base_dir: Path | None = None) -> int:
     """将本次运行的完赛记录合并进 references/historical_past_matches.json。
 
     仅纳入带有效比分的已结束比赛；按 联赛+kickoff+主客队 去重。
