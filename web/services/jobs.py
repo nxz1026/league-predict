@@ -300,6 +300,11 @@ def submit_job(jid: str) -> None:
     executor.submit(run_job, jid)
 
 
+def mark_failed(jid: str, error: str) -> None:
+    """把任务标记为 failed（供路由层 submit 异常兜底）。"""
+    _spin_state(jid, STATUS_FAILED, finished_at=_now_epoch(), error=error)
+
+
 def read_job_log(jid: str, tail: int = 200) -> str:
     path = _log_file(jid)
     if not path.is_file():
@@ -312,10 +317,21 @@ def read_job_log(jid: str, tail: int = 200) -> str:
 
 
 def active_job() -> dict | None:
-    """当前 running/queued 的任务（有则拒绝并发新任务）。"""
+    """当前 running/queued 的任务（含过期孤儿回收：超时无进展 → failed）。"""
+    now = _now_epoch()
     for row in list_jobs(limit=100):
-        if row.get("status") not in TERMINAL:
-            return row
+        if row.get("status") in TERMINAL:
+            continue
+        jid = row.get("id", "")
+        base = row.get("started_at") or row.get("created_at") or 0
+        limit = (row.get("timeout") or config.PREDICT_TIMEOUT_SECONDS) * 2
+        if row.get("status") == STATUS_RUNNING and now - base > limit:
+            _spin_state(jid, STATUS_FAILED, finished_at=now, error="orphan recovered")
+            continue
+        if row.get("status") == STATUS_QUEUED and now - (row.get("created_at") or 0) > 300:
+            _spin_state(jid, STATUS_FAILED, finished_at=now, error="orphan queued expired")
+            continue
+        return row
     return None
 
 

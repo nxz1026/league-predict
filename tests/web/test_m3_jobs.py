@@ -338,3 +338,16 @@ def test_jobs_require_auth(client):
     assert client.get("/api/v1/jobs").status_code == 401
     assert client.post("/api/v1/jobs/predict", json={}).status_code == 401
     assert client.get("/api/v1/jobs/auto/refresh").status_code == 401
+
+
+class TestOrphanRecovery:
+    def test_stale_running_is_recovered(self, client, tmp_path, monkeypatch):
+        """running 超过 2*timeout → active_job 回收为 failed 并放行新任务。"""
+        import time as _t
+        from web.services import jobs as jb
+        stale = jb.create_job([], trigger="test")
+        jb._spin_state(stale["id"], jb.STATUS_RUNNING, started_at=_t.time() - 99999)
+        assert jb.active_job() is None
+        reloaded = jb.get_job(stale["id"])
+        assert reloaded["status"] == jb.STATUS_FAILED
+        assert "orphan" in (reloaded.get("error") or "")

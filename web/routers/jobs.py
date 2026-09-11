@@ -198,9 +198,14 @@ def _lazy_auto_trigger() -> dict:
         return {"triggered": False, "reason": "quota_exhausted"}
     if reason == "already_running":
         return {"triggered": False, "reason": "already_running"}
+    try:
+        jobs.submit_job(job["id"])
+    except Exception:
+        jobs.mark_failed(job["id"], "submit failed")
+        raise
     marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text(json.dumps({"day": today, "job": job["id"]}, ensure_ascii=False), encoding="utf-8")
-    jobs.submit_job(job["id"])
+    marker.write_text(json.dumps({"day": today, "job": job["id"]},
+                                 ensure_ascii=False), encoding="utf-8")
     return {"triggered": True, "job": job["id"]}
 
 
