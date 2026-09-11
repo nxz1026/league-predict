@@ -141,7 +141,7 @@ def _exclusive_lock(lock_path: Path, timeout: float = 10.0):
 def _drop_stale_lock(lock_path: Path) -> None:
     """锁文件持 PID 超过 10 分钟视为 stale（进程被杀残留），删除。"""
     try:
-        pid = int(lock_path.read_text().strip() or "0")
+        pid = int(lock_path.read_text(encoding="utf-8").strip() or "0")
     except (OSError, ValueError):
         return
     if pid <= 0:

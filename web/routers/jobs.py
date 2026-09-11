@@ -183,7 +183,7 @@ def _lazy_auto_trigger() -> dict:
     today = datetime.now(timezone.utc).date().isoformat()
     if marker.is_file():
         try:
-            payload = json.loads(marker.read_text() or "{}")
+            payload = json.loads(marker.read_text(encoding="utf-8") or "{}")
         except (ValueError, OSError):
             payload = {}
         if payload.get("day") == today:

@@ -277,7 +277,7 @@ def _backtest_api_football(pred_data: dict[str, Any], league_config: dict) -> di
 def backtest_with_live_results(prediction_file: str) -> dict[str, Any]:
     """Auto-fetch actual results from football-data.org for the prediction window."""
     try:
-        pred_data = json.loads(Path(prediction_file).read_text())
+        pred_data = json.loads(Path(prediction_file).read_text(encoding="utf-8"))
     except Exception as e:
         return {"status": "error", "error": str(e)}
 

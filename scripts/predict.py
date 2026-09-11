@@ -123,7 +123,7 @@ def _compute_calibration(past: list, future: list, league_key: str | None = None
     cal_file = PREDICTIONS_DIR / "pred_calibration.json"
     if not calibration_offset and cal_file.exists():
         try:
-            with open(cal_file) as f:
+            with open(cal_file, encoding="utf-8") as f:
                 calibration_offset = json.load(f)
             logger.info(f"Loaded calibration offset from {cal_file}")
         except Exception as e:

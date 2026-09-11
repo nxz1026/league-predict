@@ -25,7 +25,7 @@ def load_ai_adjustments(league_key: str = "") -> dict[str, dict]:
     if not AI_SCORES_FILE.exists():
         return {}
     try:
-        with open(AI_SCORES_FILE) as f:
+        with open(AI_SCORES_FILE, encoding="utf-8") as f:
             data = json.load(f)
     except (json.JSONDecodeError, OSError):
         return {}
@@ -62,7 +62,7 @@ def save_ai_scores(enriched_items: list[dict], league_key: str = ""):
         }
 
     AI_SCORES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(AI_SCORES_FILE, "w") as f:
+    with open(AI_SCORES_FILE, "w", encoding="utf-8") as f:
         json.dump(existing, f, indent=2, ensure_ascii=False)
     print(f"[AI Feedback] Saved {len(existing)} AI scores to {AI_SCORES_FILE}")
 
