@@ -107,7 +107,7 @@ function bjtToday(){ const s=new Date().toLocaleString("en-US",{timeZone:"Asia/S
 function toast(msg){ const t=document.getElementById("toast"); t.textContent=msg; t.style.display="block"; clearTimeout(t._h); t._h=setTimeout(()=>{t.style.display="none";},2600); }
 function stars(n){ const s=String(n||""); return "<span class=\"stars\">"+esc(s)+"</span>"; }
 function placeholder(el,text,cls){ el.innerHTML="<div class=\"placeholder "+(cls||"")+"\">"+esc(text)+"</div>"; }
-function fmtDT(iso){ if(!iso) return "—"; const d=new Date(iso); if(isNaN(d)) return esc(iso); const p=n=>String(n).padStart(2,"0"); return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())+" "+p(d.getHours())+":"+p(d.getMinutes()); }
+function fmtDT(iso){ if(!iso) return "—"; if(typeof iso === "number") iso = iso * 1000; const d=new Date(iso); if(isNaN(d)) return esc(iso); const p=n=>String(n).padStart(2,"0"); return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())+" "+p(d.getHours())+":"+p(d.getMinutes()); }
 /* ---- tab 切换 ---- */
 const TABS=["today","history","champ","accuracy","ops"];
 document.getElementById("tabs").addEventListener("click",e=>{
