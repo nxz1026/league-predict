@@ -295,6 +295,97 @@ def _reconcile_score_with_direction(predicted_score: str, direction: str,
     return predicted_score
 
 
+def _assemble_result(
+    match: dict,
+    direction: str,
+    stars: str,
+    confidence_raw: float,
+    predicted_score: str,
+    top3: list[tuple[int, int, float]],
+    lambda_home: float,
+    lambda_away: float,
+    raw_home: float,
+    raw_away: float,
+    btts_prob: float,
+    over_25_prob: float,
+    ml_proba: list[float] | None,
+    home_prob: float,
+    draw_prob_calc: float,
+    away_prob: float,
+    hfs: float,
+    hrs: float,
+    afs: float,
+    ars: float,
+    sm: float,
+    home_onside: float,
+    away_onside: float,
+    elo_home_expected: float | None,
+    elo_ratings: dict[str, float] | None,
+    use_dixon_coles: bool,
+    dc_rho: float | None,
+    league_key: str,
+    onside: dict,
+    confidence_note: str | None,
+    hp: float,
+    dp: float,
+    ap: float,
+) -> dict:
+    """组装最终预测结果字典（含 95% CI 与 Over/Under）。纯函数。"""
+    # 95% 置信区间
+    ci_home = poisson_confidence_interval(lambda_home)
+    ci_away = poisson_confidence_interval(lambda_away)
+
+    ou_total = match.get("total_over_close", "2.5")
+    ou_total = ou_total.lstrip("ou")
+    if over_25_prob > 0.5:
+        ou = f"Over {ou_total}"
+    else:
+        ou = f"Under {ou_total}"
+
+    result = {
+        "direction": direction,
+        "stars": stars,
+        "confidence_score": round(confidence_raw, 3),
+        "predicted_score": predicted_score,
+        "poisson_top3": [
+            {"score": f"{h}-{a}", "prob": round(p, 4)} for h, a, p in top3
+        ],
+        "lambda_home": round(lambda_home, 2),
+        "lambda_away": round(lambda_away, 2),
+        "lambda_home_ci95": ci_home,
+        "lambda_away_ci95": ci_away,
+        "over_under": f"{ou}",
+        "btts": "Yes" if btts_prob > 0.5 else "No",
+        "dixon_coles_used": use_dixon_coles,
+        "dixon_coles_rho": dc_rho if use_dixon_coles else None,
+        "ml_model_used": ml_proba is not None,
+        "ml_proba": [round(p, 4) for p in ml_proba] if ml_proba else None,
+        "dixon_coles_league_rho": LEAGUE_DC_RHO.get(league_key, DC_RHO),  # P0-3: 报告使用的 ρ 来源
+        "onside_signals": onside,
+        "confidence_note": confidence_note,
+        "odds_data_available": match.get("odds_data_available", False),
+        "reasoning_factors": {
+            "home_ml_true_prob": round(hp, 3),
+            "draw_true_prob": round(dp, 3),
+            "away_ml_true_prob": round(ap, 3),
+            "home_form_score": round(hfs, 3),
+            "away_form_score": round(afs, 3),
+            "home_record_score": round(hrs, 3),
+            "away_record_score": round(ars, 3),
+            "spread_movement": round(sm, 3),
+            "home_onside_score": round(home_onside, 3),
+            "away_onside_score": round(away_onside, 3),
+            "home_prob_weighted": round(home_prob, 3),
+            "draw_prob_weighted": round(draw_prob_calc, 3),
+            "away_prob_weighted": round(away_prob, 3),
+            "elo_home_expected": round(elo_home_expected, 3) if elo_ratings and elo_home_expected is not None else None,
+            "raw_lambda_home": round(raw_home, 4),   # P0-2: 暴露原始 λ 输入便于调试
+            "raw_lambda_away": round(raw_away, 4),   # P0-2: 暴露原始 λ 输入便于调试
+        },
+    }
+    return result
+
+
 def calculate_prediction(
     match: dict,
     weights: dict | None = None,
@@ -391,55 +482,9 @@ def calculate_prediction(
     predicted_score = _reconcile_score_with_direction(
         predicted_score, direction, all_scores, match)
 
-    # 95% 置信区间
-    ci_home = poisson_confidence_interval(lambda_home)
-    ci_away = poisson_confidence_interval(lambda_away)
-
-    ou_total = match.get("total_over_close", "2.5")
-    ou_total = ou_total.lstrip("ou")
-    if over_25_prob > 0.5:
-        ou = f"Over {ou_total}"
-    else:
-        ou = f"Under {ou_total}"
-
-    return {
-        "direction": direction,
-        "stars": stars,
-        "confidence_score": round(confidence_raw, 3),
-        "predicted_score": predicted_score,
-        "poisson_top3": [
-            {"score": f"{h}-{a}", "prob": round(p, 4)} for h, a, p in top3
-        ],
-        "lambda_home": round(lambda_home, 2),
-        "lambda_away": round(lambda_away, 2),
-        "lambda_home_ci95": ci_home,
-        "lambda_away_ci95": ci_away,
-        "over_under": f"{ou}",
-        "btts": "Yes" if btts_prob > 0.5 else "No",
-        "dixon_coles_used": use_dixon_coles,
-        "dixon_coles_rho": dc_rho if use_dixon_coles else None,
-        "ml_model_used": ml_proba is not None,
-        "ml_proba": [round(p, 4) for p in ml_proba] if ml_proba else None,
-        "dixon_coles_league_rho": LEAGUE_DC_RHO.get(league_key, DC_RHO),  # P0-3: 报告使用的 ρ 来源
-        "onside_signals": onside,
-        "confidence_note": confidence_note,
-        "odds_data_available": match.get("odds_data_available", False),
-        "reasoning_factors": {
-            "home_ml_true_prob": round(hp, 3),
-            "draw_true_prob": round(dp, 3),
-            "away_ml_true_prob": round(ap, 3),
-            "home_form_score": round(hfs, 3),
-            "away_form_score": round(afs, 3),
-            "home_record_score": round(hrs, 3),
-            "away_record_score": round(ars, 3),
-            "spread_movement": round(sm, 3),
-            "home_onside_score": round(home_onside, 3),
-            "away_onside_score": round(away_onside, 3),
-            "home_prob_weighted": round(home_prob, 3),
-            "draw_prob_weighted": round(draw_prob_calc, 3),
-            "away_prob_weighted": round(away_prob, 3),
-            "elo_home_expected": round(elo_home_expected, 3) if elo_ratings and elo_home_expected is not None else None,
-            "raw_lambda_home": round(raw_home, 4),   # P0-2: 暴露原始 λ 输入便于调试
-            "raw_lambda_away": round(raw_away, 4),   # P0-2: 暴露原始 λ 输入便于调试
-        },
-    }
+    return _assemble_result(
+        match, direction, stars, confidence_raw, predicted_score, top3,
+        lambda_home, lambda_away, raw_home, raw_away, btts_prob, over_25_prob,
+        ml_proba, home_prob, draw_prob_calc, away_prob, hfs, hrs, afs, ars, sm,
+        home_onside, away_onside, elo_home_expected, elo_ratings,
+        use_dixon_coles, dc_rho, league_key, onside, confidence_note, hp, dp, ap)
