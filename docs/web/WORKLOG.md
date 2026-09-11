@@ -195,3 +195,9 @@ source `deploy/.env` 后 `fastapi cloud deploy /root/build/league-web`。
 - 测试轨迹 56→63→65→68 绿。deploy13 曾把错位中文摘要上线（10条含串位）→ deploy14 修。
 - Hobby 限制：ai_scores.json 云端写回不跨 scale-to-zero 持久（冷启回退 git 种子）；种子已更新 5 条中文 csl 样例。
 - **deploy14(5a603aab) 云端终验过**：predict epl 7场→enrich 10项 exit 0；中文摘要配对铁证双向核验（队名切尔西/利物浦自指 + "本组最高"=真值最高 conf 0.177 伯恩茅斯行）；deploy13 式串位清零。用户指令 4（AI 中文）+5（触发验证）就此闭环。
+
+## GHA 全退役 + 主线合并（2026-09-11，用户指令：都放 fastapi，解锁 push）
+- 删除 `.github/workflows/league-predict.yml`（注意 web-dashboard 上残留的是旧 cron 版本，merge main 若不清理会**复活每日自动跑**——已连同 `references/gha-workflow-template.md` 一并 git rm）。
+- README 重写：头部去 GHA 宣称 + 新增「运行与部署」章节（fastapicloud 地址/部署链路/平台5铁律摘要/config.env 注入说明；口令只指向运维机，**不写入库**）。
+- 清理僵尸 docs/web/logs/M0a.job；STATUS.md 快照刷新。
+- 分支策略：web-dashboard（M0b-M6S 全部交付+本批文档）merge 进 main 后 push main；web-dashboard 分支同推留档。

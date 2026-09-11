@@ -231,3 +231,5 @@
 2026-09-10 11:34:06 M2 stalled log=771s hb=771s -> killed children
 2026-09-10 11:52:23 M2 stalled log=744s hb=744s -> killed children
 2026-09-10 12:05:08 M2 stalled log=721s hb=721s -> killed children
+2026-09-11 01:57:28 GATEWAY DOWN (探针连3败) -> 暂停派工，卡死回合快戳
+2026-09-11 02:02:08 GATEWAY RECOVERED (探针连2胜) -> 恢复派工
