@@ -16,13 +16,13 @@ if __package__ in (None, ""):
     from bball.config_bball import LEAGUE
     from bball.elo_bball import load_ratings, save_ratings, update_ratings
     from bball.odds_api import (OddsApiError, fetch_completed_games, fetch_odds_games,
-                                filter_24h_games, parse_odds)
+                                filter_window_games, parse_odds)
     from bball.predictor import predict_game
 else:
     from .config_bball import LEAGUE
     from .elo_bball import load_ratings, save_ratings, update_ratings
     from .odds_api import (OddsApiError, fetch_completed_games, fetch_odds_games,
-                           filter_24h_games, parse_odds)
+                           filter_window_games, parse_odds)
     from .predictor import predict_game
 
 from core.config import PREDICTIONS_DIR
@@ -35,6 +35,7 @@ BJT = timezone(timedelta(hours=8))
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="NBA 预测 CLI")
     parser.add_argument("--backtest", type=int, default=0, metavar="N")
+    parser.add_argument("--ahead-days", type=int, default=1, metavar="N")
     parser.add_argument("--leagues", default="nba")
     return parser
 
@@ -117,6 +118,8 @@ def run(args: argparse.Namespace) -> dict:
     ratings = load_ratings()
     if args.backtest:
         completed = fetch_completed_games(key, LEAGUE["odds_sport"], args.backtest)
+        if not completed:
+            LOGGER.warning("odds api free tier 无历史比分，休赛期请用 --ahead-days 90 前瞻揭幕战")
         update_ratings(ratings, completed)
         save_ratings(ratings)
         details = [_past_detail(g, _prediction(g, ratings, now)) for g in completed]
@@ -124,8 +127,8 @@ def run(args: argparse.Namespace) -> dict:
                   "data_window": _window(now), "predictions": [], "past_matches": details,
                   "past_games_detail": details}
     else:
-        games = fetch_odds_games(key, LEAGUE["odds_sport"], 1)
-        _past, future = filter_24h_games(games)
+        games = fetch_odds_games(key, LEAGUE["odds_sport"], args.ahead_days)
+        _past, future = filter_window_games(games, ahead_hours=args.ahead_days * 24)
         completed = fetch_completed_games(key, LEAGUE["odds_sport"], 3)
         update_ratings(ratings, completed)
         save_ratings(ratings)

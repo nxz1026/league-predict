@@ -45,14 +45,12 @@ def _unique_games(games: list[dict]) -> list[dict]:
 
 
 def fetch_odds_games(api_key: str, sport_key: str, days_ahead: int) -> list[dict]:
-    """获取未来盘口并按队伍组合去重。"""
-    now = datetime.now(timezone.utc)
-    start = now.isoformat().replace("+00:00", "Z")
-    end = (now + timedelta(days=days_ahead)).isoformat().replace("+00:00", "Z")
+    """获取盘口，时间窗口由本地过滤。"""
+    del days_ahead
     url = (
         f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
-        f"?regions=us&markets=h2h,spreads,totals&commenceTimeFrom={start}"
-        f"&commenceTimeTo={end}&apiKey={api_key}"
+        f"?regions=us&markets=h2h,spreads,totals&dateFormat=iso"
+        f"&apiKey={api_key}"
     )
     data = _http_get(url)
     return _unique_games(data) if isinstance(data, list) else []
@@ -70,10 +68,12 @@ def fetch_completed_games(api_key: str, sport_key: str, days_back: int) -> list[
     return [game for game in data if game.get("completed") and game.get("scores")]
 
 
-def filter_24h_games(games: list[dict]) -> tuple[list[dict], list[dict]]:
-    """按当前 UTC 时间拆分过去比赛与未来 24 小时比赛。"""
-    now = datetime.now(timezone.utc)
-    window_end = now + timedelta(hours=24)
+def filter_window_games(
+    games: list[dict], now: datetime | None = None, ahead_hours: int = 24
+) -> tuple[list[dict], list[dict]]:
+    """按 UTC 时间拆分过去比赛与指定小时窗口内的未来比赛。"""
+    current = now or datetime.now(timezone.utc)
+    window_end = current + timedelta(hours=ahead_hours)
     past: list[dict] = []
     future: list[dict] = []
     for game in games:
@@ -84,7 +84,7 @@ def filter_24h_games(games: list[dict]) -> tuple[list[dict], list[dict]]:
             moment = datetime.fromisoformat(commence.replace("Z", "+00:00"))
         except ValueError:
             continue
-        if moment < now:
+        if moment < current:
             past.append(game)
         elif moment <= window_end:
             future.append(game)

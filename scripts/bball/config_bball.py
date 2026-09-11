@@ -4,9 +4,10 @@ from pathlib import Path
 import os
 
 _ROOT_DIR = Path(__file__).parents[2]
-DATA_DIR = Path(os.environ.get("LP_OUTPUT_DIR", str(_ROOT_DIR))) / "data"
+_SKILL_DIR = Path(__file__).parent.parent
+DATA_DIR = Path(os.environ.get("LP_OUTPUT_DIR", str(_SKILL_DIR))) / "bball_data"
 ELO_FILE = DATA_DIR / "nba_elo.json"
-TEAMS_SEED_FILE = DATA_DIR / "nba_teams.json"
+TEAMS_SEED_FILE = _ROOT_DIR / "data" / "nba_teams.json"
 
 ELO = {
     "K": 32,
