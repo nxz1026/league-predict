@@ -73,8 +73,12 @@ def login(request: Request, response: Response,
     body = body or {}
     username = str(body.get("username", ""))
     password = str(body.get("password", ""))
-    ok_user = hmac.compare_digest(username, config.AUTH_USERNAME)
-    ok_pass = hmac.compare_digest(password, config.AUTH_PASSWORD)
+    ok_user = hmac.compare_digest(
+        username.encode("utf-8"), config.AUTH_USERNAME.encode("utf-8")
+    )
+    ok_pass = hmac.compare_digest(
+        password.encode("utf-8"), config.AUTH_PASSWORD.encode("utf-8")
+    )
     if not (ok_user and ok_pass):
         _record_failure(ip)
         raise ApiError("unauthorized", "用户名或密码错误", http_status=401)

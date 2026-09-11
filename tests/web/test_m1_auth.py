@@ -141,6 +141,22 @@ def test_login_wrong_username_no_cookie(client):
     assert "set-cookie" not in res.headers
 
 
+def test_login_non_ascii_credentials_no_typeerror(client, monkeypatch):
+    """中文账号 + 错误非 ASCII 密码必须 401；回归 hmac.compare_digest
+    对非 ASCII str 抛 TypeError 导致 500 的缺陷（WO-M7b1）。"""
+    import web.config as config
+
+    monkeypatch.setattr(config, "AUTH_USERNAME", "管理员")
+    monkeypatch.setattr(config, "AUTH_PASSWORD", "口令123")
+    res = client.post(
+        "/api/v1/login",
+        json={"username": "管理员", "password": "错误口令"},
+    )
+    assert res.status_code == 401
+    body = res.json()
+    assert body["code"] == "unauthorized"
+
+
 def test_login_five_failures_then_rate_limited(client):
     for _ in range(5):
         res = client.post(
