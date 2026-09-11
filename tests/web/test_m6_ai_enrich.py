@@ -370,3 +370,25 @@ def test_analyse_batch_falls_back_to_position_without_match(monkeypatch):
         config={},
     )
     assert [o["ai_summary"] for o in out] == ["丙队胜", "丁队胜"]
+
+
+def test_analyse_batch_skips_non_dict_position_fallback(monkeypatch):
+    """位置回退含字符串和空值时，仅好分析写入 AI 字段。"""
+    bp = _load_batch_pipeline(monkeypatch)
+    monkeypatch.setattr(bp, "generate", lambda prompt, **k: {"analyses": [
+        {"score": 88, "summary": "好队胜", "notes": ""},
+        "坏分析",
+        None,
+    ]})
+    items = [
+        {"name": "A vs B", "league": "EPL"},
+        {"name": "B vs C", "league": "EPL"},
+        {"name": "C vs D", "league": "EPL"},
+        {"name": "D vs E", "league": "EPL"},
+    ]
+
+    out = bp.analyse_batch(items, config={})
+
+    assert out[0]["ai_score"] == 88
+    assert "ai_score" not in out[1]
+    assert "ai_score" not in out[2]

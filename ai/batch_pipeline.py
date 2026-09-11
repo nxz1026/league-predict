@@ -51,18 +51,18 @@ def analyse_batch(
         analyses_by_name = _pair_batch(analyses, batch)
         for item in batch:
             ai = analyses_by_name.get(item.get("name"))
-            if ai:
-                score = max(0, min(100, int(ai.get("score", 0))))
-                if min_score and score < min_score:
-                    continue
-                enriched.append({
-                    **item,
-                    "ai_score": score,
-                    "ai_summary": ai.get("summary", ""),
-                    "ai_notes": ai.get("notes", ""),
-                })
-            else:
+            if not isinstance(ai, dict):
                 enriched.append(item)
+                continue
+            score = max(0, min(100, int(ai.get("score", 0))))
+            if min_score and score < min_score:
+                continue
+            enriched.append({
+                **item,
+                "ai_score": score,
+                "ai_summary": ai.get("summary", ""),
+                "ai_notes": ai.get("notes", ""),
+            })
 
     return enriched
 
@@ -73,13 +73,21 @@ def _pair_batch(analyses: list[dict], batch: list[dict]) -> dict:
     Prefer `a["match"] == item["name"]`. 兼容回退：所有 analysis 都无
     match 键且数量与 batch 相等时，退回按位置配对（旧行为）。
     """
-    if not analyses:
+    valid_analyses = [a for a in analyses if isinstance(a, dict)]
+    if not valid_analyses:
         return {}
-    if all("match" not in a for a in analyses):
-        if len(analyses) == len(batch):
-            return {item.get("name"): a for item, a in zip(batch, analyses)}
-        return {}
-    return {a["match"]: a for a in analyses if a.get("match") is not None}
+    if all("match" not in a for a in valid_analyses):
+        return {
+            item.get("name"): a
+            for item, a in zip(batch, analyses)
+            if isinstance(a, dict)
+        }
+    return {
+        a["match"]: a
+        for a in valid_analyses
+        if a.get("match") is not None
+    }
+
 
 
 def _build_prompt(batch, context, preference_prompt, config):
