@@ -278,6 +278,23 @@ def _resolve_direction_winner(dir_str: str, match_ctx: dict) -> str | None:
     return None
 
 
+def _reconcile_score_with_direction(predicted_score: str, direction: str,
+                                    all_scores: list, match: dict) -> str:
+    """P1-4：预测方向与最可能比分矛盾时，从网格里取方向一致的最高概率比分。纯函数。"""
+    # ── 方向一致性检查（P1-4：结构化枚举 + 主客胜全覆盖） ──
+    if "胜" in direction:
+        winner = _resolve_direction_winner(direction, match)
+        predicted_h = int(predicted_score.split("-")[0])
+        predicted_a = int(predicted_score.split("-")[1])
+        if predicted_h == predicted_a and winner:
+            for h, a, p in all_scores:
+                if (winner == "home" and h > a) or (winner == "away" and a > h):
+                    predicted_score = f"{h}-{a}"
+                    break
+
+    return predicted_score
+
+
 def calculate_prediction(
     match: dict,
     weights: dict | None = None,
@@ -371,16 +388,8 @@ def calculate_prediction(
         elo_ratings, elo_home_expected, elo_away_expected, ELO_WEIGHT,
         hfs, hrs, afs, ars, use_dixon_coles, dc_rho)
 
-    # ── 方向一致性检查（P1-4：结构化枚举 + 主客胜全覆盖） ──
-    if "胜" in direction:
-        winner = _resolve_direction_winner(direction, match)
-        predicted_h = int(predicted_score.split("-")[0])
-        predicted_a = int(predicted_score.split("-")[1])
-        if predicted_h == predicted_a and winner:
-            for h, a, p in all_scores:
-                if (winner == "home" and h > a) or (winner == "away" and a > h):
-                    predicted_score = f"{h}-{a}"
-                    break
+    predicted_score = _reconcile_score_with_direction(
+        predicted_score, direction, all_scores, match)
 
     # 95% 置信区间
     ci_home = poisson_confidence_interval(lambda_home)
