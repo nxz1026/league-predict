@@ -2,7 +2,6 @@ from __future__ import annotations
 
 """Data format converters: football-data.org and API-Football to ESPN format."""
 
-from core.log import logger
 from core.data.parse import decimal_to_american
 
 
@@ -17,52 +16,46 @@ def _decimal_to_implied(decimal_str: str | None) -> float | None:
         return None
 
 
-def _build_odds_from_bookmaker(bookmakers: list, home_team: str, away_team: str) -> dict:
-    """Convert API-Football bookmaker bets → ESPN-style odds struct."""
-    if not bookmakers:
+def _build_moneyline_odds(match_winner: dict | None, home_team: str, away_team: str) -> dict:
+    """Match Winner (1X2) bet → {details, drawOdds, homeML, awayML}."""
+    if not match_winner:
         return {}
 
-    # Take the first bookmaker with relevant bets
-    bets = bookmakers[0].get("bets", [])
+    values = match_winner.get("values", [])
+    home_ml = next((v for v in values if v.get("value") == "Home"), None)
+    draw_ml = next((v for v in values if v.get("value") == "Draw"), None)
+    away_ml = next((v for v in values if v.get("value") == "Away"), None)
 
-    # Find Match Winner (1X2)
-    match_winner = next((b for b in bets if b.get("name") == "Match Winner"), None)
-    handicap = next((b for b in bets if b.get("name") in ("Handicap", "Asian Handicap", "Point Spread")), None)
-    over_under = next((b for b in bets if b.get("name") == "Goals Over/Under"), None)
+    home_dec = home_ml.get("odd") if home_ml else None
+    draw_dec = draw_ml.get("odd") if draw_ml else None
+    away_dec = away_ml.get("odd") if away_ml else None
 
-    odds_entry = {}
+    home_american = decimal_to_american(home_dec)
+    draw_american = decimal_to_american(draw_dec)
+    away_american = decimal_to_american(away_dec)
 
-    # ── Moneyline ──
-    if match_winner:
-        values = match_winner.get("values", [])
-        home_ml = next((v for v in values if v.get("value") == "Home"), None)
-        draw_ml = next((v for v in values if v.get("value") == "Draw"), None)
-        away_ml = next((v for v in values if v.get("value") == "Away"), None)
+    # details = team with lower decimal odds (favorite)
+    home_imp = _decimal_to_implied(home_dec) or 0
+    away_imp = _decimal_to_implied(away_dec) or 0
+    if home_imp >= away_imp and home_american:
+        details = f"{home_team} {home_american}"
+    elif away_american:
+        details = f"{away_team} {away_american}"
+    else:
+        details = ""
 
-        home_dec = home_ml.get("odd") if home_ml else None
-        draw_dec = draw_ml.get("odd") if draw_ml else None
-        away_dec = away_ml.get("odd") if away_ml else None
+    return {
+        "details": details,
+        "drawOdds": {"moneyLine": draw_american} if draw_american else {},
+        "homeML": home_american,
+        "awayML": away_american,
+    }
 
-        home_american = decimal_to_american(home_dec)
-        draw_american = decimal_to_american(draw_dec)
-        away_american = decimal_to_american(away_dec)
 
-        # details = team with lower decimal odds (favorite)
-        home_imp = _decimal_to_implied(home_dec) or 0
-        away_imp = _decimal_to_implied(away_dec) or 0
-        if home_imp >= away_imp and home_american:
-            details = f"{home_team} {home_american}"
-        elif away_american:
-            details = f"{away_team} {away_american}"
-        else:
-            details = ""
+def _build_spread_total_odds(handicap: dict | None, over_under: dict | None, home_team: str, away_team: str) -> dict:
+    """Handicap → pointSpread and Goals Over/Under → total bet dicts."""
+    odds_entry: dict = {}
 
-        odds_entry["details"] = details
-        odds_entry["drawOdds"] = {"moneyLine": draw_american} if draw_american else {}
-        odds_entry["homeML"] = home_american
-        odds_entry["awayML"] = away_american
-
-    # ── Point Spread ──
     if handicap:
         values = handicap.get("values", [])
         for v in values:
@@ -82,7 +75,6 @@ def _build_odds_from_bookmaker(bookmakers: list, home_team: str, away_team: str)
                 "close": {"line": spread_line, "odds": american or ""},
             }
 
-    # ── Total ──
     if over_under:
         values = over_under.get("values", [])
         for v in values:
@@ -103,6 +95,71 @@ def _build_odds_from_bookmaker(bookmakers: list, home_team: str, away_team: str)
             }
 
     return odds_entry
+
+
+def _build_odds_from_bookmaker(bookmakers: list, home_team: str, away_team: str) -> dict:
+    """Convert API-Football bookmaker bets → ESPN-style odds struct."""
+    if not bookmakers:
+        return {}
+
+    # Take the first bookmaker with relevant bets
+    bets = bookmakers[0].get("bets", [])
+
+    # Find Match Winner (1X2)
+    match_winner = next((b for b in bets if b.get("name") == "Match Winner"), None)
+    handicap = next((b for b in bets if b.get("name") in ("Handicap", "Asian Handicap", "Point Spread")), None)
+    over_under = next((b for b in bets if b.get("name") == "Goals Over/Under"), None)
+
+    odds_entry = {}
+    odds_entry.update(_build_moneyline_odds(match_winner, home_team, away_team))
+    odds_entry.update(_build_spread_total_odds(handicap, over_under, home_team, away_team))
+
+    return odds_entry
+
+
+def _build_espn_event(
+    name: str,
+    date: str,
+    home_team: str,
+    away_team: str,
+    home_abbr: str,
+    away_abbr: str,
+    home_score: str,
+    away_score: str,
+    status: str,
+    completed: bool,
+    odds: list,
+) -> dict:
+    """Build one ESPN-style event dict from resolved fields."""
+    return {
+        "name": name,
+        "date": date,
+        "competitions": [{
+            "status": {
+                "type": {
+                    "name": status,
+                    "completed": completed,
+                }
+            },
+            "competitors": [
+                {
+                    "homeAway": "home",
+                    "team": {"displayName": home_team, "abbreviation": home_abbr},
+                    "score": home_score,
+                    "form": "",
+                    "records": [],
+                },
+                {
+                    "homeAway": "away",
+                    "team": {"displayName": away_team, "abbreviation": away_abbr},
+                    "score": away_score,
+                    "form": "",
+                    "records": [],
+                },
+            ],
+            "odds": odds,
+        }]
+    }
 
 
 def convert_football_data_to_espn_format(data: dict, config: dict) -> list[dict]:
@@ -132,38 +189,48 @@ def convert_football_data_to_espn_format(data: dict, config: dict) -> list[dict]
         home_score = str(score_data.get("home", 0) or 0)
         away_score = str(score_data.get("away", 0) or 0)
 
-        event = {
-            "name": f"{away_team} at {home_team}",
-            "date": match.get("utcDate", ""),
-            "competitions": [{
-                "status": {
-                    "type": {
-                        "name": status,
-                        "completed": completed,
-                    }
-                },
-                "competitors": [
-                    {
-                        "homeAway": "home",
-                        "team": {"displayName": home_team, "abbreviation": match.get("homeTeam", {}).get("t3", "UNK")},
-                        "score": home_score,
-                        "form": "",
-                        "records": [],
-                    },
-                    {
-                        "homeAway": "away",
-                        "team": {"displayName": away_team, "abbreviation": match.get("awayTeam", {}).get("t3", "UNK")},
-                        "score": away_score,
-                        "form": "",
-                        "records": [],
-                    },
-                ],
-                "odds": [],
-            }]
-        }
-        events.append(event)
+        events.append(_build_espn_event(
+            name=f"{away_team} at {home_team}",
+            date=match.get("utcDate", ""),
+            home_team=home_team,
+            away_team=away_team,
+            home_abbr=match.get("homeTeam", {}).get("t3", "UNK"),
+            away_abbr=match.get("awayTeam", {}).get("t3", "UNK"),
+            home_score=home_score,
+            away_score=away_score,
+            status=status,
+            completed=completed,
+            odds=[],
+        ))
 
     return events
+
+
+def _map_api_football_status(fixture: dict) -> tuple[str, bool]:
+    """API-Football status short → (ESPN status, completed)."""
+    status_short = fixture.get("fixture", {}).get("status", {}).get("short", "NS")
+    status_map = {
+        "NS": "STATUS_SCHEDULED",
+        "1H": "STATUS_IN_PROGRESS",
+        "HT": "STATUS_IN_PROGRESS",
+        "2H": "STATUS_IN_PROGRESS",
+        "ET": "STATUS_IN_PROGRESS",
+        "P": "STATUS_IN_PROGRESS",
+        "FT": "STATUS_FULL_TIME",
+        "AET": "STATUS_FINAL_ET",
+        "PEN": "STATUS_FINAL_PEN",
+        "SUSP": "STATUS_SCHEDULED",
+        "INT": "STATUS_SCHEDULED",
+        "PST": "STATUS_SCHEDULED",
+        "CANC": "STATUS_SCHEDULED",
+        "ABD": "STATUS_SCHEDULED",
+        "AWD": "STATUS_FULL_TIME",
+        "WO": "STATUS_FULL_TIME",
+    }
+
+    status = status_map.get(status_short, "STATUS_SCHEDULED")
+    completed = status in ("STATUS_FULL_TIME", "STATUS_FINAL_ET", "STATUS_FINAL_PEN")
+    return status, completed
 
 
 def convert_api_football_to_espn_format(data: dict, config: dict, odds_lookup: dict[int, list] | None = None) -> list[dict]:
@@ -176,28 +243,7 @@ def convert_api_football_to_espn_format(data: dict, config: dict, odds_lookup: d
         home_team = fixture.get("teams", {}).get("home", {}).get("name", "Unknown")
         away_team = fixture.get("teams", {}).get("away", {}).get("name", "Unknown")
 
-        status_short = fixture.get("fixture", {}).get("status", {}).get("short", "NS")
-        status_map = {
-            "NS": "STATUS_SCHEDULED",
-            "1H": "STATUS_IN_PROGRESS",
-            "HT": "STATUS_IN_PROGRESS",
-            "2H": "STATUS_IN_PROGRESS",
-            "ET": "STATUS_IN_PROGRESS",
-            "P": "STATUS_IN_PROGRESS",
-            "FT": "STATUS_FULL_TIME",
-            "AET": "STATUS_FINAL_ET",
-            "PEN": "STATUS_FINAL_PEN",
-            "SUSP": "STATUS_SCHEDULED",
-            "INT": "STATUS_SCHEDULED",
-            "PST": "STATUS_SCHEDULED",
-            "CANC": "STATUS_SCHEDULED",
-            "ABD": "STATUS_SCHEDULED",
-            "AWD": "STATUS_FULL_TIME",
-            "WO": "STATUS_FULL_TIME",
-        }
-
-        status = status_map.get(status_short, "STATUS_SCHEDULED")
-        completed = status in ("STATUS_FULL_TIME", "STATUS_FINAL_ET", "STATUS_FINAL_PEN")
+        status, completed = _map_api_football_status(fixture)
 
         goals = fixture.get("goals", {})
         home_score = str(goals.get("home", 0) or 0)
@@ -209,35 +255,18 @@ def convert_api_football_to_espn_format(data: dict, config: dict, odds_lookup: d
             bookmakers = odds_lookup[fixture_id]
             odds_entry = _build_odds_from_bookmaker(bookmakers, home_team, away_team)
 
-        event = {
-            "name": f"{away_team} at {home_team}",
-            "date": fixture.get("fixture", {}).get("date", ""),
-            "competitions": [{
-                "status": {
-                    "type": {
-                        "name": status,
-                        "completed": completed,
-                    }
-                },
-                "competitors": [
-                    {
-                        "homeAway": "home",
-                        "team": {"displayName": home_team, "abbreviation": home_team[:3].upper()},
-                        "score": home_score,
-                        "form": "",
-                        "records": [],
-                    },
-                    {
-                        "homeAway": "away",
-                        "team": {"displayName": away_team, "abbreviation": away_team[:3].upper()},
-                        "score": away_score,
-                        "form": "",
-                        "records": [],
-                    },
-                ],
-                "odds": [odds_entry] if odds_entry else [],
-            }]
-        }
-        events.append(event)
+        events.append(_build_espn_event(
+            name=f"{away_team} at {home_team}",
+            date=fixture.get("fixture", {}).get("date", ""),
+            home_team=home_team,
+            away_team=away_team,
+            home_abbr=home_team[:3].upper(),
+            away_abbr=away_team[:3].upper(),
+            home_score=home_score,
+            away_score=away_score,
+            status=status,
+            completed=completed,
+            odds=[odds_entry] if odds_entry else [],
+        ))
 
     return events

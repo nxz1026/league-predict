@@ -55,6 +55,13 @@ def dixon_coles_pmf(home_goals: int, away_goals: int, lambda_h: float, lambda_a:
     return base_prob * tau
 
 
+def _dc_pmf_grid(lambda_h: float, lambda_a: float, rho: float, max_goals: int) -> list[list[float]]:
+    """构建 (max_goals+1)×(max_goals+1) 的 Dixon-Coles 比分概率矩阵（不剪枝）。"""
+    return [[dixon_coles_pmf(h, a, lambda_h, lambda_a, rho)
+             for a in range(max_goals + 1)]
+            for h in range(max_goals + 1)]
+
+
 def dixon_coles_match_probs(lambda_h: float, lambda_a: float, rho: float = 0.2, max_goals: int = 8,
                             mode: str = "full") -> dict[str, Any]:
     """Dixon-Coles 比赛概率计算。
@@ -62,35 +69,23 @@ def dixon_coles_match_probs(lambda_h: float, lambda_a: float, rho: float = 0.2, 
     Args:
         mode: "full" 计算完整比分矩阵(81项), "summary" 仅返回 home/draw/away 概率（更快）
     """
+    grid = _dc_pmf_grid(lambda_h, lambda_a, rho, max_goals)
     score_probs: list[tuple[int, int, float]] = []
-    home_win_p = 0.0
-    draw_p = 0.0
-    away_win_p = 0.0
+    home_win_p = draw_p = away_win_p = 0.0
 
-    if mode == "summary":
-        # 仅计算胜负平概率，提前剪枝低概率比分
-        for h in range(max_goals + 1):
-            for a in range(max_goals + 1):
-                p = dixon_coles_pmf(h, a, lambda_h, lambda_a, rho)
-                if p > 0.0001:
-                    if h > a:
-                        home_win_p += p
-                    elif h == a:
-                        draw_p += p
-                    else:
-                        away_win_p += p
-    else:
-        for h in range(max_goals + 1):
-            for a in range(max_goals + 1):
-                p = dixon_coles_pmf(h, a, lambda_h, lambda_a, rho)
-                if p > 0.0001:
+    for h in range(max_goals + 1):
+        for a in range(max_goals + 1):
+            p = grid[h][a]
+            if p > 0.0001:
+                # 仅 full 模式收集比分明细，summary 只累加胜负平
+                if mode == "full":
                     score_probs.append((h, a, p))
-                    if h > a:
-                        home_win_p += p
-                    elif h == a:
-                        draw_p += p
-                    else:
-                        away_win_p += p
+                if h > a:
+                    home_win_p += p
+                elif h == a:
+                    draw_p += p
+                else:
+                    away_win_p += p
 
     total = home_win_p + draw_p + away_win_p
     if total > 0:
@@ -108,6 +103,39 @@ def dixon_coles_match_probs(lambda_h: float, lambda_a: float, rho: float = 0.2, 
         result["score_probs"] = score_probs[:12]
 
     return result
+
+
+def _neg_log_likelihood(scores: list[tuple[int, int]], avg_h: float, avg_a: float, rho_val: float) -> float:
+    """负对数似然：Dixon-Coles ρ 拟合的目标函数。"""
+    ll = 0.0
+    for h, a in scores:
+        p = dixon_coles_pmf(h, a, avg_h, avg_a, rho_val)
+        if p > 1e-10:
+            ll += math.log(p)
+    return -ll
+
+
+def _refine_dc_rho(scores: list[tuple[int, int]], avg_h: float, avg_a: float, rho_min: float, rho_max: float,
+                   adaptive_step: float, best_rho: float, best_ll: float) -> float:
+    """在粗网格最优附近 ±10 步长内三分搜索精化 ρ。"""
+    lo = max(rho_min, best_rho - 10 * adaptive_step)
+    hi = min(rho_max, best_rho + 10 * adaptive_step)
+
+    for _ in range(50):  # ~50次迭代，精度足够
+        if hi - lo < 1e-6:
+            break
+        mid1 = lo + (hi - lo) / 3
+        mid2 = hi - (hi - lo) / 3
+        if _neg_log_likelihood(scores, avg_h, avg_a, mid1) < _neg_log_likelihood(scores, avg_h, avg_a, mid2):
+            hi = mid2
+        else:
+            lo = mid1
+
+    final_rho = (lo + hi) / 2
+    # 确保三分搜索结果不比网格搜索差
+    if -_neg_log_likelihood(scores, avg_h, avg_a, final_rho) < best_ll:
+        final_rho = best_rho
+    return final_rho
 
 
 def fit_dc_rho(past_matches: list[dict[str, Any]], rho_min: float = -0.3, rho_max: float = 0.5, step: float = 0.005) -> float:
@@ -137,44 +165,19 @@ def fit_dc_rho(past_matches: list[dict[str, Any]], rho_min: float = -0.3, rho_ma
     avg_a = sum(all_a) / n
 
     # ── 三分搜索优化（P3-1）：似然函数单峰，O(log N) 替代 O(N×steps）───
-    def _neg_log_likelihood(rho_val: float) -> float:
-        ll = 0.0
-        for h, a in scores:
-            p = dixon_coles_pmf(h, a, avg_h, avg_a, rho_val)
-            if p > 1e-10:
-                ll += math.log(p)
-        return -ll
-
     # 先用粗网格找大致范围，再用三分搜索精化
     best_rho = 0.2
     best_ll = -float("inf")
     rho = rho_min
     while rho <= rho_max:
-        ll = -_neg_log_likelihood(rho)
+        ll = -_neg_log_likelihood(scores, avg_h, avg_a, rho)
         if ll > best_ll:
             best_ll = ll
             best_rho = rho
         rho += adaptive_step
 
-    # 三分搜索精化（在最佳值附近 ±adaptive_step 范围内）
-    lo = max(rho_min, best_rho - 10 * adaptive_step)
-    hi = min(rho_max, best_rho + 10 * adaptive_step)
-
-    for _ in range(50):  # ~50次迭代，精度足够
-        if hi - lo < 1e-6:
-            break
-        mid1 = lo + (hi - lo) / 3
-        mid2 = hi - (hi - lo) / 3
-        if _neg_log_likelihood(mid1) < _neg_log_likelihood(mid2):
-            hi = mid2
-        else:
-            lo = mid1
-
-    final_rho = (lo + hi) / 2
-    # 确保三分搜索结果不比网格搜索差
-    if -_neg_log_likelihood(final_rho) < best_ll:
-        final_rho = best_rho
+    final_rho = _refine_dc_rho(scores, avg_h, avg_a, rho_min, rho_max, adaptive_step, best_rho, best_ll)
 
     logger.info(f"rho fit: {n} matches, lambda_h={avg_h:.2f} lambda_a={avg_a:.2f}, "
-                f"rho={final_rho:.3f} (LL={-_neg_log_likelihood(final_rho):.1f})")
+                f"rho={final_rho:.3f} (LL={-_neg_log_likelihood(scores, avg_h, avg_a, final_rho):.1f})")
     return round(final_rho, 3)

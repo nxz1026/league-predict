@@ -55,7 +55,7 @@ def app(tmp_path, monkeypatch):
 
     import web.services.jobs as jobs_mod
     monkeypatch.setattr(jobs_mod, "_build_env", lambda: {})
-    monkeypatch.setattr(jobs_mod, "_build_cmd", lambda args: ["python3", "predict.py", *args])
+    monkeypatch.setattr(jobs_mod, "_build_cmd", lambda args, script="predict": ["python3", "predict.py", *args])
 
     from web.api import create_app
     return create_app()
@@ -271,9 +271,9 @@ def test_auto_refresh_trigger_and_dedup(client, tmp_path, monkeypatch):
     import web.services.store as store_mod
     monkeypatch.setattr(store_mod, "OUTPUT_DIR", tmp_path / "empty")
     _login(client)
-    r1 = client.get("/api/v1/jobs/auto/refresh")
+    r1 = client.post("/api/v1/jobs/auto/refresh")
     assert r1.json()["triggered"] is True
-    r2 = client.get("/api/v1/jobs/auto/refresh")
+    r2 = client.post("/api/v1/jobs/auto/refresh")
     assert r2.json()["triggered"] is False
     assert r2.json()["reason"] == "already_today"
 
@@ -337,4 +337,17 @@ def test_ai_status_endpoints(client, tmp_path, monkeypatch):
 def test_jobs_require_auth(client):
     assert client.get("/api/v1/jobs").status_code == 401
     assert client.post("/api/v1/jobs/predict", json={}).status_code == 401
-    assert client.get("/api/v1/jobs/auto/refresh").status_code == 401
+    assert client.post("/api/v1/jobs/auto/refresh").status_code == 401
+
+
+class TestOrphanRecovery:
+    def test_stale_running_is_recovered(self, client, tmp_path, monkeypatch):
+        """running 超过 2*timeout → active_job 回收为 failed 并放行新任务。"""
+        import time as _t
+        from web.services import jobs as jb
+        stale = jb.create_job([], trigger="test")
+        jb._spin_state(stale["id"], jb.STATUS_RUNNING, started_at=_t.time() - 99999)
+        assert jb.active_job() is None
+        reloaded = jb.get_job(stale["id"])
+        assert reloaded["status"] == jb.STATUS_FAILED
+        assert "orphan" in (reloaded.get("error") or "")

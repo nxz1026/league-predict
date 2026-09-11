@@ -13,7 +13,7 @@ from __future__ import annotations
 import hmac
 import time
 
-from fastapi import Depends, Request, Response
+from fastapi import Request, Response
 from fastapi.routing import APIRouter
 
 from web import config
@@ -42,6 +42,15 @@ def _check_lockout(ip: str) -> None:
 
 
 def _record_failure(ip: str) -> None:
+    global _failures
+    now = time.time()
+    # 清理已完全过期的锁定记录，防止失败字典无界增长。
+    _failures = {
+        k: rec for k, rec in _failures.items()
+        if not (rec["lockout_until"] > 0
+                and rec["lockout_until"] < now
+                and now - rec["lockout_until"] > config.LOGIN_LOCKOUT_SECONDS)
+    }
     rec = _failures.setdefault(ip, {"count": 0, "lockout_until": 0.0})
     rec["count"] += 1
     if rec["count"] >= config.LOGIN_MAX_FAILURES:
@@ -73,8 +82,12 @@ def login(request: Request, response: Response,
     body = body or {}
     username = str(body.get("username", ""))
     password = str(body.get("password", ""))
-    ok_user = hmac.compare_digest(username, config.AUTH_USERNAME)
-    ok_pass = hmac.compare_digest(password, config.AUTH_PASSWORD)
+    ok_user = hmac.compare_digest(
+        username.encode("utf-8"), config.AUTH_USERNAME.encode("utf-8")
+    )
+    ok_pass = hmac.compare_digest(
+        password.encode("utf-8"), config.AUTH_PASSWORD.encode("utf-8")
+    )
     if not (ok_user and ok_pass):
         _record_failure(ip)
         raise ApiError("unauthorized", "用户名或密码错误", http_status=401)

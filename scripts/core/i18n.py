@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """队名中文化：用 LLM 翻译并持久化缓存，避免硬编码对照表（P6）。
 
 - 国名：走稳定的 COUNTRY_CN（国名集合固定、不会变化）。
@@ -8,9 +6,9 @@ from __future__ import annotations
 - LLM 不可用时优雅降级：返回原英文名。
 """
 
+from __future__ import annotations
+
 import json
-from pathlib import Path
-from typing import Any
 
 from core.config import FOOTBALL_DIR, COUNTRY_CN
 from core.log import logger

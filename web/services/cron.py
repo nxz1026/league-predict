@@ -24,8 +24,7 @@ def _cron_tick() -> None:
     try:
         job, reason = jobs.trigger_predict([], trigger="cron")
         if job is not None:
-            from web.routers.jobs import _executor
-            _executor.submit(jobs.run_job, job["id"])
+            jobs.submit_job(job["id"])
             logger.info("cron 触发预测 job=%s", job["id"])
         else:
             logger.info("cron 触发被守卫拒绝: %s", reason)

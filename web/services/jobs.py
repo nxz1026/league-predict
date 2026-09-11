@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
 import os
@@ -24,6 +25,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from web import config
+from web.errors import LockTimeout
 
 BJT = ZoneInfo("Asia/Shanghai")
 STATUS_QUEUED = "queued"
@@ -109,9 +111,6 @@ def quota_consume() -> bool:
 
 # --- 文件锁 ---------------------------------------------------------------
 
-class LockTimeout(Exception):
-    pass
-
 
 @contextmanager
 def _exclusive_lock(lock_path: Path, timeout: float = 10.0):
@@ -141,7 +140,7 @@ def _exclusive_lock(lock_path: Path, timeout: float = 10.0):
 def _drop_stale_lock(lock_path: Path) -> None:
     """锁文件持 PID 超过 10 分钟视为 stale（进程被杀残留），删除。"""
     try:
-        pid = int(lock_path.read_text().strip() or "0")
+        pid = int(lock_path.read_text(encoding="utf-8").strip() or "0")
     except (OSError, ValueError):
         return
     if pid <= 0:
@@ -184,22 +183,29 @@ def _write_job(jid: str, data: dict) -> None:
     os.replace(tmp, _job_file(jid))
 
 
-def create_job(args: list[str], trigger: str = "manual", script: str = "predict") -> dict:
-    """登记 queued 任务（写状态文件），返回 job 记录。script: predict|ai_enrich。"""
-    jid = job_id()
-    now = _now_epoch()
-    job = {
+def _default_job(jid: str) -> dict:
+    """新建/兜底共用的空任务字段（字段集与 create_job 一致）。"""
+    return {
         "id": jid,
         "status": STATUS_QUEUED,
-        "trigger": trigger,
-        "script": script,
-        "args": args,
-        "created_at": now,
+        "trigger": "manual",
+        "script": "predict",
+        "args": [],
+        "created_at": _now_epoch(),
         "started_at": None,
         "finished_at": None,
         "exit_code": None,
         "timeout": config.PREDICT_TIMEOUT_SECONDS,
     }
+
+
+def create_job(args: list[str], trigger: str = "manual", script: str = "predict") -> dict:
+    """登记 queued 任务（写状态文件），返回 job 记录。script: predict|ai_enrich。"""
+    jid = job_id()
+    job = _default_job(jid)
+    job["trigger"] = trigger
+    job["script"] = script
+    job["args"] = args
     _write_job(jid, job)
     return job
 
@@ -222,11 +228,7 @@ def list_jobs(limit: int = 20) -> list[dict]:
 def _spin_state(jid: str, status: str, **extra) -> dict:
     """带锁的状态迁移（同进程并发安全；跨进程由文件锁兜底）。"""
     with _exclusive_lock(_job_file(jid).with_suffix(".state.lock"), timeout=5):
-        job = _read_job(jid) or {
-            "id": jid, "status": STATUS_QUEUED, "args": [],
-            "created_at": _now_epoch(), "started_at": None, "finished_at": None,
-            "exit_code": None, "timeout": config.PREDICT_TIMEOUT_SECONDS,
-        }
+        job = _read_job(jid) or _default_job(jid)
         job["status"] = status
         job.update(extra)
         _write_job(jid, job)
@@ -256,7 +258,7 @@ def run_job(jid: str) -> None:
         _spin_state(jid, STATUS_RUNNING, started_at=_now_epoch())
         args = list(job.get("args", []))
         script = job.get("script", "predict")  # 老 job 文件缺字段 → predict 容错
-        cmd = _build_cmd(args) if script == "predict" else _build_cmd(args, script)
+        cmd = _build_cmd(args, script)
         log_path = _log_file(jid)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         started = _now_epoch()
@@ -287,6 +289,22 @@ def run_job(jid: str) -> None:
             logger.info("job %s done in %.1fs", jid, _now_epoch() - started)
 
 
+# --- 线程池投递 -----------------------------------------------------------
+
+# 引擎子进程执行不阻塞请求线程（fire-and-forget：失败只写状态文件）。
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+
+
+def submit_job(jid: str) -> None:
+    """向线程池投递任务执行（调用方不等待结果）。"""
+    executor.submit(run_job, jid)
+
+
+def mark_failed(jid: str, error: str) -> None:
+    """把任务标记为 failed（供路由层 submit 异常兜底）。"""
+    _spin_state(jid, STATUS_FAILED, finished_at=_now_epoch(), error=error)
+
+
 def read_job_log(jid: str, tail: int = 200) -> str:
     path = _log_file(jid)
     if not path.is_file():
@@ -299,10 +317,21 @@ def read_job_log(jid: str, tail: int = 200) -> str:
 
 
 def active_job() -> dict | None:
-    """当前 running/queued 的任务（有则拒绝并发新任务）。"""
+    """当前 running/queued 的任务（含过期孤儿回收：超时无进展 → failed）。"""
+    now = _now_epoch()
     for row in list_jobs(limit=100):
-        if row.get("status") not in TERMINAL:
-            return row
+        if row.get("status") in TERMINAL:
+            continue
+        jid = row.get("id", "")
+        base = row.get("started_at") or row.get("created_at") or 0
+        limit = (row.get("timeout") or config.PREDICT_TIMEOUT_SECONDS) * 2
+        if row.get("status") == STATUS_RUNNING and now - base > limit:
+            _spin_state(jid, STATUS_FAILED, finished_at=now, error="orphan recovered")
+            continue
+        if row.get("status") == STATUS_QUEUED and now - (row.get("created_at") or 0) > 300:
+            _spin_state(jid, STATUS_FAILED, finished_at=now, error="orphan queued expired")
+            continue
+        return row
     return None
 
 
@@ -327,5 +356,5 @@ def trigger_predict(args: list[str], trigger: str = "manual") -> tuple[dict | No
 
 
 def trigger_ai_enrich(trigger: str = "manual") -> tuple[dict | None, str | None]:
-    """提交 AI 富化任务（脚本 scripts/ai_enrich_gha.py，argv 固定为空）。"""
+    """提交 AI 富化任务（python -m web.enrich，argv 固定为空）。"""
     return _spawn("ai_enrich", [], trigger)

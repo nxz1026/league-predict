@@ -2,7 +2,6 @@ from __future__ import annotations
 
 """Core prediction engine: Onside 4+1 signal model combined with Dixon-Coles."""
 
-import json
 from core.config import ONSIDE_WEIGHTS, MARKET_ODDS_WEIGHT, DC_RHO, THRESHOLDS, LEAGUE_DC_RHO, ML_CONFIG
 from core.log import logger
 # 统一从 core.rankings 导入（P1-3：打破循环依赖）
@@ -28,31 +27,87 @@ def get_ml_model(league_key: str):
     return model
 
 
-def calculate_prediction(
-    match: dict,
-    weights: dict | None = None,
-    calibration_offset: dict | None = None,
-    fifa_rankings: dict | None = None,
-    host_country: str | None = None,
-    use_dixon_coles: bool = True,
-    dc_rho: float | None = None,  # P0-3: 允许 None 以使用联赛差异化 ρ
-    elo_ratings: dict[str, float] | None = None,
-    league_key: str = "epl",  # P0-3: 传入联赛 key 用于差异化 ρ
-) -> dict:
-    """
-    Onside 4 信号 + ELO + Dixon-Coles 预测 → 方向 + 信心 + 比分预测 + 95% CI
+def _blend_ml_probs(home_prob: float, draw_prob: float, away_prob: float,
+                    match: dict, onside: dict, sm: float,
+                    elo_ratings: dict | None, host_country: str | None,
+                    league_key: str) -> tuple[float, float, float, list | None]:
+    """ML 概率融合（P1/ML）：26 维特征分类器与规则模型概率加权混合。纯函数。"""
+    ml_proba = None
+    ml_model = get_ml_model(league_key)
+    if ml_model is not None:
+        feature_match = dict(match)
+        feature_match["onside_signals"] = onside
+        feature_match["spread_movement_score"] = sm
+        _ml_context = {"elo_ratings": elo_ratings, "host_country": host_country}
+        try:
+            vec = extract_features(feature_match, _ml_context)
+            ml_proba = ml_model.predict_proba(vec)
+            w = float(ML_CONFIG.get("blend_weight", 0.0))
+            if w > 0 and len(ml_proba) == 3:
+                home_prob = (1 - w) * home_prob + w * ml_proba[0]
+                draw_prob = (1 - w) * draw_prob + w * ml_proba[1]
+                away_prob = (1 - w) * away_prob + w * ml_proba[2]
+                _t = home_prob + draw_prob + away_prob
+                if _t > 0:
+                    home_prob /= _t
+                    draw_prob /= _t
+                    away_prob /= _t
+                logger.debug(f"ML blend applied (league={league_key}, w={w})")
+        except Exception as e:
+            logger.warning(f"ML blend failed, falling back to rule model: {e}")
+            ml_proba = None
+    return home_prob, draw_prob, away_prob, ml_proba
 
-    Args:
-        match: 比赛数据字典
-        weights: 权重字典（可选，默认 ONSIDE_WEIGHTS）
-        calibration_offset: 校准偏移字典
-        fifa_rankings: FIFA 排名字典
-        host_country: 东道主国家
-        use_dixon_coles: 是否使用 Dixon-Coles 模型
-        dc_rho: Dixon-Coles ρ 参数，None 时按联赛自动选择 (P0-3)
-        elo_ratings: ELO 评分表 {team: elo}，提供则加入信号融合
-        league_key: 联赛键名，用于查找联赛特定参数 (P0-3)
-    """
+
+def _decide_direction_and_stars(home_prob: float, draw_prob: float,
+                                away_prob: float, match: dict) -> tuple[str, float, str | None, str]:
+    """方向判断 + 置信度钳位 + 无盘口降级 + 星级映射。纯函数。"""
+    if home_prob > THRESHOLDS["direction_min_prob"] and home_prob > away_prob * THRESHOLDS["direction_odds_ratio"]:
+        direction = f"{match['home']} 胜"
+        confidence_raw = (home_prob - 0.25) * 2
+    elif away_prob > THRESHOLDS["direction_min_prob"] and away_prob > home_prob * THRESHOLDS["direction_odds_ratio"]:
+        direction = f"{match['away']} 胜"
+        confidence_raw = (away_prob - 0.25) * 2
+    elif draw_prob > THRESHOLDS["draw_threshold"]:
+        direction = "平局"
+        confidence_raw = (draw_prob - 0.25) * 2
+    else:
+        if home_prob >= away_prob and home_prob >= draw_prob:
+            direction = f"{match['home']} 胜 (接近)"
+            confidence_raw = (home_prob - THRESHOLDS["near_mode_base"]) * 3
+        elif away_prob >= home_prob and away_prob >= draw_prob:
+            direction = f"{match['away']} 胜 (接近)"
+            confidence_raw = (away_prob - THRESHOLDS["near_mode_base"]) * 3
+        else:
+            direction = "平局 (接近)"
+            confidence_raw = (draw_prob - THRESHOLDS["near_mode_base"]) * 3
+
+    confidence_raw = min(max(confidence_raw, 0.0), 1.0)
+
+    # ── 盘口数据缺失降级 ──
+    if not match.get("odds_data_available", False):
+        confidence_raw = max(confidence_raw - 0.25, 0.0)
+        confidence_note = "无盘口数据，仅基本面参考"
+    else:
+        confidence_note = None
+
+    if confidence_raw >= THRESHOLDS["star_5"]:
+        stars = "5-star"
+    elif confidence_raw >= THRESHOLDS["star_4"]:
+        stars = "4-star"
+    elif confidence_raw >= THRESHOLDS["star_3"]:
+        stars = "3-star"
+    elif confidence_raw >= THRESHOLDS["star_2"]:
+        stars = "2-star"
+    else:
+        stars = "1-star"
+    return direction, confidence_raw, confidence_note, stars
+
+
+def _init_inputs(match: dict, weights: dict | None, fifa_rankings: dict | None,
+                 host_country: str | None, elo_ratings: dict | None,
+                 league_key: str, dc_rho: float | None) -> tuple:
+    """输入解包 + Onside 4 信号计算 + 联赛差异化 ρ。纯函数。"""
     if weights is None:
         weights = ONSIDE_WEIGHTS
 
@@ -81,9 +136,18 @@ def calculate_prediction(
     onside = compute_onside_signals(home_en, away_en, fifa_rankings, host_country, elo_ratings=elo_ratings)
     home_onside = onside["home"]["onside_score"]
     away_onside = onside["away"]["onside_score"]
+    return weights, dc_rho, hp, dp, ap, hfs, afs, hrs, ars, sm, home_en, away_en, onside, home_onside, away_onside
 
-    # ── 应用 calibration offset 修正隐含概率 ──
+
+def _apply_market_calibration(hp: float, dp: float, ap: float,
+                              calibration_offset: dict | None,
+                              home_onside: float, away_onside: float
+                              ) -> tuple[float, float, float, float, float, float, float, float, str | None]:
+    """calibration offset 修正 market 隐含概率并重新归一化。纯函数。"""
     calibration_note = None
+    dc_val = 1.0
+    ohc = 1.0
+    oac = 1.0
     if calibration_offset:
         hc = calibration_offset.get("home_correction", 1.0)
         dc_val = calibration_offset.get("draw_correction", 1.0)
@@ -113,28 +177,18 @@ def calculate_prediction(
                            f"home×{hc}/draw×{dc_val}/away×{ac})"
         logger.info(calibration_note)
 
-    sm_capped = max(-THRESHOLDS["spread_movement_cap"], min(THRESHOLDS["spread_movement_cap"], sm))
+    return hp, dp, ap, dc_val, ohc, oac, home_onside, away_onside, calibration_note
 
-    # ── ELO 信号（可选） ──
-    elo_home_expected = None
-    if elo_ratings:
-        home_elo = elo_ratings.get(home_en, DEFAULT_ELO)
-        away_elo = elo_ratings.get(away_en, DEFAULT_ELO)
-        elo_home_expected = expected_score(home_elo, away_elo, home_adv=True)
-        elo_away_expected = 1.0 - elo_home_expected
-    ELO_WEIGHT = THRESHOLDS.get("elo_weight", 0.18)
 
-    # ══════════════════════════════════════════════════════
-    # P0-2 统一权重体系：方向概率和 λ 使用同一套加权信号
-    # ══════════════════════════════════════════════════════
-    
-    onside_weight = (1 - MARKET_ODDS_WEIGHT) * (1 - ELO_WEIGHT if elo_ratings else 1.0)
+def _unified_strength_probs(market_home: float, market_draw: float, market_away: float,
+                            home_onside: float, away_onside: float, sm_capped: float,
+                            onside_weight: float, elo_ratings: bool,
+                            elo_home_expected: float | None, elo_away_expected: float | None,
+                            ELO_WEIGHT: float, dc_val: float, calibration_offset: dict | None
+                            ) -> tuple[float, float, float]:
+    """P0-2：方向概率与 λ 使用同一套加权信号 → home/draw/away 概率。纯函数。"""
 
     # ── 方向概率计算 ──
-    market_home = hp
-    market_draw = dp
-    market_away = ap
-
     home_strength = (
         market_home * MARKET_ODDS_WEIGHT
         + home_onside * onside_weight
@@ -160,78 +214,41 @@ def calculate_prediction(
     draw_prob_calc = draw_strength / total
     away_prob = away_strength / total
 
-    # ── ML 概率融合（P1/ML: 26 维特征分类器与主模型概率做加权融合）──
-    ml_proba = None
-    ml_model = get_ml_model(league_key)
-    if ml_model is not None:
-        feature_match = dict(match)
-        feature_match["onside_signals"] = onside
-        feature_match["spread_movement_score"] = sm
-        _ml_context = {"elo_ratings": elo_ratings, "host_country": host_country}
-        try:
-            vec = extract_features(feature_match, _ml_context)
-            ml_proba = ml_model.predict_proba(vec)
-            w = float(ML_CONFIG.get("blend_weight", 0.0))
-            if w > 0 and len(ml_proba) == 3:
-                home_prob = (1 - w) * home_prob + w * ml_proba[0]
-                draw_prob_calc = (1 - w) * draw_prob_calc + w * ml_proba[1]
-                away_prob = (1 - w) * away_prob + w * ml_proba[2]
-                _t = home_prob + draw_prob_calc + away_prob
-                if _t > 0:
-                    home_prob /= _t
-                    draw_prob_calc /= _t
-                    away_prob /= _t
-                logger.debug(f"ML blend applied (league={league_key}, w={w})")
-        except Exception as e:
-            logger.warning(f"ML blend failed, falling back to rule model: {e}")
-            ml_proba = None
+    return home_prob, draw_prob_calc, away_prob
 
-    # ── 方向判断 ──
-    if home_prob > THRESHOLDS["direction_min_prob"] and home_prob > away_prob * THRESHOLDS["direction_odds_ratio"]:
-        direction = f"{match['home']} 胜"
-        confidence_raw = (home_prob - 0.25) * 2
-    elif away_prob > THRESHOLDS["direction_min_prob"] and away_prob > home_prob * THRESHOLDS["direction_odds_ratio"]:
-        direction = f"{match['away']} 胜"
-        confidence_raw = (away_prob - 0.25) * 2
-    elif draw_prob_calc > THRESHOLDS["draw_threshold"]:
-        direction = "平局"
-        confidence_raw = (draw_prob_calc - 0.25) * 2
-    else:
-        if home_prob >= away_prob and home_prob >= draw_prob_calc:
-            direction = f"{match['home']} 胜 (接近)"
-            confidence_raw = (home_prob - THRESHOLDS["near_mode_base"]) * 3
-        elif away_prob >= home_prob and away_prob >= draw_prob_calc:
-            direction = f"{match['away']} 胜 (接近)"
-            confidence_raw = (away_prob - THRESHOLDS["near_mode_base"]) * 3
-        else:
-            direction = "平局 (接近)"
-            confidence_raw = (draw_prob_calc - THRESHOLDS["near_mode_base"]) * 3
 
-    confidence_raw = min(max(confidence_raw, 0.0), 1.0)
-
-    # ── 盘口数据缺失降级 ──
-    if not match.get("odds_data_available", False):
-        confidence_raw = max(confidence_raw - 0.25, 0.0)
-        confidence_note = "无盘口数据，仅基本面参考"
-    else:
-        confidence_note = None
-
-    if confidence_raw >= THRESHOLDS["star_5"]:
-        stars = "5-star"
-    elif confidence_raw >= THRESHOLDS["star_4"]:
-        stars = "4-star"
-    elif confidence_raw >= THRESHOLDS["star_3"]:
-        stars = "3-star"
-    elif confidence_raw >= THRESHOLDS["star_2"]:
-        stars = "2-star"
-    else:
-        stars = "1-star"
-
+def _weighted_direction_probs(hp: float, dp: float, ap: float,
+                              home_onside: float, away_onside: float,
+                              sm: float, elo_ratings: dict | None,
+                              elo_home_expected: float | None, elo_away_expected: float | None,
+                              ELO_WEIGHT: float, dc_val: float,
+                              calibration_offset: dict | None
+                              ) -> tuple[float, float, float, float, float]:
+    """P0-2 统一权重体系：sm 截断 + 方向概率（与 λ 同一套加权信号）。纯函数。"""
     # ══════════════════════════════════════════════════════
-    # P0-2 修复: λ 计算现在使用与方向相同的统一权重体系
-    # 旧代码: raw = market*40% + form*20% + record*15% + spread*25%
-    # 新代码: 与方向一致 — market + onside + elo + spread
+    # P0-2 统一权重体系：方向概率和 λ 使用同一套加权信号
     # ══════════════════════════════════════════════════════
+    sm_capped = max(-THRESHOLDS["spread_movement_cap"], min(THRESHOLDS["spread_movement_cap"], sm))
+    onside_weight = (1 - MARKET_ODDS_WEIGHT) * (1 - ELO_WEIGHT if elo_ratings else 1.0)
+    home_prob, draw_prob_calc, away_prob = _unified_strength_probs(
+        hp, dp, ap, home_onside, away_onside, sm_capped, onside_weight,
+        elo_ratings, elo_home_expected, elo_away_expected,
+        ELO_WEIGHT, dc_val, calibration_offset)
+    return sm_capped, onside_weight, home_prob, draw_prob_calc, away_prob
+
+
+def _derive_lambdas_and_grid(
+    league_key: str,
+    hp: float, ap: float,
+    home_onside: float, away_onside: float,
+    sm_capped: float, onside_weight: float,
+    elo_ratings: dict | None,
+    elo_home_expected: float | None, elo_away_expected: float | None,
+    ELO_WEIGHT: float,
+    hfs: float, hrs: float, afs: float, ars: float,
+    use_dixon_coles: bool, dc_rho: float,
+) -> tuple[float, float, float, float, str, list, float, float]:
+    """P0-2：统一权重推导 DC 强度 λ，展开 9×9 泊松网格 → 比分/top3/BTTS/O2.5。纯函数。"""
     _lambda_mult = THRESHOLDS["lambda_multiplier"]
     # P1-C: 联赛差异化 λ 映射系数（覆盖全局默认值）
     from core.config import LEAGUE_LAMBDA_MULTIPLIER
@@ -261,6 +278,17 @@ def calculate_prediction(
     lambda_home = max(raw_home * _lambda_mult, THRESHOLDS["lambda_lower_bound"])
     lambda_away = max(raw_away * _lambda_mult, THRESHOLDS["lambda_lower_bound"])
 
+    return lambda_home, lambda_away, raw_home, raw_away, *_score_grid(
+        lambda_home, lambda_away, use_dixon_coles, dc_rho)
+
+
+def _score_grid(
+    lambda_home: float,
+    lambda_away: float,
+    use_dixon_coles: bool,
+    dc_rho: float,
+) -> tuple[str, list, float, float, list]:
+    """9×9 泊松比分网格 → 最可能比分/top3/BTTS/O2.5。纯函数。"""
     # ── Dixon-Coles 或独立泊松比分预测 ──
     if use_dixon_coles:
         dc_result = dixon_coles_match_probs(lambda_home, lambda_away, rho=dc_rho)
@@ -284,24 +312,31 @@ def calculate_prediction(
         btts_prob = sum(s[2] for s in all_scores if s[0] > 0 and s[1] > 0)
         over_25_prob = sum(s[2] for s in all_scores if s[0] + s[1] > 2)
 
-    # ── 方向一致性检查（P1-4：结构化枚举 + 主客胜全覆盖） ──
-    def _resolve_direction_winner(dir_str: str, match_ctx: dict) -> str | None:
-        """解析方向字符串 → 'home' | 'draw' | 'away' | None"""
-        if "胜" not in dir_str:
-            return None
-        home_name = match_ctx.get("home", "")
-        away_name = match_ctx.get("away", "")
-        if dir_str.startswith(home_name):
-            return "home"
-        elif dir_str.startswith(away_name):
-            return "away"
-        # 前缀均不匹配（如队名互为前缀等边界情况），记录以便排查
-        logger.warning(
-            f"_resolve_direction_winner: 无法解析方向 '{dir_str}' "
-            f"(home='{home_name}', away='{away_name}')"
-        )
-        return None
+    return predicted_score, top3, btts_prob, over_25_prob, all_scores
 
+
+def _resolve_direction_winner(dir_str: str, match_ctx: dict) -> str | None:
+    """解析方向字符串 → 'home' | 'draw' | 'away' | None"""
+    if "胜" not in dir_str:
+        return None
+    home_name = match_ctx.get("home", "")
+    away_name = match_ctx.get("away", "")
+    if dir_str.startswith(home_name):
+        return "home"
+    elif dir_str.startswith(away_name):
+        return "away"
+    # 前缀均不匹配（如队名互为前缀等边界情况），记录以便排查
+    logger.warning(
+        f"_resolve_direction_winner: 无法解析方向 '{dir_str}' "
+        f"(home='{home_name}', away='{away_name}')"
+    )
+    return None
+
+
+def _reconcile_score_with_direction(predicted_score: str, direction: str,
+                                    all_scores: list, match: dict) -> str:
+    """P1-4：预测方向与最可能比分矛盾时，从网格里取方向一致的最高概率比分。纯函数。"""
+    # ── 方向一致性检查（P1-4：结构化枚举 + 主客胜全覆盖） ──
     if "胜" in direction:
         winner = _resolve_direction_winner(direction, match)
         predicted_h = int(predicted_score.split("-")[0])
@@ -312,6 +347,36 @@ def calculate_prediction(
                     predicted_score = f"{h}-{a}"
                     break
 
+    return predicted_score
+
+
+def _elo_expectations(elo_ratings: dict | None, home_en: str, away_en: str) -> tuple[float | None, float | None, float]:
+    """ELO 期望胜率信号（可选，无 elo_ratings 时返回 None）。纯函数。"""
+    # ── ELO 信号（可选） ──
+    elo_home_expected = None
+    elo_away_expected = None
+    if elo_ratings:
+        home_elo = elo_ratings.get(home_en, DEFAULT_ELO)
+        away_elo = elo_ratings.get(away_en, DEFAULT_ELO)
+        elo_home_expected = expected_score(home_elo, away_elo, home_adv=True)
+        elo_away_expected = 1.0 - elo_home_expected
+    ELO_WEIGHT = THRESHOLDS.get("elo_weight", 0.18)
+    return elo_home_expected, elo_away_expected, ELO_WEIGHT
+
+
+def _assemble_result(
+    match: dict, direction: str, stars: str, confidence_raw: float,
+    predicted_score: str, top3: list[tuple[int, int, float]],
+    lambda_home: float, lambda_away: float, raw_home: float, raw_away: float,
+    btts_prob: float, over_25_prob: float, ml_proba: list[float] | None,
+    home_prob: float, draw_prob_calc: float, away_prob: float,
+    hfs: float, hrs: float, afs: float, ars: float, sm: float,
+    home_onside: float, away_onside: float, elo_home_expected: float | None,
+    elo_ratings: dict[str, float] | None, use_dixon_coles: bool,
+    dc_rho: float | None, league_key: str, onside: dict,
+    confidence_note: str | None, hp: float, dp: float, ap: float,
+) -> dict:
+    """组装最终预测结果字典（含 95% CI 与 Over/Under）。纯函数。"""
     # 95% 置信区间
     ci_home = poisson_confidence_interval(lambda_home)
     ci_away = poisson_confidence_interval(lambda_away)
@@ -323,28 +388,38 @@ def calculate_prediction(
     else:
         ou = f"Under {ou_total}"
 
-    return {
-        "direction": direction,
-        "stars": stars,
+    result = {
+        "direction": direction, "stars": stars,
         "confidence_score": round(confidence_raw, 3),
         "predicted_score": predicted_score,
-        "poisson_top3": [
-            {"score": f"{h}-{a}", "prob": round(p, 4)} for h, a, p in top3
-        ],
-        "lambda_home": round(lambda_home, 2),
-        "lambda_away": round(lambda_away, 2),
-        "lambda_home_ci95": ci_home,
-        "lambda_away_ci95": ci_away,
-        "over_under": f"{ou}",
-        "btts": "Yes" if btts_prob > 0.5 else "No",
+        "poisson_top3": [{"score": f"{h}-{a}", "prob": round(p, 4)} for h, a, p in top3],
+        "lambda_home": round(lambda_home, 2), "lambda_away": round(lambda_away, 2),
+        "lambda_home_ci95": ci_home, "lambda_away_ci95": ci_away,
+        "over_under": f"{ou}", "btts": "Yes" if btts_prob > 0.5 else "No",
         "dixon_coles_used": use_dixon_coles,
         "dixon_coles_rho": dc_rho if use_dixon_coles else None,
         "ml_model_used": ml_proba is not None,
         "ml_proba": [round(p, 4) for p in ml_proba] if ml_proba else None,
         "dixon_coles_league_rho": LEAGUE_DC_RHO.get(league_key, DC_RHO),  # P0-3: 报告使用的 ρ 来源
-        "onside_signals": onside,
-        "confidence_note": confidence_note,
+        "onside_signals": onside, "confidence_note": confidence_note,
         "odds_data_available": match.get("odds_data_available", False),
+    }
+    result.update(_debug_fields(hfs, hrs, afs, ars, sm, home_onside,
+        away_onside, home_prob, draw_prob_calc, away_prob,
+        elo_home_expected, elo_ratings, raw_home, raw_away,
+        hp, dp, ap))
+    return result
+
+
+def _debug_fields(
+    hfs: float, hrs: float, afs: float, ars: float, sm: float,
+    home_onside: float, away_onside: float, home_prob: float,
+    draw_prob_calc: float, away_prob: float, elo_home_expected: float | None,
+    elo_ratings: dict[str, float] | None, raw_home: float, raw_away: float,
+    hp: float, dp: float, ap: float,
+) -> dict:
+    """构造调试/审计字段（暴露输入便于调试）。纯函数。"""
+    return {
         "reasoning_factors": {
             "home_ml_true_prob": round(hp, 3),
             "draw_true_prob": round(dp, 3),
@@ -364,3 +439,64 @@ def calculate_prediction(
             "raw_lambda_away": round(raw_away, 4),   # P0-2: 暴露原始 λ 输入便于调试
         },
     }
+
+
+# Args:
+#     match: 比赛数据字典
+#     weights: 权重字典（可选，默认 ONSIDE_WEIGHTS）
+#     calibration_offset: 校准偏移字典
+#     fifa_rankings: FIFA 排名字典
+#     host_country: 东道主国家
+#     use_dixon_coles: 是否使用 Dixon-Coles 模型
+#     dc_rho: Dixon-Coles ρ 参数，None 时按联赛自动选择 (P0-3)
+#     elo_ratings: ELO 评分表 {team: elo}，提供则加入信号融合
+#     league_key: 联赛键名，用于查找联赛特定参数 (P0-3)
+def calculate_prediction(
+    match: dict,
+    weights: dict | None = None,
+    calibration_offset: dict | None = None,
+    fifa_rankings: dict | None = None,
+    host_country: str | None = None,
+    use_dixon_coles: bool = True,
+    dc_rho: float | None = None,  # P0-3: 允许 None 以使用联赛差异化 ρ
+    elo_ratings: dict[str, float] | None = None,
+    league_key: str = "epl",  # P0-3: 传入联赛 key 用于差异化 ρ
+) -> dict:
+    """Onside 4 信号 + ELO + Dixon-Coles 预测 → 方向 + 信心 + 比分预测 + 95% CI"""
+    weights, dc_rho, hp, dp, ap, hfs, afs, hrs, ars, sm, home_en, away_en, onside, home_onside, away_onside = _init_inputs(
+        match, weights, fifa_rankings, host_country, elo_ratings, league_key, dc_rho)
+
+    # ── 应用 calibration offset 修正隐含概率 ──
+    hp, dp, ap, dc_val, ohc, oac, home_onside, away_onside, calibration_note = _apply_market_calibration(
+        hp, dp, ap, calibration_offset, home_onside, away_onside)
+
+    elo_home_expected, elo_away_expected, ELO_WEIGHT = _elo_expectations(
+        elo_ratings, home_en, away_en)
+
+    sm_capped, onside_weight, home_prob, draw_prob_calc, away_prob = _weighted_direction_probs(
+        hp, dp, ap, home_onside, away_onside, sm, elo_ratings,
+        elo_home_expected, elo_away_expected, ELO_WEIGHT, dc_val, calibration_offset)
+
+    # ── ML 概率融合（P1/ML: 26 维特征分类器与主模型概率做加权融合）──
+    home_prob, draw_prob_calc, away_prob, ml_proba = _blend_ml_probs(
+        home_prob, draw_prob_calc, away_prob, match, onside, sm,
+        elo_ratings, host_country, league_key)
+
+    # ── 方向判断 ──
+    direction, confidence_raw, confidence_note, stars = _decide_direction_and_stars(
+        home_prob, draw_prob_calc, away_prob, match)
+
+    lambda_home, lambda_away, raw_home, raw_away, predicted_score, top3, btts_prob, over_25_prob, all_scores = _derive_lambdas_and_grid(
+        league_key, hp, ap, home_onside, away_onside, sm_capped, onside_weight,
+        elo_ratings, elo_home_expected, elo_away_expected, ELO_WEIGHT,
+        hfs, hrs, afs, ars, use_dixon_coles, dc_rho)
+
+    predicted_score = _reconcile_score_with_direction(
+        predicted_score, direction, all_scores, match)
+
+    return _assemble_result(
+        match, direction, stars, confidence_raw, predicted_score, top3,
+        lambda_home, lambda_away, raw_home, raw_away, btts_prob, over_25_prob,
+        ml_proba, home_prob, draw_prob_calc, away_prob, hfs, hrs, afs, ars, sm,
+        home_onside, away_onside, elo_home_expected, elo_ratings,
+        use_dixon_coles, dc_rho, league_key, onside, confidence_note, hp, dp, ap)

@@ -11,6 +11,8 @@ from __future__ import annotations
 import sqlite3
 import time
 import uuid
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 from web import config
@@ -37,12 +39,23 @@ def _init_db(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+@contextmanager
+def _db() -> Iterator[sqlite3.Connection]:
+    """显式关闭的连接上下文：with conn: 提交语义 + finally 关闭连接。"""
+    conn = _connect()
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
+
 def create_session(ttl_seconds: int | None = None) -> str:
     """创建会话，返回 token。ttl 覆盖 config 默认值（测试用）。"""
     ttl = ttl_seconds if ttl_seconds is not None else config.SESSION_TTL_SECONDS
     token = uuid.uuid4().hex
     now = time.time()
-    with _connect() as conn:
+    with _db() as conn:
         _init_db(conn)
         conn.execute(
             "INSERT INTO sessions (token, created, expires) VALUES (?, ?, ?)",
@@ -53,7 +66,7 @@ def create_session(ttl_seconds: int | None = None) -> str:
 
 def validate_token(token: str) -> bool:
     """token 有效（存在且未过期）则 True，并惰性清理过期行。"""
-    with _connect() as conn:
+    with _db() as conn:
         _init_db(conn)
         _purge_expired(conn)
         row = conn.execute(
@@ -70,12 +83,20 @@ def validate_token(token: str) -> bool:
 
 def delete_session(token: str) -> None:
     """主动失效（logout）。"""
-    with _connect() as conn:
+    with _db() as conn:
         _init_db(conn)
         conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
         conn.commit()
 
 
-def _purge_expired(conn: sqlite3.Connection) -> None:
-    conn.execute("DELETE FROM sessions WHERE expires < ?", (time.time(),))
+def _purge_expired(conn: sqlite3.Connection) -> int:
+    cur = conn.execute("DELETE FROM sessions WHERE expires < ?", (time.time(),))
     conn.commit()
+    return cur.rowcount
+
+
+def purge_expired_sessions() -> int:
+    """启动清理口：建连接+建表+清理过期会话，返回删除行数（幂等兜底）。"""
+    with _db() as conn:
+        _init_db(conn)
+        return _purge_expired(conn)

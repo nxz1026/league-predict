@@ -1,13 +1,3 @@
-09-10 21:24 | M4 | up | log=20s hb=20s | try 3/20 start=20260910_210846
-09-10 21:25 | M4 | up | log=10s hb=10s | try 3/20 start=20260910_210846
-09-10 21:26 | M4 | up | log=46s hb=46s | try 3/20 start=20260910_210846
-09-10 21:27 | M4 | up | log=14s hb=14s | try 3/20 start=20260910_210846
-09-10 21:28 | M4 | up | log=-4s hb=16s | try 3/20 start=20260910_210846
-09-11 08:03 | M6 | up | log=-2s hb=-2s | try 1/25 start=20260911_080223
-09-11 08:04 | M6 | up | log=18s hb=2s | try 1/25 start=20260911_080223
-09-11 08:05 | M6 | up | log=-3s hb=-3s | try 1/25 start=20260911_080223
-09-11 08:06 | M6 | up | log=-4s hb=57s | try 1/25 start=20260911_080223
-09-11 08:07 | M6 | up | log=27s hb=27s | try 1/25 start=20260911_080223
 09-11 08:08 | M6 | up | log=0s hb=27s | try 1/25 start=20260911_080223
 09-11 08:09 | M6 | up | log=21s hb=17s | try 2/25 start=20260911_080834
 09-11 08:10 | M6 | up | log=-3s hb=22s | try 2/25 start=20260911_080834
@@ -58,3 +48,13 @@
 09-11 09:24 | M6S | up | log=0s hb=0s | try 4/15 start=20260911_091336
 09-11 09:25 | M6S | up | log=22s hb=22s | try 4/15 start=20260911_091336
 09-11 09:26 | M6S | up | log=4s hb=4s | try 4/15 start=20260911_091336
+09-11 11:25 | WO-M7a1 | up | log=-9s hb=-9s | try 1/5 start=20260911_112417
+09-11 11:26 | WO-M7a1 | up | log=-16s hb=-6s | try 1/5 start=20260911_112417
+09-11 11:27 | WO-M7a1 | up | log=7s hb=7s | try 1/5 start=20260911_112417
+09-11 11:28 | WO-M7a1 | up | log=67s hb=67s | try 1/5 start=20260911_112417
+09-11 11:30 | WO-M7a2 | up | log=-12s hb=-12s | try 1 rc=0 end=11:30:13
+09-11 11:31 | WO-M7a2 | up | log=-11s hb=-11s | try 3 rc=0 end=11:31:12
+09-11 11:32 | WO-M7a2 | up | log=-11s hb=-11s | try 5 rc=0 end=11:32:12
+09-11 11:33 | WO-M7a2 | up | log=49s hb=49s | EXHAUSTED after 5 tries
+09-11 11:34 | WO-M7a2 | up | log=-12s hb=8s | try 3/5 start=20260911_113413
+09-11 11:35 | WO-M7a2 | up | log=8s hb=8s | try 4 rc=0 end=11:34:53

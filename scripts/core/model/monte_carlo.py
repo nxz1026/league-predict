@@ -6,7 +6,6 @@ import random
 from typing import Any
 
 from core.log import logger
-from core.model.poisson import dixon_coles_pmf
 
 
 def simulate_match_dc(lambda_h: float, lambda_a: float, rho: float = 0.2) -> tuple[int, int]:
@@ -57,23 +56,7 @@ def monte_carlo_champion(
         round_reach_counts[team] = {}
 
     for sim in range(n_simulations):
-        if sim % 2000 == 0 and sim > 0:
-            logger.info(f"  Simulation {sim}/{n_simulations}...")
-
-        if tournament_type == "world_cup":
-            result = simulate_world_cup(fixtures, team_strengths, rho)
-        else:
-            result = simulate_league(fixtures, team_strengths, rho)
-
-        champion = result.get("champion")
-        if champion:
-            champion_counts[champion] = champion_counts.get(champion, 0) + 1
-
-        for team, rounds in result.get("team_rounds", {}).items():
-            for round_name in rounds:
-                if round_name not in round_reach_counts[team]:
-                    round_reach_counts[team][round_name] = 0
-                round_reach_counts[team][round_name] += 1
+        _simulate_round(fixtures, team_strengths, rho, tournament_type, sim, n_simulations, champion_counts, round_reach_counts)
 
     champion_probs = {team: round(count / n_simulations, 4)
                       for team, count in champion_counts.items() if count > 0}
@@ -100,6 +83,36 @@ def monte_carlo_champion(
         # P2-C 新增: 收敛性诊断 — 标准误估计
         "convergence_diagnostics": _compute_se(champion_counts, n_simulations),
     }
+
+
+def _simulate_round(
+    fixtures: list[dict[str, Any]],
+    team_strengths: dict[str, dict[str, float]],
+    rho: float,
+    tournament_type: str,
+    sim: int,
+    n_simulations: int,
+    champion_counts: dict[str, int],
+    round_reach_counts: dict[str, dict[str, int]],
+) -> None:
+    """模拟一轮锦标赛，原地聚合冠军与晋级轮次计数（随机数消耗顺序不变）。"""
+    if sim % 2000 == 0 and sim > 0:
+        logger.info(f"  Simulation {sim}/{n_simulations}...")
+
+    if tournament_type == "world_cup":
+        result = simulate_world_cup(fixtures, team_strengths, rho)
+    else:
+        result = simulate_league(fixtures, team_strengths, rho)
+
+    champion = result.get("champion")
+    if champion:
+        champion_counts[champion] = champion_counts.get(champion, 0) + 1
+
+    for team, rounds in result.get("team_rounds", {}).items():
+        for round_name in rounds:
+            if round_name not in round_reach_counts[team]:
+                round_reach_counts[team][round_name] = 0
+            round_reach_counts[team][round_name] += 1
 
 
 def _compute_se(champion_counts: dict[str, int], n_simulations: int) -> dict[str, Any]:
@@ -133,7 +146,12 @@ def _compute_se(champion_counts: dict[str, int], n_simulations: int) -> dict[str
     return diagnostics
 
 
-def simulate_world_cup(fixtures: list[dict[str, Any]], team_strengths: dict[str, dict[str, float]], rho: float) -> dict[str, Any]:
+def _simulate_group_stage(
+    fixtures: list[dict[str, Any]],
+    team_strengths: dict[str, dict[str, float]],
+    rho: float,
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """模拟小组赛：分组、逐场比分、排名，返回 (group_standings, team_rounds)。"""
     groups: dict[str, list[dict[str, Any]]] = {}
     knockout: list[dict[str, Any]] = []
 
@@ -151,57 +169,78 @@ def simulate_world_cup(fixtures: list[dict[str, Any]], team_strengths: dict[str,
     team_rounds: dict[str, list[str]] = {}
 
     for group_name, group_fixtures in groups.items():
-        teams_in_group: set[str] = set()
-        for f in group_fixtures:
-            teams_in_group.add(f["home"])
-            teams_in_group.add(f["away"])
+        group_standings[group_name] = _simulate_group(group_fixtures, team_strengths, rho, team_rounds)
 
-        standings: dict[str, dict[str, int]] = {team: {"points": 0, "gf": 0, "ga": 0, "gd": 0} for team in teams_in_group}
+    return group_standings, team_rounds
 
-        for f in group_fixtures:
-            home = f["home"]
-            away = f["away"]
 
-            lh = team_strengths.get(home, {}).get("lambda_home", 1.5)
-            la = team_strengths.get(away, {}).get("lambda_away", 1.2)
+def _simulate_group(
+    group_fixtures: list[dict[str, Any]],
+    team_strengths: dict[str, dict[str, float]],
+    rho: float,
+    team_rounds: dict[str, list[str]],
+) -> list[str]:
+    """模拟单个小组全部比赛，记录轮次，返回组内排名（晋级取前 2）。"""
+    teams_in_group: set[str] = set()
+    for f in group_fixtures:
+        teams_in_group.add(f["home"])
+        teams_in_group.add(f["away"])
 
-            hg, ag = simulate_match_dc(lh, la, rho)
+    standings: dict[str, dict[str, int]] = {team: {"points": 0, "gf": 0, "ga": 0, "gd": 0} for team in teams_in_group}
 
-            standings[home]["gf"] += hg
-            standings[home]["ga"] += ag
-            standings[home]["gd"] += hg - ag
-            standings[away]["gf"] += ag
-            standings[away]["ga"] += hg
-            standings[away]["gd"] += ag - hg
+    for f in group_fixtures:
+        home = f["home"]
+        away = f["away"]
 
-            if hg > ag:
-                standings[home]["points"] += 3
-            elif hg == ag:
-                standings[home]["points"] += 1
-                standings[away]["points"] += 1
-            else:
-                standings[away]["points"] += 3
+        lh = team_strengths.get(home, {}).get("lambda_home", 1.5)
+        la = team_strengths.get(away, {}).get("lambda_away", 1.2)
 
-        sorted_teams = sorted(standings.keys(),
-                              key=lambda t: (standings[t]["points"], standings[t]["gd"], standings[t]["gf"]),
-                              reverse=True)
+        hg, ag = simulate_match_dc(lh, la, rho)
 
-        group_standings[group_name] = sorted_teams
+        standings[home]["gf"] += hg
+        standings[home]["ga"] += ag
+        standings[home]["gd"] += hg - ag
+        standings[away]["gf"] += ag
+        standings[away]["ga"] += hg
+        standings[away]["gd"] += ag - hg
 
-        for team in teams_in_group:
-            if team not in team_rounds:
-                team_rounds[team] = []
-            team_rounds[team].append("group_stage")
+        if hg > ag:
+            standings[home]["points"] += 3
+        elif hg == ag:
+            standings[home]["points"] += 1
+            standings[away]["points"] += 1
+        else:
+            standings[away]["points"] += 3
 
-        advanced = sorted_teams[:2]
-        for team in advanced:
-            if team not in team_rounds:
-                team_rounds[team] = []
-            team_rounds[team].append("round_of_16")
+    sorted_teams = sorted(standings.keys(),
+                          key=lambda t: (standings[t]["points"], standings[t]["gd"], standings[t]["gf"]),
+                          reverse=True)
 
-    current_round = "round_of_16"
-    remaining_teams: list[str] = []
+    _record_group_rounds(team_rounds, teams_in_group, sorted_teams)
 
+    return sorted_teams
+
+
+def _record_group_rounds(
+    team_rounds: dict[str, list[str]],
+    teams_in_group: set[str],
+    sorted_teams: list[str],
+) -> None:
+    """记录小组赛与晋级 16 强轮次（原地写回 team_rounds）。"""
+    for team in teams_in_group:
+        if team not in team_rounds:
+            team_rounds[team] = []
+        team_rounds[team].append("group_stage")
+
+    advanced = sorted_teams[:2]
+    for team in advanced:
+        if team not in team_rounds:
+            team_rounds[team] = []
+        team_rounds[team].append("round_of_16")
+
+
+def _build_r16_matchups(seeded: list[str]) -> list[tuple[str, str]]:
+    """按标准 16 强对阵表配对种子队伍。"""
     # ── 标准 World Cup 淘汰赛对阵 ──
     # 8 组 (A-H)，每组前2名晋级，16强对阵：
     # A1 v B2, C1 v D2, E1 v F2, G1 v H2,
@@ -217,6 +256,26 @@ def simulate_world_cup(fixtures: list[dict[str, Any]], team_strengths: dict[str,
         (7, 6),  # H1 vs G2
     ]
 
+    r16_matchups: list[tuple[str, str]] = []
+    for first_idx, second_idx in _KNOCKOUT_PAIRING:
+        # first_idx: 组号（0=A,1=B...），取该组第1名
+        # second_idx: 组号，取该组第2名
+        t1 = seeded[first_idx * 2]      # 组 first_idx 的第1名
+        t2 = seeded[second_idx * 2 + 1]  # 组 second_idx 的第2名
+        r16_matchups.append((t1, t2))
+
+    return r16_matchups
+
+
+def _assemble_knockout(
+    group_standings: dict[str, list[str]],
+    team_strengths: dict[str, dict[str, float]],
+    rho: float,
+    team_rounds: dict[str, list[str]],
+) -> list[str]:
+    """装配淘汰赛种子并按对阵模拟，返回剩余队伍列表（冠军为首）。"""
+    remaining_teams: list[str] = []
+
     # 构建淘汰赛队伍列表：[A1, A2, B1, B2, C1, C2, ...]
     group_order = sorted(group_standings.keys())
     seeded: list[str] = []
@@ -225,16 +284,7 @@ def simulate_world_cup(fixtures: list[dict[str, Any]], team_strengths: dict[str,
         seeded.extend(advanced)
 
     if len(seeded) >= 16:
-        # 按标准对阵配对
-        r16_matchups: list[tuple[str, str]] = []
-        for first_idx, second_idx in _KNOCKOUT_PAIRING:
-            # first_idx: 组号（0=A,1=B...），取该组第1名
-            # second_idx: 组号，取该组第2名
-            t1 = seeded[first_idx * 2]      # 组 first_idx 的第1名
-            t2 = seeded[second_idx * 2 + 1]  # 组 second_idx 的第2名
-            r16_matchups.append((t1, t2))
-
-        remaining_teams = _simulate_knockout_bracket(r16_matchups, team_strengths, rho, team_rounds)
+        remaining_teams = _simulate_knockout_bracket(_build_r16_matchups(seeded), team_strengths, rho, team_rounds)
     elif len(seeded) >= 2:
         # 组数不足 8 组（种子不足 16 强）时，退化为顺序配对：
         # 汇总所有组的晋级队，按顺序两两淘汰（修复：此前 remaining_teams
@@ -246,6 +296,13 @@ def simulate_world_cup(fixtures: list[dict[str, Any]], team_strengths: dict[str,
     else:
         remaining_teams = []
         logger.warning("simulate_world_cup: 晋级队伍不足 2 支，无法模拟淘汰赛，冠军为 None")
+
+    return remaining_teams
+
+
+def simulate_world_cup(fixtures: list[dict[str, Any]], team_strengths: dict[str, dict[str, float]], rho: float) -> dict[str, Any]:
+    group_standings, team_rounds = _simulate_group_stage(fixtures, team_strengths, rho)
+    remaining_teams = _assemble_knockout(group_standings, team_strengths, rho, team_rounds)
 
     champion = remaining_teams[0] if remaining_teams else None
 

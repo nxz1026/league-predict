@@ -12,22 +12,19 @@
 """
 from __future__ import annotations
 
-import concurrent.futures
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from web import config, errors
 from web.auth import require_auth
+from web.errors import LockTimeout
 from web.services import jobs, store
 from web.services.datasource import LEAGUES
 
 router = APIRouter(prefix="/api/v1", tags=["jobs"])
-
-# 线程池：引擎子进程执行不阻塞请求线程（fire-and-forget 语义）。
-_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
 # 参数白名单（契约 §1.1 安全子集）：固定取值域校验，杜绝任意字符串注入 argv。
 _FLAG_ARGS = {
@@ -43,7 +40,6 @@ _VALUE_ARGS = {
     "--n-simulations": None,  # 正整数，单独校验
     "--dates": None,          # YYYYMMDD-YYYYMMDD，正则校验
 }
-_FORBIDDEN = {"--backtest", "--cleanup", "--train-ml", "--no-fetch", "--update-rankings", "--help"}
 
 
 def _validate_args(params: dict) -> list[str]:
@@ -109,7 +105,10 @@ def jobs_predict(body: dict | None, request: Request,
     """提交预测任务（队列语义：返回 202 + job；并发时 409 + already_running）。"""
     params = body or {}
     argv = _validate_args(params)
-    job, reason = jobs.trigger_predict(argv, trigger="manual")
+    try:
+        job, reason = jobs.trigger_predict(argv, trigger="manual")
+    except LockTimeout:
+        raise errors.ApiError("lock_busy", "系统繁忙，请稍后再试", http_status=503)
     if reason == "quota_exhausted":
         usage = jobs.quota_usage()
         raise errors.ApiError("quota_exhausted",
@@ -122,18 +121,21 @@ def jobs_predict(body: dict | None, request: Request,
             "job": _job_view(job),
         })
     # 异步执行（fire-and-forget：失败只写状态文件，绝不抛回请求线程）。
-    _executor.submit(jobs.run_job, job["id"])
+    jobs.submit_job(job["id"])
     return JSONResponse(status_code=202, content={"job": _job_view(job)})
 
 
 @router.post("/jobs/ai-enrich", status_code=202)
 def jobs_ai_enrich(request: Request, _: None = Depends(require_auth)) -> JSONResponse:
-    """提交 AI 摘要重生成任务（脚本 scripts/ai_enrich_gha.py，无 body 参数）。
+    """提交 AI 摘要重生成任务（python -m web.enrich，无 body 参数）。
 
     语义与 /jobs/predict 一致：202 + job / 409 already_running / 429 quota_exhausted。
     配额与 predict 共享同一计数器。
     """
-    job, reason = jobs.trigger_ai_enrich(trigger="manual")
+    try:
+        job, reason = jobs.trigger_ai_enrich(trigger="manual")
+    except LockTimeout:
+        raise errors.ApiError("lock_busy", "系统繁忙，请稍后再试", http_status=503)
     if reason == "quota_exhausted":
         usage = jobs.quota_usage()
         raise errors.ApiError("quota_exhausted",
@@ -145,7 +147,7 @@ def jobs_ai_enrich(request: Request, _: None = Depends(require_auth)) -> JSONRes
             "message": "已有任务在运行，请稍后再试",
             "job": _job_view(job),
         })
-    _executor.submit(jobs.run_job, job["id"])
+    jobs.submit_job(job["id"])
     return JSONResponse(status_code=202, content={"job": _job_view(job)})
 
 
@@ -181,10 +183,10 @@ def _today_has_data() -> bool:
 def _lazy_auto_trigger() -> dict:
     """同日去重的自动触发：成功/已触发 → 200 语义；配额/并发 → 说明。"""
     marker = config.DATA_DIR / "auto_refresh_last.json"
-    today = datetime.now(timezone.utc).date().isoformat()
+    today = store.bjt_today().isoformat()
     if marker.is_file():
         try:
-            payload = json.loads(marker.read_text() or "{}")
+            payload = json.loads(marker.read_text(encoding="utf-8") or "{}")
         except (ValueError, OSError):
             payload = {}
         if payload.get("day") == today:
@@ -196,13 +198,18 @@ def _lazy_auto_trigger() -> dict:
         return {"triggered": False, "reason": "quota_exhausted"}
     if reason == "already_running":
         return {"triggered": False, "reason": "already_running"}
+    try:
+        jobs.submit_job(job["id"])
+    except Exception:
+        jobs.mark_failed(job["id"], "submit failed")
+        raise
     marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text(json.dumps({"day": today, "job": job["id"]}, ensure_ascii=False))
-    _executor.submit(jobs.run_job, job["id"])
+    marker.write_text(json.dumps({"day": today, "job": job["id"]},
+                                 ensure_ascii=False), encoding="utf-8")
     return {"triggered": True, "job": job["id"]}
 
 
-@router.get("/jobs/auto/refresh")
+@router.post("/jobs/auto/refresh")
 def jobs_auto(request: Request, _: None = Depends(require_auth)) -> dict:
     """惰性刷新入口：today 有数据 → 不触发；缺 → 同日去重自动触发。"""
     if _today_has_data():

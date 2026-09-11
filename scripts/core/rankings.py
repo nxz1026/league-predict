@@ -3,7 +3,6 @@ from __future__ import annotations
 """FIFA rankings: single source of truth, breaks circular dependency between model and data layers."""
 
 import json
-from pathlib import Path
 
 from core.config import FOOTBALL_DIR
 from core.log import logger

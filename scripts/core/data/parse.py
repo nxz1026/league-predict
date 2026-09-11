@@ -2,7 +2,6 @@ from __future__ import annotations
 
 """Event parsing and odds/statistics extraction."""
 
-import json
 from datetime import datetime, timezone
 from core.log import logger
 
@@ -220,15 +219,8 @@ def _scores_from_results(results: list[str]) -> tuple[float, str, str, float]:
     return round(score, 3), form_str, record_summary, round(rec_score, 3)
 
 
-def parse_events(events: list, now_utc: datetime | None = None) -> tuple[list, list, list]:
-    """解析 ESPN events → 结束比赛列表 + 待预测比赛列表"""
-    if now_utc is None:
-        now_utc = datetime.now(timezone.utc)
-
-    past = []
-    future = []
-    in_progress = []
-
+def _warm_team_names(events: list) -> None:
+    """预热 LLM 队名翻译缓存（P6：队名统一中文，避免硬对照）。"""
     # 预热 LLM 队名翻译缓存（P6：队名统一中文，避免硬对照）
     try:
         from core.i18n import warm_translations
@@ -250,122 +242,159 @@ def parse_events(events: list, now_utc: datetime | None = None) -> tuple[list, l
     except Exception as e:
         logger.warning(f"Team-name translation warm-up failed: {e}")
 
+
+def _derive_odds_fields(odds: dict, home_form: str, away_form: str,
+                        home_records: list, away_records: list) -> dict:
+    """从 odds dict 推导盘口/概率/形态评分字段。纯函数。"""
+    details = odds.get("details", "")
+    draw_ml = (odds.get("drawOdds") or {}).get("moneyLine", None)
+
+    ps = odds.get("pointSpread") or {}
+    spread_h = ps.get("home") or {}
+    spread_a = ps.get("away") or {}
+    spread_h.get("open")
+    spread_h_close = spread_h.get("close") or {}
+    spread_a_open = spread_a.get("open") or {}
+    spread_a_close = spread_a.get("close") or {}
+
+    tot = odds.get("total") or {}
+    tot_o = tot.get("over") or {}
+    tot_u = tot.get("under") or {}
+    tot_o_close = tot_o.get("close") or {}
+    tot_u_close = tot_u.get("close") or {}
+
+    spread_h_line = spread_h_close.get("line", "")
+    spread_h_odds = spread_h_close.get("odds", "")
+
+    ml_team, ml_odds_str, home_ml_implied = parse_details(details)
+    draw_implied = parse_american_odds(draw_ml)
+
+    home_true, draw_true, away_true = remove_vig(home_ml_implied, draw_implied)
+
+    spread_move = spread_movement_factor(spread_a_open, spread_a_close)
+
+    h_fs = form_to_score(home_form)
+    a_fs = form_to_score(away_form)
+    h_rs = record_to_score(home_records)
+    a_rs = record_to_score(away_records)
+
+    return {"ml_odds_str": ml_odds_str, "draw_ml": draw_ml,
+            "home_ml_implied": home_ml_implied, "draw_implied": draw_implied,
+            "home_true": home_true, "draw_true": draw_true,
+            "away_true": away_true,
+            "spread_h_line": spread_h_line, "spread_h_odds": spread_h_odds,
+            "spread_move": spread_move, "tot_o_close": tot_o_close,
+            "tot_u_close": tot_u_close, "odds": odds,
+            "h_fs": h_fs, "a_fs": a_fs, "h_rs": h_rs, "a_rs": a_rs}
+
+
+def _extract_event_basics(ev: dict, now_utc: datetime) -> dict | None:
+    """事件基础字段解析；缺 competitions 返回 None。纯函数。"""
+    en_name = ev.get("name", "")
+    if " at " in en_name:
+        # ESPN: "Away at Home" → display "主队 vs 客队"
+        away_en, home_en = en_name.split(" at ", 1)
+        name = f"{to_cn(home_en)} vs {to_cn(away_en)}"
+    else:
+        name = to_cn(en_name)
+    comps = ev.get("competitions", [{}])
+    if not comps or not isinstance(comps, list) or len(comps) == 0:
+        logger.warning(f"Event missing competitions data: {en_name}")
+        return None
+    comp = comps[0]
+    status = comp.get("status", {}).get("type", {}).get("name", "")
+    completed = comp.get("status", {}).get("type", {}).get("completed", False)
+    date_str = ev.get("date", "")
+    try:
+        kickoff = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        kickoff = now_utc
+    time_to = (kickoff - now_utc).total_seconds() / 3600
+
+    competitors = comp.get("competitors", [])
+    home = next((c for c in competitors if c.get("homeAway") == "home"), None)
+    away = next((c for c in competitors if c.get("homeAway") == "away"), None)
+
+    home_name = to_cn(home["team"]["displayName"]) if home else "?"
+    away_name = to_cn(away["team"]["displayName"]) if away else "?"
+    home_abbr = home["team"]["abbreviation"] if home else ""
+    away_abbr = away["team"]["abbreviation"] if away else ""
+    home_score = home.get("score", "0") if home else "0"
+    away_score = away.get("score", "0") if away else "0"
+
+    home_form = home.get("form", "") if home else ""
+    away_form = away.get("form", "") if away else ""
+    home_records = home.get("records", []) if home else []
+    away_records = away.get("records", []) if away else []
+
+    odds_raw = comp.get("odds") or []
+    odds = next((o for o in odds_raw if o), {}) if odds_raw else {}
+
+    return {"name": name, "status": status, "completed": completed,
+            "date_str": date_str, "time_to": time_to, "home": home,
+            "away": away, "home_name": home_name, "away_name": away_name,
+            "home_abbr": home_abbr, "away_abbr": away_abbr,
+            "home_score": home_score, "away_score": away_score,
+            "home_form": home_form, "away_form": away_form,
+            "home_records": home_records, "away_records": away_records,
+            "odds": odds}
+
+
+def _build_match_record(ev: dict, now_utc: datetime) -> tuple[str | None, dict | None]:
+    """ESPN 单事件 → (桶名 'past'|'future'|'in_progress'|None, 记录 dict|None)。纯函数。"""
+    _b = _extract_event_basics(ev, now_utc)
+    if _b is None:
+        return None, None
+    _od = _derive_odds_fields(_b["odds"], _b["home_form"], _b["away_form"],
+                              _b["home_records"], _b["away_records"])
+    rec = {
+        "name": _b["name"], "status": _b["status"], "completed": _b["completed"],
+        "kickoff_utc": _b["date_str"], "time_to_kickoff_h": round(_b["time_to"], 1),
+        "home": _b["home_name"], "away": _b["away_name"],
+        "home_en": _b["home"]["team"]["displayName"] if _b["home"] else "",
+        "away_en": _b["away"]["team"]["displayName"] if _b["away"] else "",
+        "home_abbr": _b["home_abbr"], "away_abbr": _b["away_abbr"],
+        "score": f"{_b['home_score']}-{_b['away_score']}" if _b["status"] in ("STATUS_FULL_TIME", "STATUS_FINAL_PEN", "STATUS_FINAL_ET") else "",
+        "home_form": _b["home_form"], "away_form": _b["away_form"],
+        "home_form_score": round(_od["h_fs"], 3), "away_form_score": round(_od["a_fs"], 3),
+        "home_record": _b["home_records"][0].get("summary","") if _b["home_records"] else "",
+        "away_record": _b["away_records"][0].get("summary","") if _b["away_records"] else "",
+        "home_record_score": round(_od["h_rs"], 3), "away_record_score": round(_od["a_rs"], 3),
+        "ml_home_close": _od["ml_odds_str"], "draw_ml": _od["draw_ml"],
+        "home_ml_implied": round(_od["home_ml_implied"], 4) if _od["home_ml_implied"] else None,
+        "draw_implied": round(_od["draw_implied"], 4) if _od["draw_implied"] else None,
+        "home_true_prob": round(_od["home_true"], 4) if _od["home_true"] else None,
+        "draw_true_prob": round(_od["draw_true"], 4) if _od["draw_true"] else None,
+        "away_true_prob": round(_od["away_true"], 4) if _od["away_true"] else None,
+        "spread_home_line": _od["spread_h_line"], "spread_home_close_odds": _od["spread_h_odds"],
+        "spread_movement_score": round(_od["spread_move"], 3),
+        "total_over_close": _od["tot_o_close"].get("line",""), "total_under_close": _od["tot_u_close"].get("line",""),
+        "odds_data_available": bool(_od["odds"].get("details") or _od["odds"].get("drawOdds") or _od["odds"].get("pointSpread") or _od["odds"].get("total")),
+    }
+    if _b["status"] in ("STATUS_FULL_TIME", "STATUS_FINAL_PEN", "STATUS_FINAL_ET"):
+        return "past", rec
+    elif _b["status"] == "STATUS_SCHEDULED":
+        return "future", rec
+    else:
+        return "in_progress", rec
+
+
+def parse_events(events: list, now_utc: datetime | None = None) -> tuple[list, list, list]:
+    """解析 ESPN events → 结束比赛列表 + 待预测比赛列表"""
+    if now_utc is None:
+        now_utc = datetime.now(timezone.utc)
+
+    past = []
+    future = []
+    in_progress = []
+
+    _warm_team_names(events)
+
     for ev in events:
-        en_name = ev.get("name", "")
-        if " at " in en_name:
-            # ESPN: "Away at Home" → display "主队 vs 客队"
-            away_en, home_en = en_name.split(" at ", 1)
-            name = f"{to_cn(home_en)} vs {to_cn(away_en)}"
-        else:
-            name = to_cn(en_name)
-        comps = ev.get("competitions", [{}])
-        if not comps or not isinstance(comps, list) or len(comps) == 0:
-            logger.warning(f"Event missing competitions data: {en_name}")
+        bucket, rec = _build_match_record(ev, now_utc)
+        if rec is None:
             continue
-        comp = comps[0]
-        status = comp.get("status", {}).get("type", {}).get("name", "")
-        completed = comp.get("status", {}).get("type", {}).get("completed", False)
-
-        date_str = ev.get("date", "")
-        try:
-            kickoff = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-        except (ValueError, TypeError):
-            kickoff = now_utc
-        time_to = (kickoff - now_utc).total_seconds() / 3600
-
-        competitors = comp.get("competitors", [])
-        home = next((c for c in competitors if c.get("homeAway") == "home"), None)
-        away = next((c for c in competitors if c.get("homeAway") == "away"), None)
-
-        home_name = to_cn(home["team"]["displayName"]) if home else "?"
-        away_name = to_cn(away["team"]["displayName"]) if away else "?"
-        home_abbr = home["team"]["abbreviation"] if home else ""
-        away_abbr = away["team"]["abbreviation"] if away else ""
-        home_score = home.get("score", "0") if home else "0"
-        away_score = away.get("score", "0") if away else "0"
-
-        home_form = home.get("form", "") if home else ""
-        away_form = away.get("form", "") if away else ""
-        home_records = home.get("records", []) if home else []
-        away_records = away.get("records", []) if away else []
-
-        odds_raw = comp.get("odds") or []
-        odds = next((o for o in odds_raw if o), {}) if odds_raw else {}
-
-        details = odds.get("details", "")
-        draw_ml = (odds.get("drawOdds") or {}).get("moneyLine", None)
-
-        ps = odds.get("pointSpread") or {}
-        spread_h = ps.get("home") or {}
-        spread_a = ps.get("away") or {}
-        spread_h_open = spread_h.get("open") or {}
-        spread_h_close = spread_h.get("close") or {}
-        spread_a_open = spread_a.get("open") or {}
-        spread_a_close = spread_a.get("close") or {}
-
-        tot = odds.get("total") or {}
-        tot_o = tot.get("over") or {}
-        tot_u = tot.get("under") or {}
-        tot_o_close = tot_o.get("close") or {}
-        tot_u_close = tot_u.get("close") or {}
-
-        spread_h_line = spread_h_close.get("line", "")
-        spread_h_odds = spread_h_close.get("odds", "")
-
-        ml_team, ml_odds_str, home_ml_implied = parse_details(details)
-        draw_implied = parse_american_odds(draw_ml)
-
-        home_true, draw_true, away_true = remove_vig(home_ml_implied, draw_implied)
-
-        spread_move = spread_movement_factor(spread_a_open, spread_a_close)
-
-        h_fs = form_to_score(home_form)
-        a_fs = form_to_score(away_form)
-        h_rs = record_to_score(home_records)
-        a_rs = record_to_score(away_records)
-
-        rec = {
-            "name": name,
-            "status": status,
-            "completed": completed,
-            "kickoff_utc": date_str,
-            "time_to_kickoff_h": round(time_to, 1),
-            "home": home_name,
-            "away": away_name,
-            "home_en": home["team"]["displayName"] if home else "",
-            "away_en": away["team"]["displayName"] if away else "",
-            "home_abbr": home_abbr,
-            "away_abbr": away_abbr,
-            "score": f"{home_score}-{away_score}" if status in ("STATUS_FULL_TIME", "STATUS_FINAL_PEN", "STATUS_FINAL_ET") else "",
-            "home_form": home_form,
-            "away_form": away_form,
-            "home_form_score": round(h_fs, 3),
-            "away_form_score": round(a_fs, 3),
-            "home_record": home_records[0].get("summary","") if home_records else "",
-            "away_record": away_records[0].get("summary","") if away_records else "",
-            "home_record_score": round(h_rs, 3),
-            "away_record_score": round(a_rs, 3),
-            "ml_home_close": ml_odds_str,
-            "draw_ml": draw_ml,
-            "home_ml_implied": round(home_ml_implied, 4) if home_ml_implied else None,
-            "draw_implied": round(draw_implied, 4) if draw_implied else None,
-            "home_true_prob": round(home_true, 4) if home_true else None,
-            "draw_true_prob": round(draw_true, 4) if draw_true else None,
-            "away_true_prob": round(away_true, 4) if away_true else None,
-            "spread_home_line": spread_h_line,
-            "spread_home_close_odds": spread_h_odds,
-            "spread_movement_score": round(spread_move, 3),
-            "total_over_close": tot_o_close.get("line",""),
-            "total_under_close": tot_u_close.get("line",""),
-            "odds_data_available": bool(odds.get("details") or odds.get("drawOdds") or odds.get("pointSpread") or odds.get("total")),
-        }
-
-        if status in ("STATUS_FULL_TIME", "STATUS_FINAL_PEN", "STATUS_FINAL_ET"):
-            past.append(rec)
-        elif status == "STATUS_SCHEDULED":
-            future.append(rec)
-        else:
-            in_progress.append(rec)
+        {"past": past, "future": future, "in_progress": in_progress}[bucket].append(rec)
 
     # ── 状态/战绩信号回填（P2 修复）──────────────────
     # 默认数据源 football-data 的每场不提供 form/records，导致该信号恒为中性 0.5。

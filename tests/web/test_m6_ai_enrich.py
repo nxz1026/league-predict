@@ -5,7 +5,6 @@
 """
 from __future__ import annotations
 
-import json
 import sys
 import threading
 import time
@@ -110,11 +109,10 @@ def test_ai_enrich_require_auth(client):
     assert client.post("/api/v1/jobs/ai-enrich").status_code == 401
 
 
-# --- 验收：202 + job.script 指向 ai_enrich_gha.py、status=queued -------------
+# --- 验收：202 + job.script=ai_enrich（执行 web.enrich）、status=queued ------
 
 def test_ai_enrich_202_queued_with_script(client, monkeypatch):
     import web.services.jobs as jobs_mod
-    recorded = []
     monkeypatch.setattr(jobs_mod, "subprocess", _fake_sp(_OkProc))
     _login(client)
     r = client.post("/api/v1/jobs/ai-enrich")
@@ -123,8 +121,14 @@ def test_ai_enrich_202_queued_with_script(client, monkeypatch):
     assert job["script"] == "ai_enrich"
     assert job["status"] == "queued"
     assert job["trigger"] == "manual"
-    # 持久化后 script 字段仍可读
-    got = client.get(f"/api/v1/jobs/{job['id']}").json()["job"]
+    # 持久化后 script 字段仍可读；轮询等待后台线程池写终态
+    deadline = time.time() + 10
+    got = None
+    while time.time() < deadline:
+        got = client.get(f"/api/v1/jobs/{job['id']}").json()["job"]
+        if got["status"] in ("done", "failed", "timeout"):
+            break
+        time.sleep(0.1)
     assert got["script"] == "ai_enrich"
     assert got["status"] == "done"
 

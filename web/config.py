@@ -8,10 +8,13 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+logger = logging.getLogger("web.config")
 
 # 仓库根目录（web/config.py 的父目录的父目录）。
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -19,23 +22,35 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # .env 存在即加载；不存在（如全新 venv 裸启动）时走默认值。
 load_dotenv(BASE_DIR / ".env")
 
+
+def _env_int(name: str, default: int) -> int:
+    """读整数型 env；缺失或非法值记 warning 并回退 default，绝不因坏 env 崩溃。"""
+    try:
+        return int(os.getenv(name, "") or default)
+    except ValueError:
+        logger.warning("env %s 非整数，回退默认值 %s", name, default)
+        return default
+
+
 # --- 服务 ---------------------------------------------------------------
 HOST: str = os.getenv("WEB_HOST", "127.0.0.1")  # 默认仅本机可访
-PORT: int = int(os.getenv("WEB_PORT", "8000"))
+PORT: int = _env_int("WEB_PORT", 8000)
 
 # --- 会话认证 -----------------------------------------------------------
 # 单账号模型：账号信息全部来自 env，仓库内不落任何真实值。
+# 占位口令：生产模式（非本机 HOST）未设置 AUTH_PASSWORD 时启动即报错（见文件底部守卫）。
+_DEFAULT_PW = "unit-test-password-placeholder"
 AUTH_USERNAME: str = os.getenv("AUTH_USERNAME", "admin")
-AUTH_PASSWORD: str = os.getenv("AUTH_PASSWORD", "unit-test-password-placeholder")
+AUTH_PASSWORD: str = os.getenv("AUTH_PASSWORD", _DEFAULT_PW)
 
 # 会话 TTL（秒），默认 12 小时。
-SESSION_TTL_SECONDS: int = int(os.getenv("SESSION_TTL_SECONDS", "43200"))
+SESSION_TTL_SECONDS: int = _env_int("SESSION_TTL_SECONDS", 43200)
 # 会话过期后立即删除；同时惰性清理过期行。
 SESSION_CLEANUP_ON_ACCESS: bool = os.getenv("SESSION_CLEANUP_ON_ACCESS", "1") in ("1", "true", "True")
 
 # --- 登录限速：连续失败 N 次 → 锁定窗口 W 秒内一律 429 ------------------
-LOGIN_MAX_FAILURES: int = int(os.getenv("LOGIN_MAX_FAILURES", "5"))
-LOGIN_LOCKOUT_SECONDS: int = int(os.getenv("LOGIN_LOCKOUT_SECONDS", "600"))
+LOGIN_MAX_FAILURES: int = _env_int("LOGIN_MAX_FAILURES", 5)
+LOGIN_LOCKOUT_SECONDS: int = _env_int("LOGIN_LOCKOUT_SECONDS", 600)
 
 # --- Cookie / CORS ------------------------------------------------------
 # 部署在 https 后面时置 true：cookie 加 Secure，CORS 只放行 https 来源。
@@ -52,19 +67,15 @@ SESSION_DB_PATH: str = os.getenv("SESSION_DB_PATH", str(BASE_DIR / "web" / ".dat
 
 # --- 任务触发（M3：jobs.py / 配额守卫）----------------------------------
 # 引擎子进程超时（秒），到点必杀。
-PREDICT_TIMEOUT_SECONDS: int = int(os.getenv("PREDICT_TIMEOUT_SECONDS", "600"))
+PREDICT_TIMEOUT_SECONDS: int = _env_int("PREDICT_TIMEOUT_SECONDS", 600)
 # 每日预测触发上限（BJT 日口径；默认 80，给手动操作留余量）。
-DAILY_TRIGGER_LIMIT: int = int(os.getenv("PREDICT_DAILY_LIMIT", "80"))
+DAILY_TRIGGER_LIMIT: int = _env_int("PREDICT_DAILY_LIMIT", 80)
 # 同一天惰性自动刷新至多一次（predictions/today 缺数据时兜底）。
 AUTO_REFRESH_DAILY: bool = os.getenv("AUTO_REFRESH_DAILY", "1") in ("1", "true", "True")
 
-# --- AI 扩展（M3：ai.py，契约 §5）---------------------------------------
-# AI 端点响应限时（秒）；纯本地读文件，超时仅作防御。
-AI_RESPONSE_TIMEOUT: int = int(os.getenv("AI_RESPONSE_TIMEOUT", "8"))
-
 # --- apscheduler 可选件（默认关，避免 Hobby 平台常驻 cron 消耗配额）-----
 ENABLE_CRON: bool = os.getenv("ENABLE_CRON", "false") in ("1", "true", "True")
-CRON_HOUR: int = int(os.getenv("CRON_HOUR", "9"))  # BJT 小时，每日一次
+CRON_HOUR: int = _env_int("CRON_HOUR", 9)  # BJT 小时，每日一次
 
 # --- M3 数据目录（web/.data/ 下，gitignore 已排除）-----------------------
 DATA_DIR: Path = BASE_DIR / "web" / ".data"
@@ -89,3 +100,8 @@ def env_summary() -> dict:
         "enable_cron": ENABLE_CRON,
         "cron_hour": CRON_HOUR,
     }
+
+
+# --- 生产口令守卫：非本机 HOST 时禁止占位口令 ---------------------------
+if HOST not in ("127.0.0.1", "localhost", "::1") and AUTH_PASSWORD == _DEFAULT_PW:
+    raise RuntimeError("生产模式（非本机 HOST）禁止使用默认口令，请设置 AUTH_PASSWORD")

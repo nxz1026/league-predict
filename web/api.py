@@ -48,9 +48,7 @@ def create_app() -> FastAPI:
     async def lifespan(app: FastAPI):
         # 启动时清理一次过期会话（幂等；正常路径有惰性清理兜底）。
         from web import session_store
-        _conn = session_store._connect()
-        session_store._init_db(_conn)
-        session_store._purge_expired(_conn)
+        session_store.purge_expired_sessions()
         _start_cron(app)
         yield
         try:
