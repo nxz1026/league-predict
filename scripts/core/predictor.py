@@ -104,6 +104,47 @@ def _decide_direction_and_stars(home_prob: float, draw_prob: float,
     return direction, confidence_raw, confidence_note, stars
 
 
+def _apply_market_calibration(hp: float, dp: float, ap: float,
+                              calibration_offset: dict | None,
+                              home_onside: float, away_onside: float
+                              ) -> tuple[float, float, float, float, float, float, float, float, str | None]:
+    """calibration offset 修正 market 隐含概率并重新归一化。纯函数。"""
+    calibration_note = None
+    dc_val = 1.0
+    ohc = 1.0
+    oac = 1.0
+    if calibration_offset:
+        hc = calibration_offset.get("home_correction", 1.0)
+        dc_val = calibration_offset.get("draw_correction", 1.0)
+        ac = calibration_offset.get("away_correction", 1.0)
+
+        # 修正 market odds：乘以 offset 后重新归一化
+        hp_corrected = hp * hc
+        dp_corrected = dp * dc_val
+        ap_corrected = ap * ac
+        total_corrected = hp_corrected + dp_corrected + ap_corrected
+        if total_corrected > 0:
+            hp = hp_corrected / total_corrected
+            dp = dp_corrected / total_corrected
+            ap = ap_corrected / total_corrected
+
+        # 修正 Onside 4 信号：使用专用的 onside 修正因子（已减半），避免双重修正
+        ohc = calibration_offset.get("onside_home_correction", 1.0)
+        oac = calibration_offset.get("onside_away_correction", 1.0)
+        onside_h = home_onside * ohc
+        onside_a = away_onside * oac
+        total_on = onside_h + onside_a
+        if total_on > 0:
+            home_onside = onside_h / total_on
+            away_onside = onside_a / total_on
+
+        calibration_note = f"calibration applied (n={calibration_offset.get('sample_size','?')}, " \
+                           f"home×{hc}/draw×{dc_val}/away×{ac})"
+        logger.info(calibration_note)
+
+    return hp, dp, ap, dc_val, ohc, oac, home_onside, away_onside, calibration_note
+
+
 def calculate_prediction(
     match: dict,
     weights: dict | None = None,
@@ -159,35 +200,8 @@ def calculate_prediction(
     away_onside = onside["away"]["onside_score"]
 
     # ── 应用 calibration offset 修正隐含概率 ──
-    calibration_note = None
-    if calibration_offset:
-        hc = calibration_offset.get("home_correction", 1.0)
-        dc_val = calibration_offset.get("draw_correction", 1.0)
-        ac = calibration_offset.get("away_correction", 1.0)
-
-        # 修正 market odds：乘以 offset 后重新归一化
-        hp_corrected = hp * hc
-        dp_corrected = dp * dc_val
-        ap_corrected = ap * ac
-        total_corrected = hp_corrected + dp_corrected + ap_corrected
-        if total_corrected > 0:
-            hp = hp_corrected / total_corrected
-            dp = dp_corrected / total_corrected
-            ap = ap_corrected / total_corrected
-
-        # 修正 Onside 4 信号：使用专用的 onside 修正因子（已减半），避免双重修正
-        ohc = calibration_offset.get("onside_home_correction", 1.0)
-        oac = calibration_offset.get("onside_away_correction", 1.0)
-        onside_h = home_onside * ohc
-        onside_a = away_onside * oac
-        total_on = onside_h + onside_a
-        if total_on > 0:
-            home_onside = onside_h / total_on
-            away_onside = onside_a / total_on
-
-        calibration_note = f"calibration applied (n={calibration_offset.get('sample_size','?')}, " \
-                           f"home×{hc}/draw×{dc_val}/away×{ac})"
-        logger.info(calibration_note)
+    hp, dp, ap, dc_val, ohc, oac, home_onside, away_onside, calibration_note = _apply_market_calibration(
+        hp, dp, ap, calibration_offset, home_onside, away_onside)
 
     sm_capped = max(-THRESHOLDS["spread_movement_cap"], min(THRESHOLDS["spread_movement_cap"], sm))
 
