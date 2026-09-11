@@ -249,6 +249,24 @@ def _derive_lambdas_and_grid(
     return lambda_home, lambda_away, raw_home, raw_away, predicted_score, top3, btts_prob, over_25_prob, all_scores
 
 
+def _resolve_direction_winner(dir_str: str, match_ctx: dict) -> str | None:
+    """解析方向字符串 → 'home' | 'draw' | 'away' | None"""
+    if "胜" not in dir_str:
+        return None
+    home_name = match_ctx.get("home", "")
+    away_name = match_ctx.get("away", "")
+    if dir_str.startswith(home_name):
+        return "home"
+    elif dir_str.startswith(away_name):
+        return "away"
+    # 前缀均不匹配（如队名互为前缀等边界情况），记录以便排查
+    logger.warning(
+        f"_resolve_direction_winner: 无法解析方向 '{dir_str}' "
+        f"(home='{home_name}', away='{away_name}')"
+    )
+    return None
+
+
 def calculate_prediction(
     match: dict,
     weights: dict | None = None,
@@ -343,23 +361,6 @@ def calculate_prediction(
         hfs, hrs, afs, ars, use_dixon_coles, dc_rho)
 
     # ── 方向一致性检查（P1-4：结构化枚举 + 主客胜全覆盖） ──
-    def _resolve_direction_winner(dir_str: str, match_ctx: dict) -> str | None:
-        """解析方向字符串 → 'home' | 'draw' | 'away' | None"""
-        if "胜" not in dir_str:
-            return None
-        home_name = match_ctx.get("home", "")
-        away_name = match_ctx.get("away", "")
-        if dir_str.startswith(home_name):
-            return "home"
-        elif dir_str.startswith(away_name):
-            return "away"
-        # 前缀均不匹配（如队名互为前缀等边界情况），记录以便排查
-        logger.warning(
-            f"_resolve_direction_winner: 无法解析方向 '{dir_str}' "
-            f"(home='{home_name}', away='{away_name}')"
-        )
-        return None
-
     if "胜" in direction:
         winner = _resolve_direction_winner(direction, match)
         predicted_h = int(predicted_score.split("-")[0])
