@@ -27,6 +27,38 @@ def get_ml_model(league_key: str):
     return model
 
 
+def _blend_ml_probs(home_prob: float, draw_prob: float, away_prob: float,
+                    match: dict, onside: dict, sm: float,
+                    elo_ratings: dict | None, host_country: str | None,
+                    league_key: str) -> tuple[float, float, float, list | None]:
+    """ML 概率融合（P1/ML）：26 维特征分类器与规则模型概率加权混合。纯函数。"""
+    ml_proba = None
+    ml_model = get_ml_model(league_key)
+    if ml_model is not None:
+        feature_match = dict(match)
+        feature_match["onside_signals"] = onside
+        feature_match["spread_movement_score"] = sm
+        _ml_context = {"elo_ratings": elo_ratings, "host_country": host_country}
+        try:
+            vec = extract_features(feature_match, _ml_context)
+            ml_proba = ml_model.predict_proba(vec)
+            w = float(ML_CONFIG.get("blend_weight", 0.0))
+            if w > 0 and len(ml_proba) == 3:
+                home_prob = (1 - w) * home_prob + w * ml_proba[0]
+                draw_prob = (1 - w) * draw_prob + w * ml_proba[1]
+                away_prob = (1 - w) * away_prob + w * ml_proba[2]
+                _t = home_prob + draw_prob + away_prob
+                if _t > 0:
+                    home_prob /= _t
+                    draw_prob /= _t
+                    away_prob /= _t
+                logger.debug(f"ML blend applied (league={league_key}, w={w})")
+        except Exception as e:
+            logger.warning(f"ML blend failed, falling back to rule model: {e}")
+            ml_proba = None
+    return home_prob, draw_prob, away_prob, ml_proba
+
+
 def calculate_prediction(
     match: dict,
     weights: dict | None = None,
@@ -160,30 +192,9 @@ def calculate_prediction(
     away_prob = away_strength / total
 
     # ── ML 概率融合（P1/ML: 26 维特征分类器与主模型概率做加权融合）──
-    ml_proba = None
-    ml_model = get_ml_model(league_key)
-    if ml_model is not None:
-        feature_match = dict(match)
-        feature_match["onside_signals"] = onside
-        feature_match["spread_movement_score"] = sm
-        _ml_context = {"elo_ratings": elo_ratings, "host_country": host_country}
-        try:
-            vec = extract_features(feature_match, _ml_context)
-            ml_proba = ml_model.predict_proba(vec)
-            w = float(ML_CONFIG.get("blend_weight", 0.0))
-            if w > 0 and len(ml_proba) == 3:
-                home_prob = (1 - w) * home_prob + w * ml_proba[0]
-                draw_prob_calc = (1 - w) * draw_prob_calc + w * ml_proba[1]
-                away_prob = (1 - w) * away_prob + w * ml_proba[2]
-                _t = home_prob + draw_prob_calc + away_prob
-                if _t > 0:
-                    home_prob /= _t
-                    draw_prob_calc /= _t
-                    away_prob /= _t
-                logger.debug(f"ML blend applied (league={league_key}, w={w})")
-        except Exception as e:
-            logger.warning(f"ML blend failed, falling back to rule model: {e}")
-            ml_proba = None
+    home_prob, draw_prob_calc, away_prob, ml_proba = _blend_ml_probs(
+        home_prob, draw_prob_calc, away_prob, match, onside, sm,
+        elo_ratings, host_country, league_key)
 
     # ── 方向判断 ──
     if home_prob > THRESHOLDS["direction_min_prob"] and home_prob > away_prob * THRESHOLDS["direction_odds_ratio"]:
