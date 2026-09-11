@@ -26,9 +26,19 @@ def _league_names() -> list[str]:
     return sorted(LEAGUES)
 
 
+def _bball_extras(doc: dict) -> dict:
+    return {
+        "spread_pred": doc.get("spread_pred", ""),
+        "total_pred": doc.get("total_pred", ""),
+        "win_prob": doc.get("win_prob", ""),
+        "kickoff_date": doc.get("kickoff_date", ""),
+        "sport": "basketball",
+    }
+
+
 def _prediction_summary(doc: dict, day) -> dict:
     """单场预测精简视图（契约 §2.2 字段对齐）。"""
-    return {
+    summary = {
         "match": doc.get("match", ""),
         "home": doc.get("home", ""),
         "away": doc.get("away", ""),
@@ -41,6 +51,9 @@ def _prediction_summary(doc: dict, day) -> dict:
         "kickoff_utc": doc.get("kickoff_utc", ""),
         "data_window": doc.get("data_window", ""),
     }
+    if "spread_pred" in doc or "total_pred" in doc or "win_prob" in doc:
+        summary.update(_bball_extras(doc))
+    return summary
 
 
 def _group_for_day(day) -> dict:

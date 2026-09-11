@@ -127,16 +127,17 @@ document.getElementById("logout").addEventListener("click",async ()=>{
 });
 /* ---- tab: 今日赛程 ---- */
 function cardLeague(league, name, items){
-  const rows=items.map(p=>"<tr><td>"+esc(p.match||(p.home+" vs "+p.away))+"</td><td>"+esc(p.direction)+"</td><td>"+stars(p.stars)+"</td><td>"+esc(p.predicted_score)+"</td><td class=\"small mut\">"+esc(p.over_under||"")+" / "+esc(p.btts||"")+"</td><td class=\"small mut\">λ "+esc(p.lambda_home??"")+":"+esc(p.lambda_away??"")+"</td></tr>").join("");
+  const isBball=items.length&&("spread_pred" in items[0]||"win_prob" in items[0]);
+  const rows=items.map(p=>isBball?"<tr><td>"+esc(p.match||(p.home+" vs "+p.away))+"</td><td>"+esc(p.direction)+"</td><td>"+stars(p.stars)+"</td><td>"+esc(p.predicted_score)+"</td><td class=\"small mut\">"+esc("让分"+(p.spread_pred??"")+" 大小"+(p.total_pred??""))+"</td><td class=\"small mut\">"+(p.win_prob==null?"":(Number(p.win_prob)*100).toFixed(1)+"%")+"</td></tr>":"<tr><td>"+esc(p.match||(p.home+" vs "+p.away))+"</td><td>"+esc(p.direction)+"</td><td>"+stars(p.stars)+"</td><td>"+esc(p.predicted_score)+"</td><td class=\"small mut\">"+esc(p.over_under||"")+" / "+esc(p.btts||"")+"</td><td class=\"small mut\">λ "+esc(p.lambda_home??"")+":"+esc(p.lambda_away??"")+"</td></tr>").join("");
   return "<div class=\"card\"><div class=\"league-head\"><b>"+esc(name)+"</b><span class=\"small mut\">"+esc(league)+"</span></div>"+
-    (rows?"<table><thead><tr><th>比赛</th><th>方向</th><th>信心</th><th>比分</th><th>大小/BTTS</th><th>λ</th></tr></thead><tbody>"+rows+"</tbody></table>":"<div class=\"empty\">该联赛今日无预测数据</div>")+"</div>";
+    (rows?"<table><thead><tr>"+(isBball?"<th>比赛</th><th>方向</th><th>信心</th><th>比分</th><th>让分/大小</th><th>胜率</th>":"<th>比赛</th><th>方向</th><th>信心</th><th>比分</th><th>大小/BTTS</th><th>λ</th>")+"</tr></thead><tbody>"+rows+"</tbody></table>":"<div class=\"empty\">该联赛今日无预测数据</div>")+"</div>";
 }
 async function loadToday(){
   const body=document.getElementById("today-body");
   try{
     const data=await api("/predictions/today");
     const leagues=data.leagues||{};
-    const names={epl:"English Premier League",laliga:"La Liga",bundesliga:"Bundesliga",seriea:"Serie A",ligue1:"Ligue 1"};
+    const names={epl:"English Premier League",laliga:"La Liga",bundesliga:"Bundesliga",seriea:"Serie A",ligue1:"Ligue 1",nba:"NBA"};
     const keys=Object.keys(leagues);
     if(!keys.length){ placeholder(body,"今日暂无任何联赛数据",""); return; }
     const html=keys.map(k=>cardLeague(k,names[k]||k,leagues[k]||[])).join("");
@@ -192,7 +193,7 @@ function pollAiJob(jid){
 }
 /* ---- tab: 历史预测 ---- */
 function leagueSelectTag(cur){
-  const opts=["epl","laliga","bundesliga","seriea","ligue1",""]
+  const opts=["epl","laliga","bundesliga","seriea","ligue1","nba",""]
     .map(l=>"<option value=\""+l+"\""+(l===cur?" selected":"")+">"+(l||"全部")+"</option>").join("");
   return "<label class=\"mut small\">联赛 <select id=\"hist-league\" class=\"sel\">"+opts+"</select></label>";
 }
@@ -219,9 +220,9 @@ function renderHist(data){
   const keys=league?[league]:Object.keys(leagues);
   let any=false;
   for(const k of keys){
-    const items=leagues[k]||[]; if(!items.length) continue; any=true;
-    const rows=items.map(p=>"<tr><td>"+esc(p.match||(p.home+" vs "+p.away))+"</td><td>"+esc(p.direction)+"</td><td>"+stars(p.stars)+"</td><td>"+esc(p.predicted_score)+"</td><td class=\"small mut\">"+esc(p.kickoff_utc||"")+"</td></tr>").join("");
-    wrap.insertAdjacentHTML("beforeend","<div class=\"card\" style=\"margin-top:10px\"><div class=\"league-head\"><b>"+k+"</b></div><table><thead><tr><th>比赛</th><th>方向</th><th>信心</th><th>比分</th><th>开球(UTC)</th></tr></thead><tbody>"+rows+"</tbody></table></div>");
+    const isBball=items.length&&( "spread_pred" in items[0]||"win_prob" in items[0]);
+    const rows=items.map(p=>"<tr><td>"+esc(p.match||(p.home+" vs "+p.away))+"</td><td>"+esc(p.direction)+"</td>"+(isBball?"<td class=\"small mut\">"+esc("让分"+(p.spread_pred??"")+" 大小"+(p.total_pred??""))+"</td>":"")+"<td>"+stars(p.stars)+"</td><td>"+esc(p.predicted_score)+"</td><td class=\"small mut\">"+esc(p.kickoff_utc||"")+"</td></tr>").join("");
+    wrap.insertAdjacentHTML("beforeend","<div class=\"card\" style=\"margin-top:10px\"><div class=\"league-head\"><b>"+k+"</b></div><table><thead><tr><th>比赛</th><th>方向</th>"+(isBball?"<th>让分/大小</th>":"")+"<th>信心</th><th>比分</th><th>开球(UTC)</th></tr></thead><tbody>"+rows+"</tbody></table></div>");
   }
   if(!any){ wrap.innerHTML="<div class=\"placeholder\">该日期没有预测数据（BJT 寒暄：试试其他日期）</div>"; }
   body.appendChild(wrap);
