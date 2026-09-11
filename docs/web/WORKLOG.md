@@ -211,3 +211,9 @@ source `deploy/.env` 后 `fastapi cloud deploy /root/build/league-web`。
 - 结果：全仓 AST >50 行函数清零（21 个，比审核原表多 10 个漏网）；197 测试每步双跑绿；净 −17 万行仓库污染（.agents）+ −700 行死代码。
 - 否决与放弃：b6（两版实测破契约，revert bc488d6 后 D2/D5 判"有意放弃"，理由入 CODE_REVIEW 处置表）。
 - 教训：哨兵不写≠没干活（3 次 override 收口）；grep '197 passed' 会匹配失败行，验收必 grep FAILED；bisect 后必查 branch。
+
+## M8 篮球整合（2026-09-12 夜巡，OMP=GPT-5.6-luna 全单一次过）
+- e1a 引擎迁入 scripts/bball/（5 模块常数逐字一致）→ e1b CLI+注册+active 休战旗 → e1c daysBack/Key 脱敏/优雅退出 → e2 odds 参数回正+--ahead-days+DATA_DIR 上云契约 → e3 前端 sport 双模板（足球响应字节级不变）→ e4 篮球 17 离线用例（197→214）。
+- 休赛期数据（D-06）：32 场揭幕战中文前瞻随包上云（免费档无历史比分，backtest 转向 ahead-90 前瞻）。
+- 事故（D-07）：t2b 带红写哨兵 + 我端分号链坏 commit → reset 零污染回退 → t2b2 修复并**新增队长门禁：FAILED=0 && GREEN=2 && commit 硬链**。
+- 尾巴 t2 收官：enrich [:5]→[:40] 全量窗口（当日 7 场全出摘要）。
