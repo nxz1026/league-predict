@@ -122,6 +122,10 @@ echo 'API_FOOTBALL_KEY=your_key' > .env
 # 方式二：export 临时
 export API_FOOTBALL_KEY=your_key
 export FOOTBALL_DATA_API_KEY=your_key
+export ODDS_API_KEY=your_…  # NBA（The Odds API，注册 the-odds-api.com）
+
+# NBA 前瞻（休赛期 --ahead-days 90 拉揭幕赛程；历史回测 --backtest N）
+python3 scripts/bball/run.py --ahead-days 90
 
 # 预测 EPL (默认 API-Football, 含赔率)
 python3 scripts/predict.py --league epl

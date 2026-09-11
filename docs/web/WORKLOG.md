@@ -217,3 +217,5 @@ source `deploy/.env` 后 `fastapi cloud deploy /root/build/league-web`。
 - 休赛期数据（D-06）：32 场揭幕战中文前瞻随包上云（免费档无历史比分，backtest 转向 ahead-90 前瞻）。
 - 事故（D-07）：t2b 带红写哨兵 + 我端分号链坏 commit → reset 零污染回退 → t2b2 修复并**新增队长门禁：FAILED=0 && GREEN=2 && commit 硬链**。
 - 尾巴 t2 收官：enrich [:5]→[:40] 全量窗口（当日 7 场全出摘要）。
+- e5 云端实战补刀：enrich 全量窗口 40 条真实跑挂一次（LLM 批返回混入字符串元素）→ e5b 外层过滤（无害纵深）+ e5d 真崩点 isinstance 守卫+回归测试（215 绿）。deploy18 后云端重跑成功：ai 缓存 112→142，NBA 揭幕战全中文摘要（样例：奇才 vs 凯尔特人→"凯尔特人面对重建中的奇才具有压倒性实力优势…"）。
+- 终态：main=58b8528+docs，215 测试基线（197 足球 + 17 篮球 + 1 enrich 回归），quality/m7 已并 main，deploy18 线上 = 足球五联赛 + NBA 32 场前瞻双 sport 看板。
