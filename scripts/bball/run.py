@@ -15,13 +15,13 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from bball.config_bball import LEAGUE
     from bball.elo_bball import load_ratings, save_ratings, update_ratings
-    from bball.odds_api import (fetch_completed_games, fetch_odds_games,
+    from bball.odds_api import (OddsApiError, fetch_completed_games, fetch_odds_games,
                                 filter_24h_games, parse_odds)
     from bball.predictor import predict_game
 else:
     from .config_bball import LEAGUE
     from .elo_bball import load_ratings, save_ratings, update_ratings
-    from .odds_api import (fetch_completed_games, fetch_odds_games,
+    from .odds_api import (OddsApiError, fetch_completed_games, fetch_odds_games,
                            filter_24h_games, parse_odds)
     from .predictor import predict_game
 
@@ -138,8 +138,12 @@ def run(args: argparse.Namespace) -> dict:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
-    result = run(_parser().parse_args())
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    try:
+        result = run(_parser().parse_args())
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    except (OddsApiError, json.JSONDecodeError, ValueError) as error:
+        LOGGER.error("NBA 预测失败: %s", error)
+        raise SystemExit(3) from None
 
 
 if __name__ == "__main__":

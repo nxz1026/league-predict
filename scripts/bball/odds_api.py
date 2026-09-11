@@ -1,19 +1,25 @@
 """The Odds API 的篮球数据访问与盘口解析。"""
-
 from datetime import datetime, timedelta, timezone
 import json
+import re
 import urllib.error
 import urllib.request
 
+
+def _sanitize_url(url: str) -> str:
+    """隐藏 URL 中的 API 密钥并限制错误信息长度。"""
+    sanitized = re.sub(r"([?&]apiKey=)[^&]*", r"\1***", url)
+    return sanitized[:500]
 
 
 class OddsApiError(RuntimeError):
     """赔率接口请求失败。"""
 
     def __init__(self, url: str, reason: BaseException | str) -> None:
-        self.url = url
-        self.reason = reason
-        super().__init__(f"odds api request failed for {url}: {reason}")
+        self.url = _sanitize_url(url)
+        safe_reason = _sanitize_url(str(reason))
+        self.reason = safe_reason
+        super().__init__(f"odds api request failed for {self.url}: {safe_reason}")
 
 
 def _http_get(url: str, timeout: int = 15) -> dict:
@@ -56,7 +62,7 @@ def fetch_completed_games(api_key: str, sport_key: str, days_back: int) -> list[
     """获取指定回溯天数内的已完赛比赛。"""
     url = (
         f"https://api.the-odds-api.com/v4/sports/{sport_key}/scores/"
-        f"?daysFrom={days_back}&apiKey={api_key}"
+        f"?daysBack={days_back}&apiKey={api_key}"
     )
     data = _http_get(url)
     if not isinstance(data, list):
