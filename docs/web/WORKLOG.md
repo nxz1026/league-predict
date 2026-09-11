@@ -201,3 +201,7 @@ source `deploy/.env` 后 `fastapi cloud deploy /root/build/league-web`。
 - README 重写：头部去 GHA 宣称 + 新增「运行与部署」章节（fastapicloud 地址/部署链路/平台5铁律摘要/config.env 注入说明；口令只指向运维机，**不写入库**）。
 - 清理僵尸 docs/web/logs/M0a.job；STATUS.md 快照刷新。
 - 分支策略：web-dashboard（M0b-M6S 全部交付+本批文档）merge 进 main 后 push main；web-dashboard 分支同推留档。
+
+## 代码质量审核（2026-09-12，用户指令：队长审核健壮性/函数化/死代码/死模块）
+- 产出 `docs/web/CODE_REVIEW.md`：4 死模块（ai_enrich_gha / feedback_memory / cache / .agents 389 文件污染）、20+ 死代码项（reconcile_results+print_metrics_summary 0 调用、_FORBIDDEN 常量化、try_ai_status 拆线、~15 未用导入）、11 个 >50L 函数（calculate_prediction 336L 居首，段注释即拆分刀口）、9 类健壮性缺陷（D1 孤儿任务全站 409 锁死最危）。
+- 处置：拆 WO-M7a（纯清理）→ WO-M7b（健壮性+前四大函数）两张工单派 OMP，待用户批准。审核手段：AST 测长 + pyflakes + import 图 + 人工审读 web 全量。
