@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
@@ -183,7 +183,7 @@ def _today_has_data() -> bool:
 def _lazy_auto_trigger() -> dict:
     """同日去重的自动触发：成功/已触发 → 200 语义；配额/并发 → 说明。"""
     marker = config.DATA_DIR / "auto_refresh_last.json"
-    today = datetime.now(timezone.utc).date().isoformat()
+    today = store.bjt_today().isoformat()
     if marker.is_file():
         try:
             payload = json.loads(marker.read_text(encoding="utf-8") or "{}")
@@ -209,7 +209,7 @@ def _lazy_auto_trigger() -> dict:
     return {"triggered": True, "job": job["id"]}
 
 
-@router.get("/jobs/auto/refresh")
+@router.post("/jobs/auto/refresh")
 def jobs_auto(request: Request, _: None = Depends(require_auth)) -> dict:
     """惰性刷新入口：today 有数据 → 不触发；缺 → 同日去重自动触发。"""
     if _today_has_data():

@@ -305,9 +305,9 @@ def test_auto_refresh_trigger_and_dedup(client, tmp_path, monkeypatch):
     import web.services.store as store_mod
     monkeypatch.setattr(store_mod, "OUTPUT_DIR", tmp_path / "empty")
     _login(client)
-    r1 = client.get("/api/v1/jobs/auto/refresh")
+    r1 = client.post("/api/v1/jobs/auto/refresh")
     assert r1.json()["triggered"] is True
-    r2 = client.get("/api/v1/jobs/auto/refresh")
+    r2 = client.post("/api/v1/jobs/auto/refresh")
     assert r2.json()["triggered"] is False
     assert r2.json()["reason"] == "already_today"
 
@@ -371,7 +371,7 @@ def test_ai_status_endpoints(client, tmp_path, monkeypatch):
 def test_jobs_require_auth(client):
     assert client.get("/api/v1/jobs").status_code == 401
     assert client.post("/api/v1/jobs/predict", json={}).status_code == 401
-    assert client.get("/api/v1/jobs/auto/refresh").status_code == 401
+    assert client.post("/api/v1/jobs/auto/refresh").status_code == 401
 
 
 class TestOrphanRecovery:
