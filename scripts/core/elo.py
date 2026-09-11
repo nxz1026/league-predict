@@ -91,6 +91,39 @@ def goal_difference_adjustment(
         return base_k * (1.75 + 0.125 * (goal_diff - 3))
 
 
+def _elo_apply_result(
+    home_team: str,
+    away_team: str,
+    home_goals: int,
+    away_goals: int,
+    ratings: dict[str, float],
+    k: float,
+) -> tuple[float, float, float, float, float]:
+    """推导单场结果的双队 ELO 更新，结果就地写回 ratings。
+
+    Returns:
+        元组 (elo_h, elo_a, new_h, new_a, adj_k)：更新前双方分数、更新后分数与所用 K 值。
+    """
+    elo_h = ratings.get(home_team, DEFAULT_ELO)
+    elo_a = ratings.get(away_team, DEFAULT_ELO)
+
+    if home_goals > away_goals:
+        score_h = 1.0
+    elif home_goals < away_goals:
+        score_h = 0.0
+    else:
+        score_h = 0.5
+
+    goal_diff = abs(home_goals - away_goals)
+    adj_k = goal_difference_adjustment(goal_diff, k)
+
+    new_h, new_a = update_elo(elo_h, elo_a, score_h, adj_k, home_adv=True)
+
+    ratings[home_team] = new_h
+    ratings[away_team] = new_a
+    return elo_h, elo_a, new_h, new_a, adj_k
+
+
 def process_match_result(
     home_team: str,
     away_team: str,
@@ -112,23 +145,8 @@ def process_match_result(
     Returns:
         变更详情字典
     """
-    elo_h = ratings.get(home_team, DEFAULT_ELO)
-    elo_a = ratings.get(away_team, DEFAULT_ELO)
-
-    if home_goals > away_goals:
-        score_h = 1.0
-    elif home_goals < away_goals:
-        score_h = 0.0
-    else:
-        score_h = 0.5
-
-    goal_diff = abs(home_goals - away_goals)
-    adj_k = goal_difference_adjustment(goal_diff, k)
-
-    new_h, new_a = update_elo(elo_h, elo_a, score_h, adj_k, home_adv=True)
-
-    ratings[home_team] = new_h
-    ratings[away_team] = new_a
+    elo_h, elo_a, new_h, new_a, adj_k = _elo_apply_result(
+        home_team, away_team, home_goals, away_goals, ratings, k)
 
     change = {
         "match": f"{home_team} {home_goals}-{away_goals} {away_team}",

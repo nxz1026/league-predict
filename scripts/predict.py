@@ -425,15 +425,12 @@ def run_league(league_key: str, args, now_utc, dates_str, silent: bool = False) 
     return output
 
 
-def main() -> None:
-    try:
-        sys.stdout.reconfigure(encoding='utf-8')
-    except AttributeError:
-        pass
-    parser = build_parser()
-    args = parser.parse_args()
+def _apply_ml_args(args) -> bool:
+    """ML-5 开关与训练/清理快捷路径。
 
-    # ── ML 开关（ML-5）──────────────────────────────
+    Returns:
+        True 表示已执行训练或清理并应提前结束，False 表示继续正常预测流程。
+    """
     from core.config import ML_CONFIG
     if args.no_ml:
         ML_CONFIG["enabled"] = False
@@ -450,10 +447,24 @@ def main() -> None:
         for league_key, model in results.items():
             status = "trained" if model is not None else "skipped (insufficient data)"
             print(f"  {league_key}: {status}", file=sys.stderr)
-        return
+        return True
 
     if args.cleanup:
         cleanup_old_files(days=7)
+        return True
+
+    return False
+
+
+def main() -> None:
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except AttributeError:
+        pass
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if _apply_ml_args(args):
         return
 
     # 使用北京时间（BJT）计算日期范围，而非UTC
