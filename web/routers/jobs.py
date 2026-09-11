@@ -196,7 +196,7 @@ def _lazy_auto_trigger() -> dict:
     if reason == "already_running":
         return {"triggered": False, "reason": "already_running"}
     marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text(json.dumps({"day": today, "job": job["id"]}, ensure_ascii=False))
+    marker.write_text(json.dumps({"day": today, "job": job["id"]}, ensure_ascii=False), encoding="utf-8")
     _executor.submit(jobs.run_job, job["id"])
     return {"triggered": True, "job": job["id"]}
 
