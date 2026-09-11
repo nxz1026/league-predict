@@ -26,6 +26,12 @@ class ApiError(Exception):
         super().__init__(message)
 
 
+class LockTimeout(Exception):
+    """文件锁获取超时（内部信号，由路由层映射为 503 lock_busy）。"""
+
+    pass
+
+
 def _payload(exc_or_code, message: str, detail: str | None) -> dict:
     code = exc_or_code if isinstance(exc_or_code, str) else exc_or_code.code
     body = {"code": code, "message": message}

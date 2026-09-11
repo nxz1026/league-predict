@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse
 
 from web import config, errors
 from web.auth import require_auth
+from web.errors import LockTimeout
 from web.services import jobs, store
 from web.services.datasource import LEAGUES
 
@@ -104,7 +105,10 @@ def jobs_predict(body: dict | None, request: Request,
     """提交预测任务（队列语义：返回 202 + job；并发时 409 + already_running）。"""
     params = body or {}
     argv = _validate_args(params)
-    job, reason = jobs.trigger_predict(argv, trigger="manual")
+    try:
+        job, reason = jobs.trigger_predict(argv, trigger="manual")
+    except LockTimeout:
+        raise errors.ApiError("lock_busy", "系统繁忙，请稍后再试", http_status=503)
     if reason == "quota_exhausted":
         usage = jobs.quota_usage()
         raise errors.ApiError("quota_exhausted",
@@ -128,7 +132,10 @@ def jobs_ai_enrich(request: Request, _: None = Depends(require_auth)) -> JSONRes
     语义与 /jobs/predict 一致：202 + job / 409 already_running / 429 quota_exhausted。
     配额与 predict 共享同一计数器。
     """
-    job, reason = jobs.trigger_ai_enrich(trigger="manual")
+    try:
+        job, reason = jobs.trigger_ai_enrich(trigger="manual")
+    except LockTimeout:
+        raise errors.ApiError("lock_busy", "系统繁忙，请稍后再试", http_status=503)
     if reason == "quota_exhausted":
         usage = jobs.quota_usage()
         raise errors.ApiError("quota_exhausted",

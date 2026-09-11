@@ -25,6 +25,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from web import config
+from web.errors import LockTimeout
 
 BJT = ZoneInfo("Asia/Shanghai")
 STATUS_QUEUED = "queued"
@@ -109,9 +110,6 @@ def quota_consume() -> bool:
 
 
 # --- 文件锁 ---------------------------------------------------------------
-
-class LockTimeout(Exception):
-    pass
 
 
 @contextmanager

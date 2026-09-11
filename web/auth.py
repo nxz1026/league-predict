@@ -42,6 +42,15 @@ def _check_lockout(ip: str) -> None:
 
 
 def _record_failure(ip: str) -> None:
+    global _failures
+    now = time.time()
+    # 清理已完全过期的锁定记录，防止失败字典无界增长。
+    _failures = {
+        k: rec for k, rec in _failures.items()
+        if not (rec["lockout_until"] > 0
+                and rec["lockout_until"] < now
+                and now - rec["lockout_until"] > config.LOGIN_LOCKOUT_SECONDS)
+    }
     rec = _failures.setdefault(ip, {"count": 0, "lockout_until": 0.0})
     rec["count"] += 1
     if rec["count"] >= config.LOGIN_MAX_FAILURES:
