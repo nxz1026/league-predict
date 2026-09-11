@@ -6,7 +6,6 @@ import random
 from typing import Any
 
 from core.log import logger
-from core.model.poisson import dixon_coles_pmf
 
 
 def simulate_match_dc(lambda_h: float, lambda_a: float, rho: float = 0.2) -> tuple[int, int]:
@@ -199,7 +198,6 @@ def simulate_world_cup(fixtures: list[dict[str, Any]], team_strengths: dict[str,
                 team_rounds[team] = []
             team_rounds[team].append("round_of_16")
 
-    current_round = "round_of_16"
     remaining_teams: list[str] = []
 
     # ── 标准 World Cup 淘汰赛对阵 ──

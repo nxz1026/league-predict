@@ -5,7 +5,6 @@
 """
 from __future__ import annotations
 
-import json
 import sys
 import threading
 import time
@@ -114,7 +113,7 @@ def test_ai_enrich_require_auth(client):
 
 def test_ai_enrich_202_queued_with_script(client, monkeypatch):
     import web.services.jobs as jobs_mod
-    recorded = []
+    []
     monkeypatch.setattr(jobs_mod, "subprocess", _fake_sp(_OkProc))
     _login(client)
     r = client.post("/api/v1/jobs/ai-enrich")

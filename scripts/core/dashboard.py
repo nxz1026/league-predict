@@ -9,12 +9,11 @@ from __future__ import annotations
 - 历史准确率趋势
 """
 
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from core.config import FOOTBALL_DIR, PREDICTIONS_DIR
+from core.config import PREDICTIONS_DIR
 from core.log import logger
 
 

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 """Core prediction engine: Onside 4+1 signal model combined with Dixon-Coles."""
 
-import json
 from core.config import ONSIDE_WEIGHTS, MARKET_ODDS_WEIGHT, DC_RHO, THRESHOLDS, LEAGUE_DC_RHO, ML_CONFIG
 from core.log import logger
 # 统一从 core.rankings 导入（P1-3：打破循环依赖）

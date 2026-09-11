@@ -17,7 +17,6 @@ Usage:
 
 from __future__ import annotations
 
-import math
 from typing import Any
 
 from core.elo import expected_score, DEFAULT_ELO

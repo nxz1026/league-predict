@@ -2,7 +2,6 @@ from __future__ import annotations
 
 """Event parsing and odds/statistics extraction."""
 
-import json
 from datetime import datetime, timezone
 from core.log import logger
 
@@ -298,7 +297,7 @@ def parse_events(events: list, now_utc: datetime | None = None) -> tuple[list, l
         ps = odds.get("pointSpread") or {}
         spread_h = ps.get("home") or {}
         spread_a = ps.get("away") or {}
-        spread_h_open = spread_h.get("open") or {}
+        spread_h.get("open")
         spread_h_close = spread_h.get("close") or {}
         spread_a_open = spread_a.get("open") or {}
         spread_a_close = spread_a.get("close") or {}

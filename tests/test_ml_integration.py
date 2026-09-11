@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from core.config import ML_CONFIG, FOOTBALL_DIR
+from core.config import ML_CONFIG
 from core.model.features import NUM_FEATURES
 from core.model.ml_model import MatchMLModel, load_league_model, save_league_model
-from core.predictor import calculate_prediction, get_ml_model, _ML_MODEL_CACHE
+from core.predictor import calculate_prediction, _ML_MODEL_CACHE
 
 
 def _make_match(**overrides):

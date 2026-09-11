@@ -6,9 +6,7 @@ import unittest
 
 from core.elo import (
     DEFAULT_ELO,
-    HOME_ADVANTAGE_ELO,
     K_FACTOR,
-    SCALE_FACTOR,
     elo_to_lambda_scale,
     expected_score,
     goal_difference_adjustment,

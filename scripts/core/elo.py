@@ -116,11 +116,11 @@ def process_match_result(
     elo_a = ratings.get(away_team, DEFAULT_ELO)
 
     if home_goals > away_goals:
-        score_h, score_a = 1.0, 0.0
+        score_h = 1.0
     elif home_goals < away_goals:
-        score_h, score_a = 0.0, 1.0
+        score_h = 0.0
     else:
-        score_h, score_a = 0.5, 0.5
+        score_h = 0.5
 
     goal_diff = abs(home_goals - away_goals)
     adj_k = goal_difference_adjustment(goal_diff, k)

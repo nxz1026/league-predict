@@ -9,9 +9,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from core.config import PREDICTIONS_DIR, LEAGUE_CONFIG, ESPN_TIMEOUT_SECONDS, FOOTBALL_DIR
+from core.config import PREDICTIONS_DIR, LEAGUE_CONFIG, ESPN_TIMEOUT_SECONDS
 from core.calibration import _try_load_json
-from core.log import logger
 
 
 def reconcile_predictions(past_matches: list[dict[str, Any]], days: int = 7) -> dict[str, Any] | None:

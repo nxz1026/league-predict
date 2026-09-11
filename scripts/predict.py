@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from typing import Any
 
 # ── 确保脚本目录与仓库根在 sys.path 中（仓库根含 ai/ 包，LLM 翻译等需要）──
 _SCRIPT_DIR = str(Path(__file__).parent)
@@ -26,7 +26,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from core.config import (
-    LEAGUE_CONFIG, PREDICTIONS_DIR, FOOTBALL_DIR, DC_RHO, DEFAULT_N_SIMULATIONS
+    LEAGUE_CONFIG, PREDICTIONS_DIR, DC_RHO, DEFAULT_N_SIMULATIONS
 )
 from core.log import logger
 from core.data.fetch import fetch_events
@@ -203,7 +203,7 @@ def _print_summary(predictions: list, calibration: dict, calibration_offset: dic
               f"draw {calibration_offset['actual_draw_rate']} | "
               f"away {calibration_offset['actual_away_rate']}", file=sys.stderr)
     else:
-        print(f"Calibration offset: insufficient data (<5 matches), skipping", file=sys.stderr)
+        print("Calibration offset: insufficient data (<5 matches), skipping", file=sys.stderr)
     print(f"To predict: {len(predictions)} matches", file=sys.stderr)
     for p in predictions:
         poisson_str = " / ".join(f"{t['score']}({t['prob']:.0%})" for t in p.get('poisson_top3', [])[:3])
@@ -221,7 +221,7 @@ def _print_summary(predictions: list, calibration: dict, calibration_offset: dic
             print(f"  {team}: {prob:.1%}", file=sys.stderr)
 
     if accuracy_summary:
-        print(f"\nAccuracy summary:", file=sys.stderr)
+        print("\nAccuracy summary:", file=sys.stderr)
         for window, a in accuracy_summary.items():
             print(f"  {window}: dir {a['direction_accuracy']*100:.0f}% | "
                   f"score {a['score_accuracy']*100:.0f}% | "

@@ -13,7 +13,7 @@ from __future__ import annotations
 import hmac
 import time
 
-from fastapi import Depends, Request, Response
+from fastapi import Request, Response
 from fastapi.routing import APIRouter
 
 from web import config

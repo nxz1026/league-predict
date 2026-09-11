@@ -2,16 +2,10 @@ from __future__ import annotations
 
 """Onside 4+1 signal model: FIFA rankings, league footprint, host advantage, confederation strength."""
 
-import json
 import math
-from pathlib import Path
 from typing import Any
 
 from core.config import CONFEDERATION_STRENGTH, COUNTRY_CONFEDERATION, ONSIDE_WEIGHTS, THRESHOLDS
-from core.log import logger
-
-# 统一从 core.rankings 导入，打破 model↔data 循环依赖（P1-3）
-from core.rankings import fetch_fifa_rankings
 
 
 def fifa_rank_to_score(rank: int | None, max_rank: int = 200) -> float:

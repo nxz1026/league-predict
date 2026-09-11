@@ -7,8 +7,8 @@ import urllib.request
 import gzip
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 from core.config import (
     ESPN_URL_TEMPLATE, ESPN_MAX_RETRIES, ESPN_RETRY_DELAY_SECONDS,
