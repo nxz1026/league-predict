@@ -137,6 +137,10 @@ def test_concurrent_trigger_only_one_producer(client, monkeypatch):
     try:
         r1 = client.post("/api/v1/jobs/predict", json={"league": "epl"})
         assert r1.status_code == 202
+        import time as _t
+        _t.sleep(0.3)
+        print("\nDEBUG jobs after r1:", [(x["id"], x["status"]) for x in jobs_mod.list_jobs()], flush=True)
+        print("DEBUG active:", jobs_mod.active_job(), flush=True)
         r2 = client.post("/api/v1/jobs/predict", json={"league": "epl"})
         assert r2.status_code == 409
         body = r2.json()
@@ -263,6 +267,36 @@ def test_quota_reset_on_new_day(jobs_env, tmp_path):
     usage = jobs_env.quota_usage()
     assert usage["used"] == 0
     assert usage["day"] == datetime.now(BJT).strftime("%Y-%m-%d")
+
+
+# --- _spawn 原子化：409 拒绝不扣配额（WO-M7b6 D2+D5） -----------------------
+
+def test_spawn_already_running_keeps_quota(jobs_env):
+    """预置活跃 running job → _spawn 返回 already_running，quota count 不增加。"""
+    import web.config as config
+
+    assert jobs_env.quota_consume() is True  # count = 1
+    running = jobs_env.create_job([], trigger="test")
+    jobs_env._spin_state(running["id"], jobs_env.STATUS_RUNNING, started_at=time.time())
+
+    job, reason = jobs_env._spawn("predict", [])
+    assert reason == "already_running"
+    assert job["id"] == running["id"]
+    quota = json.loads((config.QUOTA_FILE).read_text(encoding="utf-8"))
+    assert quota["count"] == 1
+    assert len(jobs_env.list_jobs()) == 1
+
+
+def test_spawn_success_consumes_quota(jobs_env):
+    """无活跃 job → _spawn 成功创建任务，quota count +1。"""
+    import web.config as config
+
+    job, reason = jobs_env._spawn("predict", ["--league", "epl"])
+    assert reason is None
+    assert job is not None
+    assert jobs_env.get_job(job["id"])["status"] == jobs_env.STATUS_QUEUED
+    quota = json.loads((config.QUOTA_FILE).read_text(encoding="utf-8"))
+    assert quota["count"] == 1
 
 
 # --- 惰性刷新：同日去重 -----------------------------------------------------

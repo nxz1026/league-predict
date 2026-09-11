@@ -252,6 +252,7 @@ def _build_cmd(args: list[str], script: str = "predict") -> list[str]:
 def run_job(jid: str) -> None:
     """执行一个 queued 任务到终态（同步；调用方负责不阻塞请求线程）。"""
     with _exclusive_lock(config.JOBS_LOCK_FILE, timeout=10):
+        print(f"DEBUG run_job got lock {config.JOBS_LOCK_FILE}", flush=True)
         job = _read_job(jid)
         if job is None or job.get("status") not in (STATUS_QUEUED, STATUS_RUNNING):
             return
@@ -340,14 +341,18 @@ def _spawn(script: str, extra_argv: list[str], trigger: str = "manual") -> tuple
 
     契约：任务提交即占配额（predict 与 ai_enrich 共享同一计数器）；
     并发有新任务时返回 (existing, "already_running")。
+    整体持有 JOBS_LOCK_FILE 保证检查与创建原子：被 409 拒绝的请求不扣配额。
     """
-    if not quota_consume():
-        return None, "quota_exhausted"
-    existing = active_job()
-    if existing is not None:
-        return existing, "already_running"
-    job = create_job(extra_argv, trigger=trigger, script=script)
-    return job, None
+    with _exclusive_lock(config.JOBS_LOCK_FILE, timeout=5):
+        print(f"DEBUG spawn lock={config.JOBS_LOCK_FILE} dir={config.JOBS_DIR}", flush=True)
+        existing = active_job()
+        print(f"DEBUG spawn active={existing['id'] if existing else None}", flush=True)
+        if existing is not None:
+            return existing, "already_running"
+        if not quota_consume():
+            return None, "quota_exhausted"
+        job = create_job(extra_argv, trigger=trigger, script=script)
+        return job, None
 
 
 def trigger_predict(args: list[str], trigger: str = "manual") -> tuple[dict | None, str | None]:
