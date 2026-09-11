@@ -104,6 +104,41 @@ def _decide_direction_and_stars(home_prob: float, draw_prob: float,
     return direction, confidence_raw, confidence_note, stars
 
 
+def _init_inputs(match: dict, weights: dict | None, fifa_rankings: dict | None,
+                 host_country: str | None, elo_ratings: dict | None,
+                 league_key: str, dc_rho: float | None) -> tuple:
+    """输入解包 + Onside 4 信号计算 + 联赛差异化 ρ。纯函数。"""
+    if weights is None:
+        weights = ONSIDE_WEIGHTS
+
+    # ── P0-3: 联赛差异化 ρ ──
+    if dc_rho is None:
+        dc_rho = LEAGUE_DC_RHO.get(league_key, DC_RHO)
+        if dc_rho != DC_RHO:
+            logger.debug(f"Using league-specific rho for {league_key}: {dc_rho}")
+
+    hp = match.get("home_true_prob") or 0.5
+    dp = match.get("draw_true_prob") or 0.25
+    ap = match.get("away_true_prob") or 0.25
+    hfs = match.get("home_form_score", 0.5)
+    afs = match.get("away_form_score", 0.5)
+    hrs = match.get("home_record_score", 0.5)
+    ars = match.get("away_record_score", 0.5)
+    sm = match.get("spread_movement_score", 0)
+
+    # ── Onside 4 信号 ──
+    home_en = match.get("home_en", match.get("home", ""))
+    away_en = match.get("away_en", match.get("away", ""))
+
+    if fifa_rankings is None:
+        fifa_rankings = fetch_fifa_rankings()
+
+    onside = compute_onside_signals(home_en, away_en, fifa_rankings, host_country, elo_ratings=elo_ratings)
+    home_onside = onside["home"]["onside_score"]
+    away_onside = onside["away"]["onside_score"]
+    return weights, dc_rho, hp, dp, ap, hfs, afs, hrs, ars, sm, home_en, away_en, onside, home_onside, away_onside
+
+
 def _apply_market_calibration(hp: float, dp: float, ap: float,
                               calibration_offset: dict | None,
                               home_onside: float, away_onside: float
@@ -180,6 +215,26 @@ def _unified_strength_probs(market_home: float, market_draw: float, market_away:
     away_prob = away_strength / total
 
     return home_prob, draw_prob_calc, away_prob
+
+
+def _weighted_direction_probs(hp: float, dp: float, ap: float,
+                              home_onside: float, away_onside: float,
+                              sm: float, elo_ratings: dict | None,
+                              elo_home_expected: float | None, elo_away_expected: float | None,
+                              ELO_WEIGHT: float, dc_val: float,
+                              calibration_offset: dict | None
+                              ) -> tuple[float, float, float, float, float]:
+    """P0-2 统一权重体系：sm 截断 + 方向概率（与 λ 同一套加权信号）。纯函数。"""
+    # ══════════════════════════════════════════════════════
+    # P0-2 统一权重体系：方向概率和 λ 使用同一套加权信号
+    # ══════════════════════════════════════════════════════
+    sm_capped = max(-THRESHOLDS["spread_movement_cap"], min(THRESHOLDS["spread_movement_cap"], sm))
+    onside_weight = (1 - MARKET_ODDS_WEIGHT) * (1 - ELO_WEIGHT if elo_ratings else 1.0)
+    home_prob, draw_prob_calc, away_prob = _unified_strength_probs(
+        hp, dp, ap, home_onside, away_onside, sm_capped, onside_weight,
+        elo_ratings, elo_home_expected, elo_away_expected,
+        ELO_WEIGHT, dc_val, calibration_offset)
+    return sm_capped, onside_weight, home_prob, draw_prob_calc, away_prob
 
 
 def _derive_lambdas_and_grid(
@@ -408,52 +463,19 @@ def calculate_prediction(
     league_key: str = "epl",  # P0-3: 传入联赛 key 用于差异化 ρ
 ) -> dict:
     """Onside 4 信号 + ELO + Dixon-Coles 预测 → 方向 + 信心 + 比分预测 + 95% CI"""
-    if weights is None:
-        weights = ONSIDE_WEIGHTS
-
-    # ── P0-3: 联赛差异化 ρ ──
-    if dc_rho is None:
-        dc_rho = LEAGUE_DC_RHO.get(league_key, DC_RHO)
-        if dc_rho != DC_RHO:
-            logger.debug(f"Using league-specific rho for {league_key}: {dc_rho}")
-
-    hp = match.get("home_true_prob") or 0.5
-    dp = match.get("draw_true_prob") or 0.25
-    ap = match.get("away_true_prob") or 0.25
-    hfs = match.get("home_form_score", 0.5)
-    afs = match.get("away_form_score", 0.5)
-    hrs = match.get("home_record_score", 0.5)
-    ars = match.get("away_record_score", 0.5)
-    sm = match.get("spread_movement_score", 0)
-
-    # ── Onside 4 信号 ──
-    home_en = match.get("home_en", match.get("home", ""))
-    away_en = match.get("away_en", match.get("away", ""))
-
-    if fifa_rankings is None:
-        fifa_rankings = fetch_fifa_rankings()
-
-    onside = compute_onside_signals(home_en, away_en, fifa_rankings, host_country, elo_ratings=elo_ratings)
-    home_onside = onside["home"]["onside_score"]
-    away_onside = onside["away"]["onside_score"]
+    weights, dc_rho, hp, dp, ap, hfs, afs, hrs, ars, sm, home_en, away_en, onside, home_onside, away_onside = _init_inputs(
+        match, weights, fifa_rankings, host_country, elo_ratings, league_key, dc_rho)
 
     # ── 应用 calibration offset 修正隐含概率 ──
     hp, dp, ap, dc_val, ohc, oac, home_onside, away_onside, calibration_note = _apply_market_calibration(
         hp, dp, ap, calibration_offset, home_onside, away_onside)
 
-    sm_capped = max(-THRESHOLDS["spread_movement_cap"], min(THRESHOLDS["spread_movement_cap"], sm))
-
     elo_home_expected, elo_away_expected, ELO_WEIGHT = _elo_expectations(
         elo_ratings, home_en, away_en)
 
-    # ══════════════════════════════════════════════════════
-    # P0-2 统一权重体系：方向概率和 λ 使用同一套加权信号
-    # ══════════════════════════════════════════════════════
-    onside_weight = (1 - MARKET_ODDS_WEIGHT) * (1 - ELO_WEIGHT if elo_ratings else 1.0)
-    home_prob, draw_prob_calc, away_prob = _unified_strength_probs(
-        hp, dp, ap, home_onside, away_onside, sm_capped, onside_weight,
-        elo_ratings, elo_home_expected, elo_away_expected,
-        ELO_WEIGHT, dc_val, calibration_offset)
+    sm_capped, onside_weight, home_prob, draw_prob_calc, away_prob = _weighted_direction_probs(
+        hp, dp, ap, home_onside, away_onside, sm, elo_ratings,
+        elo_home_expected, elo_away_expected, ELO_WEIGHT, dc_val, calibration_offset)
 
     # ── ML 概率融合（P1/ML: 26 维特征分类器与主模型概率做加权融合）──
     home_prob, draw_prob_calc, away_prob, ml_proba = _blend_ml_probs(
