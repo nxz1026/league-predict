@@ -16,7 +16,7 @@ from psycopg.types.json import Jsonb
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from core.i18n import to_cn  # noqa: E402
-from store import pg, query, upsert_fixtures, upsert_results  # noqa: E402
+from store import pg, selfcheck, upsert_fixtures, upsert_results  # noqa: E402
 from tests.test_align import COUNT_SQL, _af_body, _fd_body, _put, _q  # noqa: E402
 
 
@@ -35,13 +35,13 @@ def test_i1_i2_i3_i4_two_sources_share_one_af_fixture(conn):
     tag, fid, fd_id = uuid.uuid4().hex, 990000101, 550000101
     hashes = [_put(conn, "af_raw", _af_body(fid, tag, (1, 1), (0, 1))),
               _put(conn, "fd_raw", _fd_body(fd_id, tag, (3, 0), (1, 0)))]  # 两源 ft 故意不一致
-    before, cov_before = _q(conn, COUNT_SQL)[0], query.source_coverage(conn)["both"]
+    before, cov_before = _q(conn, COUNT_SQL)[0], selfcheck.source_coverage(conn)["both"]
     written, results = upsert_fixtures.run(conn, hashes), upsert_results.run(conn, hashes)
     assert _q(conn, COUNT_SQL)[0][0] - before[0] == 1  # A1：fixture 只随 AF 增长（FD 贡献 0）
-    assert query.source_coverage(conn)["both"] - cov_before == 1
+    assert selfcheck.source_coverage(conn)["both"] - cov_before == 1
     assert (written["fixtures"], written["fd_merged"], written["fd_unmatched"]) == (1, 1, 0)
     assert (results["af_results"], results["fd_results"], results["fd_unmatched"]) == (1, 1, 0)
-    assert query.unmatched_fd(conn, fd_ids={fd_id}) == []  # A3：作用域＝本批哨兵 id，不读"史上最新留痕"
+    assert selfcheck.unmatched_fd(conn, fd_ids={fd_id}) == []  # A3：作用域＝本批哨兵 id，不读"史上最新留痕"
     assert _q(conn, "SELECT source, ft_h FROM fact.fixture_result WHERE fixture_id = %s ORDER BY source", fid) \
         == [("api_football", 1), ("football_data", 3)]  # A2：两源各一行，谁也不覆盖谁
     assert _q(conn, "SELECT source_ids -> 'football_data', (SELECT count(*) FROM fact.fixture"
@@ -74,7 +74,7 @@ def test_unmatched_fd_only_lands_in_ingest_log(conn):
     assert _q(conn, "SELECT (SELECT count(*) FROM fact.fixture WHERE fixture_id IN (%s, %s)),"
                     " (SELECT count(*) FROM fact.fixture_result WHERE fixture_id IN (%s, %s))",
               other, late, other, late)[0] == (0, 0)  # A3：FD-only 不进 fact
-    rejected = query.unmatched_fd(conn, fd_ids={other, late})  # 作用域＝本批两条哨兵 id
+    rejected = selfcheck.unmatched_fd(conn, fd_ids={other, late})  # 作用域＝本批两条哨兵 id
     assert sorted(r["fd_id"] for r in rejected) == [other, late]
     assert set(rejected[0]) == {"fd_id", "home", "away", "utc_date", "reason"}  # 明细含两队原名与开球时刻
     upsert_fixtures.run(conn, hashes)  # A6：再跑一遍，fact 计数不变
@@ -93,6 +93,6 @@ def test_scoped_unmatched_fd_ignores_newer_foreign_log_row(conn):
               _put(conn, "fd_raw", _fd_body(fd_id, tag, (2, 1), (1, 0)))]
     written, results = upsert_fixtures.run(conn, hashes), upsert_results.run(conn, hashes)
     assert (written["fd_unmatched"], results["fd_unmatched"], results["rejected"]) == (0, 0, [])
-    assert query.unmatched_fd(conn, src_file="raw.fd_raw", fd_ids={fd_id}) == []  # 同源名的两批：只算本批
-    assert [r["fd_id"] for r in query.unmatched_fd(conn, src_file="raw.fd_raw", fd_ids={fdid})] == [fdid]
-    assert [r["fd_id"] for r in query.unmatched_fd(conn)] == [fdid]  # 旧"最新一条"读法仍看得到假留痕
+    assert selfcheck.unmatched_fd(conn, src_file="raw.fd_raw", fd_ids={fd_id}) == []  # 同源名的两批：只算本批
+    assert [r["fd_id"] for r in selfcheck.unmatched_fd(conn, src_file="raw.fd_raw", fd_ids={fdid})] == [fdid]
+    assert [r["fd_id"] for r in selfcheck.unmatched_fd(conn)] == [fdid]  # 旧"最新一条"读法仍看得到假留痕
