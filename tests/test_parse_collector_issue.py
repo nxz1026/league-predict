@@ -30,11 +30,12 @@ def payloads(name: str) -> list[dict]:
 
 
 def test_jc_issue_head_and_issue_no_collision():
-    """⑤ 四期期头 n_matches == len(matchList)（任九给 14 场）；90 与 900129 的期号字符串必须相等。"""
+    """⑤ 四期期头 n_matches == len(matchList)（任九给 14 场）；真包在售期号 26127/26181/26188，
+    90 与 900129 期号跨玩法重号 ⇒ pk 必须带 game_num（换值不换语义）。"""
     envs = rows("jc_issue")
     parsed = [pc.parse_line(env) for env in envs]
     assert [(row["row"]["game_num"], row["row"]["issue_no"], row["row"]["n_matches"]) for row in parsed] == [
-        ("90", "26126", 14), ("900129", "26126", 14), ("98", "26180", 6), ("94", "26187", 4)]
+        ("90", "26127", 14), ("900129", "26127", 14), ("98", "26181", 6), ("94", "26188", 4)]
     for row, env in zip(parsed, envs):
         assert row["row"]["n_matches"] == len(env["payload"]["matchList"])
     assert parsed[0]["pk"]["issue_no"] == parsed[1]["pk"]["issue_no"]  # 期号跨玩法重号 ⇒ pk 必须带 game_num
@@ -56,15 +57,16 @@ def test_jc_issue_result_game_keys_and_rj_twins():
 
 
 def test_lottery_draw_raw_numbers_and_dash_amount():
-    """⑦ 12 行；号码串原样含空格（不拆不排不去重）；stakeAmount "---" 必须仍是 str，不许变 None/0。"""
+    """⑦ 22 行 = 4 玩法各 1 期 + 6 行跨批变化 + 12 行旧探针；号码串原样含空格（不拆不排不去重）；
+    stakeAmount "---" 必须仍是 str，不许变 None/0。"""
     parsed = [pc.parse_line(env) for env in rows("lottery_draw")]
-    assert len(parsed) == 12
+    assert len(parsed) == 22
     first = parsed[0]["row"]
     assert first["numbers_raw"] == "10 14 30 33 34 09 12" and first["numbers"] == {
         "front": ["10", "14", "30", "33", "34"], "back": ["09", "12"]}
-    assert parsed[3]["row"]["numbers"] == {"digits": ["0", "5", "1"]}
+    assert parsed[3]["row"]["numbers"] == {"digits": ["2", "8", "3", "4", "5", "6", "4"]}  # 7星彩原序
     dash = [tier for row in parsed for tier in row["row"]["prizes"] if tier["stakeAmount"] == "---"]
-    assert len(dash) == 2 and all(tier["stakeAmountFormat"] == "-1" for tier in dash)
+    assert all(tier["stakeAmountFormat"] == "-1" for tier in dash) and len(dash) == 4
     assert all(isinstance(tier["stakeAmount"], str) for row in parsed for tier in row["row"]["prizes"])
 
 
@@ -76,8 +78,9 @@ def test_error_lines_produce_no_fact_row():
 
 
 def test_negative_shapes_raise_and_keep_raw_values():
-    """⑨ 抹掉 matchId ⇒ ValueError 点名 matchId；sectionsNo999 改成 "3:3:3" ⇒ 解析列 None、原值照抄。"""
-    good = next(p for p in payloads("jczq_result") if p["sectionsNo999"] == "5:1")
+    """⑨ 抹掉 matchId ⇒ ValueError 点名 matchId；sectionsNo999 改成 "3:3:3" ⇒ 解析列 None、原值照抄。
+    锚点行 1:4（真包周二003 卡塔尔亚vs韩国亚：半场 0:3、SP 18.00/7.20/1.07、winFlag A、poolStatus Payout）。"""
+    good = next(p for p in payloads("jczq_result") if p["sectionsNo999"] == "1:4")
     with pytest.raises(ValueError, match="matchId"):
         pc.parse_jczq_result({key: value for key, value in good.items() if key != "matchId"})
     weird = pc.parse_jczq_result(good | {"sectionsNo999": "3:3:3"})["row"]
