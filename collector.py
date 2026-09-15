@@ -455,18 +455,20 @@ def push_batch(topics: list) -> int:
     done_local = ROOT / "out.done.tmp"
     done_local.write_text(manifest, encoding="utf-8")
     staging = f".staging_{batch_ts}"
+    # B2 原子性 + G(A)：staging 全用 sudo（incoming 属主 league，ubuntu 非 league 组无写权）
+    # tar 解到 staging → 逐 topic mv → 清 staging。整链 && 传递 rc（数据落盘失败则 r2 rc!=0，不写 .done）
     remote_cmd = (
-        f"sudo -n mkdir -p {REMOTE_ROOT}/{HOST} && "
-        f"rm -rf {REMOTE_ROOT}/{HOST}/{staging} && "
-        f"mkdir -p {REMOTE_ROOT}/{HOST}/{staging} && "
-        f"sudo -n tar xzf {REMOTE_ROOT}/{HOST}/out.tar.gz -C {REMOTE_ROOT}/{HOST}/{staging} && "
-        f"sudo -n rm {REMOTE_ROOT}/{HOST}/out.tar.gz && "
+        f"sudo -n rm -rf {REMOTE_ROOT}/{HOST}/{staging} && "
+        f"sudo -n mkdir -p {REMOTE_ROOT}/{HOST}/{staging} && "
+        f"sudo -n tar xzf /tmp/out.tar.gz -C {REMOTE_ROOT}/{HOST}/{staging} && "
+        f"sudo -n rm /tmp/out.tar.gz && "
         f"for t in {' '.join(topics)}; do "
         f"  sudo -n mkdir -p {REMOTE_ROOT}/{HOST}/$t; "
         f"  for f in {REMOTE_ROOT}/{HOST}/{staging}/$t/*; do "
-        f"    [ -f \"$f\" ] && sudo -n mv \"$f\" {REMOTE_ROOT}/{HOST}/$t/; "
+        f"    [ -e \"$f\" ] || continue; "
+        f"    sudo -n mv \"$f\" {REMOTE_ROOT}/{HOST}/$t/ || exit 1; "
         f"  done; "
-        f"done; "
+        f"done && "
         f"sudo -n rm -rf {REMOTE_ROOT}/{HOST}/{staging} && "
         f"sudo -n chown -R league:league {REMOTE_ROOT}/{HOST}")
     # scp 包 + .done 到远端 /tmp
