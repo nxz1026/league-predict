@@ -1,7 +1,6 @@
-"""统一「取一次远程 → 落 raw 块」内核：缓存优先、失败也落块、只对网络异常与 5xx 退避重试。
-只有 http_status=200 的成功块算「已取过」（DB 侧 partial unique 只锁 200，失败块重跑会再请求、再留证）；顺序 =
-守卫(提交权) → HTTP → quota.charge → INSERT raw（落块失败必须点名，重跑会再花 1 次）；预检剩余 0 抛
-QuotaExceeded 绝不先发请求；账本按逻辑请求计 1 ⇒ raw 行数 = 账本增量；fetch 返回 (status, body)。"""
+"""统一「取一次远程 → 落 raw 块」内核：缓存优先、失败也落块、只对网络异常与 5xx 退避重试（成功块判定见 cached）。
+顺序 = 源开关 → 缓存 → 预检 → 守卫(提交权) → HTTP → quota.charge → INSERT raw（落块失败必须点名，重跑会再花 1 次）；
+预检剩余 0 抛 QuotaExceeded 绝不先发请求；账本按逻辑请求计 1 ⇒ raw 行数 = 账本增量；fetch 返回 (status, body)。"""
 
 from __future__ import annotations
 
@@ -19,13 +18,14 @@ from urllib.parse import urlencode
 from psycopg import Connection, pq, sql
 from psycopg.types.json import Jsonb
 
+from config import source_policy, spend_allowed
 from core.constants import TIMEOUT_API_FOOTBALL, TIMEOUT_FOOTBALL_DATA
 from core.log import logger
 from ingest import quota
 
-SOURCES: dict[str, tuple[str, str, int]] = {  # source → (key 环境变量, 鉴权头, 超时秒)
-    "api_football": ("API_FOOTBALL_KEY", "x-apisports-key", TIMEOUT_API_FOOTBALL),
-    "football_data": ("FOOTBALL_DATA_API_KEY", "X-Auth-Token", TIMEOUT_FOOTBALL_DATA)}
+SOURCES: dict[str, tuple[str, str, int]] = {  # source → (key 环境变量, 鉴权头, 超时秒)；key 名唯一出处是 config
+    "api_football": (source_policy("api_football").key_env, "x-apisports-key", TIMEOUT_API_FOOTBALL),
+    "football_data": (source_policy("football_data").key_env, "X-Auth-Token", TIMEOUT_FOOTBALL_DATA)}
 RAW = {"af_raw": sql.Identifier("raw", "af_raw"), "fd_raw": sql.Identifier("raw", "fd_raw")}
 RETRY_DELAYS, RETRY_STATUS = (5, 15, 45), frozenset({0, 500, 502, 503, 504})  # 0=网络层；其余绝不重试
 CACHED_SQL = sql.SQL("SELECT http_status, body FROM {} WHERE params_hash = %s AND http_status = 200")
@@ -70,15 +70,15 @@ def _http(source: str, endpoint: str, params: dict[str, Any]) -> tuple[int, Any]
         time.sleep(RETRY_DELAYS[attempt])
 
 def _guard(conn: Connection) -> None:
-    """发请求之前的提交权守卫（本单根因，OMP-SKILL §9-19）：非 autocommit 连接上，上方 cached()/remaining() 的
-    SELECT 已经开了隐式事务 ⇒ 外层 conn.transaction() 降级成 SAVEPOINT、RELEASE 不是提交 ⇒ 关连接整体回滚。"""
+    """发请求前的提交权守卫（§9-19）：非 autocommit 上 cached() 的 SELECT 已开隐式事务 ⇒ transaction() 降级成 SAVEPOINT、RELEASE 不是提交。"""
     if not conn.autocommit and conn.pgconn.transaction_status != pq.TransactionStatus.IDLE:
         raise RuntimeError("提交权不可降级：要么 autocommit，要么在 IDLE 上开事务"
                            f"（当前 status={conn.pgconn.transaction_status}，IDLE={pq.TransactionStatus.IDLE}）")
 
 def fetch(conn: Connection, *, source: str, table: str, endpoint: str, params: dict[str, Any],
           cap: int) -> tuple[int, Any]:
-    """缓存优先取一次并返回 (status, body)；命中成功块即零请求零配额，越界在发请求之前抛 QuotaExceeded。"""
+    """源开关最先（关闭的源零请求零写库，连缓存都不读）；随后缓存优先；命中成功块即零请求零配额，越界先抛。"""
+    spend_allowed(source)  # README §2-D9：关闭/未放行的付费源在取 key 与动库之前就炸，账本与 raw 均不动
     ph = params_hash(source, endpoint, params)
     if (hit := cached(conn, table, ph)) is not None:
         return hit

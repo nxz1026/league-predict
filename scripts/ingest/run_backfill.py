@@ -1,7 +1,6 @@
-"""P0-backfill 编排：五联赛 × 2022-2024 赛季，AF/FD 各 15 条；默认只读 --plan（零 HTTP），--execute 才发请求。
---execute 每条一个真事务：进事务块前先钉死 autocommit，否则 SELECT 的隐式事务会让它退化成 SAVEPOINT（§9-19）；
-两源免费档都限 10 req/min ⇒ 条间 sleep 7s；配额到点或收到 429 即正常收工；收尾自审「发出 N/落块 M/命中 K」，M != N 即点名。
-"""
+"""P0-backfill 编排：五联赛 × 2022-2024 赛季，AF/FD 各 15 条；默认只读 --plan（零 HTTP），--execute 才发请求；每条一个
+真事务（进块前钉死 autocommit，否则 SELECT 的隐式事务会让它退化成 SAVEPOINT，§9-19）；两源免费档都限 10 req/min ⇒ 条间
+sleep 7s；配额到点或 429 即正常收工；收尾自审「发出 N/落块 M/命中 K」，M != N 即点名；策略表/--allow-paid 见 config。"""
 
 from __future__ import annotations
 
@@ -12,6 +11,7 @@ from contextlib import closing, nullcontext
 
 from psycopg import Connection, sql
 
+from config import allow_paid_once, describe
 from core.leagues import LEAGUE_CONFIG
 from core.log import logger
 from ingest import api_get, quota
@@ -20,8 +20,7 @@ from store import pg
 SEASONS = ("2022", "2023", "2024")
 SOURCES: dict[str, tuple[str, str, int, str, str]] = {  # cli 名 → (source, raw 表, cap, id 字段, 端点模板)
     "af": ("api_football", "af_raw", 100, "api_football_id", "https://v3.football.api-sports.io/fixtures"),
-    "fd": ("football_data", "fd_raw", 30, "league_id",
-           "https://api.football-data.org/v4/competitions/{code}/matches")}
+    "fd": ("football_data", "fd_raw", 30, "league_id", "https://api.football-data.org/v4/competitions/{code}/matches")}
 PAUSE_S, DEFAULT_LIMIT, MAX_LIMIT = 7, 10, 20  # 两源免费档均 10 req/min（实测第 11 条起 429；AF 另限 100/天）
 PROBE = {t: sql.SQL("SELECT 1 FROM {} WHERE params_hash = %s").format(i) for t, i in api_get.RAW.items()}
 
@@ -40,8 +39,7 @@ def plan_rows(sources: tuple[str, ...] = ("af", "fd"), seasons: tuple[str, ...] 
 
 def run(conn: Connection, rows: list[dict], *, dry: bool, limit: int) -> int:
     """dry 只打印「待取/已有」零 HTTP；否则每条一个真事务取数并落 raw，429/配额到点即收工（0）/真异常（1）。"""
-    if not conn.autocommit:  # §9-19 根因：非 autocommit 时上面的 SELECT 已开隐式事务，事务块会退化成 SAVEPOINT
-        conn.autocommit = True
+    if not conn.autocommit: conn.autocommit = True  # §9-19 根因：非 autocommit 时上面的 SELECT 已开隐式事务
     if dry:  # 只读：逐条标「待取/已有」
         for row in rows:
             logger.info(f"{row['node']} {'已有' if api_get.cached(conn, row['table'], row['hash']) else '待取'}")
@@ -82,19 +80,21 @@ def main(argv: list[str] | None = None, conn: Connection | None = None) -> int:
     ap.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help=f"--execute 单轮上限（默认 {DEFAULT_LIMIT}）")
     ap.add_argument("--source", choices=("af", "fd", "all"), default="all", help="只跑一源，默认两源")
     ap.add_argument("--seasons", default=",".join(SEASONS), help="逗号分隔赛季，默认 2022,2023,2024")
+    ap.add_argument("--allow-paid", action="store_true", help="单次放行付费源：写进程内 env LEAGUE_ALLOW_PAID=on，不落 .env")
     args = ap.parse_args(argv)
+    if args.allow_paid: allow_paid_once()
     with (closing(pg.connect("ing")) if conn is None else nullcontext(conn)) as conn:
-        # 拿到连接立刻钉死提交权（本单根因，OMP-SKILL §9-19）：非 autocommit 时 cached()/remaining() 的 SELECT 先开隐式
-        # 事务 ⇒ 后面 conn.transaction() 退化成 SAVEPOINT、RELEASE 不是提交 ⇒ 关连接整体回滚（15 次请求无痕蒸发）。
-        if not conn.autocommit:
-            conn.autocommit = True
+        # 拿到连接立刻钉死提交权（本单根因 §9-19）：非 autocommit 时 cached() 的 SELECT 先开隐式事务 ⇒ conn.transaction()
+        # 退化成 SAVEPOINT、RELEASE 不是提交 ⇒ 关连接整体回滚（15 次请求无痕蒸发）；run() 里同一处置，两处都不可少。
+        if not conn.autocommit: conn.autocommit = True
         rows = plan_rows(("af", "fd") if args.source == "all" else (args.source,),
                          tuple(s.strip() for s in args.seasons.split(",") if s.strip()))
         if args.execute:
             return run(conn, rows, dry=False, limit=min(max(args.limit, 0), MAX_LIMIT))
+        for row in describe():  # 策略表（README §2-D9）：关闭的源在计划顶部就看得见，why 点名控制的 env 变量
+            logger.info(f"[策略] {row['source']} {'可用' if row['spend'] else '关闭'} cap={row['daily_cap']} {row['why']}")
         for src, _, cap, _, _ in SOURCES.values():
             logger.info(f"{src} 今日剩余 {quota.remaining(conn, dt.date.today(), src, cap)}/{cap}")
         return run(conn, rows, dry=True, limit=0)
-
 if __name__ == "__main__":
     raise SystemExit(main())
