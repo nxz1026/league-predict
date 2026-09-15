@@ -1,0 +1,31 @@
+【项目】league-v2（规范 ~/league-v2/README.md §2-D7；教训来源 OMP-SKILL §9-25 与 §5"派单纪律 4/5"）
+【本单定位】**只修测试，不改生产代码**：`tests/test_backfill_plan.py` 里 3 条用例**依赖真库存量**，队长 2026-09-15 真跑回填（raw 落了 25 块、账本涨到 29/100）之后当场变红。
+  这不是 coder 写错，是**我验收时的漏洞**：当时 raw 是空的，"待取==30"、"发出 3 条"、"配额耗尽即抛 QuotaExceeded" 三条断言**恰好成立**。
+  现在实测失败原文（队长逐字复跑）：
+    FAILED tests/test_backfill_plan.py::test_plan_mode_is_read_only_then_marks_cached   assert ([] == [] and 5 == 30)   ← 库里已有块，"待取" 只剩 5
+    FAILED tests/test_backfill_plan.py::test_execute_respects_limit_and_fd_pacing       assert (0, []) == (3, [7, 7])   ← 全命中缓存，一条都没发
+    FAILED tests/test_backfill_plan.py::test_quota_exhausted_is_clean_shutdown          Failed: DID NOT RAISE QuotaExceeded ← 真账本还剩 71
+【任务】1 个文件（**就一个**）：改 `tests/test_backfill_plan.py`
+  · 三条用例改成**与真库存量无关**，两种手段二选一（都用上更好）：
+    (a) `monkeypatch.setattr(api_get, "cached", ...)` 返回可控值（None=待取 / 字典=已有），`monkeypatch.setattr(quota, "remaining", ...)` 控制余额；
+    (b) 计划行**不用 monkeypatch 而用不可能存在的输入**（例如 `season="2099"`，队长取证就用过这个哨兵值），断言用**相对量**（"发出的条数 == len(计划)"），绝不写死 30/3/71 这类会被真数据改动的数。
+  · **不许**改成"先清空 raw/账本再跑"：`league_ing` 对 `raw.` 无 DELETE、对 ops 无 TRUNCATE，任何清库思路都是错的（也不许提 DDL）。
+  · **不许**放宽断言把问题藏起来：`--plan` 零 HTTP、429 立即收工、两源 7s 限速、limit 生效这四件事**必须仍然被钉住**（用 stub 的计划去钉）。
+  · 保留既有的 `--source af/fd`、`QuotaExceeded` 正常收尾语义用例；只动这 3 条 + 必要的 fixture/helper。
+【同类隐患顺手排查（写进 report，不许动其它文件）】grep 整个 tests/ 找其它"依赖真库存量"的断言：
+  形如 `assert count(*) == <字面量>`、`== 30`、`remaining(...) == <字面量>`、假设 `fact.*`/`raw.*`/`ops.quota_ledger` 为空/为某值的用例，
+  列成清单（文件:行 + 为什么脆 + 建议改法），我看完决定是否另开单。**只列不改**。
+【铁律】① 禁 git；② 禁 print（测试里的 assert 正常）；③ 禁改任何 `scripts/**` 生产文件（本单纯测试单）；
+  ④ 新/改文件 ≤100 行、函数 AST ≤50 行、单行 ≤120 列；自检 0 违规：
+     `python3 ~/bin/omp-ast-check.py tests/test_backfill_plan.py`；禁 psycopg 之外的新依赖；**测试仍不许真联网**（代理绊线自证，见 §9 派单纪律 4）；
+  ⑤ `~/bin/omp-ast-check.py`、`~/bin/league-accept.sh` 只读禁改；
+  ⑥ **不许假设任何表是空的**（现在真实存量：`fact.fixture` 5341 / `fact.fixture_result` 5341 / `ref.team` 164 / `ref.league` 5 / `raw.af_raw` 15 / `raw.fd_raw` 15，其中 5 块 403）；
+  ⑦ 完成后写 `.omp-logs/P0-BACKFILL1c.report.txt`（三条用例的**改前/改后断言对照** + 全量 pytest 原始输出 + 同类隐患清单），然后 `echo TASK_DONE > .omp-logs/P0-BACKFILL1c.done`
+【必须成立】`python -m pytest tests -q` 的**准确终值 = 305 passed、零 FAILED**（队长实测：本单开工前是 `3 failed, 302 passed` ＝共 305 条；
+  修好这 3 条即 305 全绿；快档同理 **231 passed**（现为 `3 failed, 228 passed`）。
+  ⚠️ 若你算出的总数与 305 不符，**以"不增删用例"为前提**回报差异；
+  **绝对不许为了让数字变小而删掉任何用例或断言**（那是我最盯的三诈之一：删函数充拆分/无关回退）。
+【边界】若发现某条断言在 stub 之后已经测不到它原本想测的东西（比如限速被 stub 掉了 sleep 就没意义），**在报告里写清楚并给出替代断言**，不许静默删用例。
+【验收（队长逐字复跑）】
+  bash ~/bin/league-accept.sh P0-BACKFILL1c tests/test_backfill_plan.py
+  # 关键复证：队长在**真数据已入库**的状态下复跑全量，必须绿（这正是本单存在的理由）

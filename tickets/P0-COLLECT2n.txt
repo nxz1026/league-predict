@@ -1,0 +1,34 @@
+【项目】league-v2（§2-D7 ≤100 行/文件；§9：报告用锚点、禁 git、禁 print）
+【这一单：一行代码都不许改，只许跑，把证据跑出来交回来】
+ 上一单 `P0-COLLECT2m` 你把 E4/E5/E6 三处都改对了（队长 23:26Z 用 `jc-cols-check.py` + `omp-ast-check.py` 独立复验：三行全 ✔、0 违规、文件 100 行）。
+ 之后 T1 卡住的第 4 颗 **E8 是我（队长）的 DDL 错误**：`fact.jc_result.match_id` 上有 FK → `fact.jc_match`，
+ 但实测 **在售 17 场与赛果 15 场的 matchId 交集 = 0**（赛果是"已完场"、在售是"未开售"，两拨不相交的场次）⇒ FK 永不可满足。
+ ⇒ **队长已于 23:31Z 执行 `ALTER TABLE fact.jc_result DROP CONSTRAINT jc_result_match_id_fkey`**（DDL 是队长的活）。
+ 队长 23:32~23:36Z 自己跑过完整一轮，结果**全绿**（原文见 `.omp-logs/` 与本单 T 表）：旧包 `17/170/15` + gap 8 + `170/17/2` + 第二遍一字不变；
+ 混包（5 批）`17/250/15` + `250/17/4` + arrival 35 + gap 8 + 第二遍一字不变。**但你没交回报告和哨兵**（我 23:32 把你停了，责任在我）。
+【本单唯一目的】在**当前库状态**上把我已经跑过的东西**复跑一遍并交回证据**。**禁止修改任何文件**（`git status` 里三个 ingest 文件必须与你接手时一字不差）。
+
+【必须成立——全部只跑，不许改】
+ T1 `cd /home/ubuntu/league-v2/repo && source ~/.venvs/league/bin/activate && PYTHONPATH=scripts python scripts/ingest/jc_load.py --dir /tmp/incoming_all`
+    → 最后一行必须 `jc_match=17 jc_offer=250 jc_result=15 jc_issue=0 jc_issue_draw=0 jc_issue_match=0 jc_issue_prize=0 lottery_draw=0`
+    且**五行 batch 日志全部 `errors=[]`**
+ T2 **同命令第二遍**：count 一字不变（幂等）
+ T3 `sudo -n -u postgres psql -d league -Atc "select count(*)||'/'||count(distinct match_id)||'/'||count(distinct snap_ts) from fact.jc_offer"` → **`250/17/4`**
+ T4 `sudo -n -u postgres psql -d league -Atc "select count(*)||'/'||count(*) from ops.file_arrival"` 之外，还要
+    `sudo -n -u postgres psql -d league -c "select done_marker, count(*) filter (where src_file like '%#MISSING%') gaps, count(*) n from ops.file_arrival group by 1 order by 1"`
+    → **`#MISSING` 合计 8 条**、`ops.file_arrival` 合计 **35 行**（5 批 × 7 topic）
+ T5 `python3 ~/bin/omp-ast-check.py scripts/ingest/jc_write.py scripts/ingest/jc_load.py scripts/ingest/jc_read.py` → **0 违规**
+ T6 `python3 ~/bin/jc-cols-check.py scripts/ingest/jc_write.py` → 三行全 ✔、结论"全通过"
+ T7 `PYTHONPATH=scripts python -m pytest tests -q` → **428 passed / 0 failed**
+ T8 `md5sum scripts/ingest/jc_write.py scripts/ingest/jc_load.py scripts/ingest/jc_read.py` 并**与开工时逐字对比**（开工先跑一次存底，收工再跑一次）
+    ⇒ 三行 md5 **必须一模一样**（不一样就是你偷改了，直接拒收）：
+      `1aaa53e0d165a28ec826889abbc5f0d5  scripts/ingest/jc_write.py`
+      `f2a5234154cbdb3b244707a00dd57b5e  scripts/ingest/jc_load.py`
+      `ac04f9e72008c6835aa79ee8b495e3c0  scripts/ingest/jc_read.py`
+【不许做】改任何源文件（含注释）；改 DDL；改测试；跑真联网；`truncate`/`delete`（你没那权限，也别试）；动 `/tmp/incoming`（那是旧包口径，本单只用 `/tmp/incoming_all`）。
+【铁律】① 禁 git；② 禁 print；③ 报告 `.omp-logs/P0-COLLECT2n.report.txt`：**T1~T8 的原始命令 + 原始输出逐条贴**，
+ 开头写一行结论（全绿/哪条不绿）；④ 只有 T1~T8 全绿才 `echo TASK_DONE > .omp-logs/P0-COLLECT2n.done`
+【边界】任何一条与期望不符：**贴原文 + 停下**，不要为了让数字好看去改代码或改库。这一单**跑不绿也是有价值的证据**，照实贴就行。
+【验收（队长逐字复跑）】
+  bash ~/bin/v2b-check.sh
+  bash ~/bin/league-accept.sh P0-COLLECT2n scripts/ingest

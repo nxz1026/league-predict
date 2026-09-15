@@ -1,0 +1,52 @@
+【项目】league-v2（规范 README §2-D2「CLV 是核心评价指标」；设计 §6 取数口径；教训 §9-33「返回值即证据」、§9-36「真跑才算数」）
+【前置状态（队长 13:40Z 实测，你复跑应一致）】`model.pred_run/pred_fixture/pred_market` 将由 P0-MODEL2 重跑填满：
+  10 个 (联赛,赛季) run、**3504 场** pred_fixture、**175200 行** pred_market（每场 had 3 + crs 31 + ttg 8 + jqc 8 = 50 行）；
+  其中 942 场走"升班马联盟平均先验"兜底（`pred_fixture.features->'fallback'` 有标记）、2 场 ρ 被收缩（`features.rho_eff`）。
+  label 侧：`fact.fixture_result` 5341 场（AF 口径），两源双核对齐 3481 场，`v_result_conflict` 2 条（已知，不影响本单）。
+【任务】把"预测 vs 真结果"落到可重算的分析层，产出**第一批真实模型质量数字**。3 个文件：
+  1) 【新】scripts/model/backtest.py     纯计算 + 写库分离，≤100 行：
+       · `score_options(rows) -> dict`  给定 (p_pred, outcome) 序列，返回 `{"brier": …, "log_loss": …, "hit": …, "n": …, "eps": …}`
+         - **Brier（多类）** = Σ_i (p_i − o_i)² ，o 为 one-hot；每个 (fixture, play_type) 内所有 option 都要进和（含未中奖项）
+         - **log_loss** = −ln(max(p,eps))；**eps 必须是显式参数**（默认 1e-6）且**写进返回值**（p=0 是真出现的：ρ 收缩前的 1:1 格、以及 crs 里官方不开盘的档）；不许悄悄 clamp
+         - `hit` = argmax(p) 是否中奖；平局/多档玩法都按"最大概率选项"判，**不许**用"命中任一非零概率"这种自欺口径
+         - n=0 ⇒ 返回 `{"n":0}` 而不是崩；单选项（n_option==1）⇒ brier/log_loss 全 0 且 `degenerate: true`
+       · `run(conn, src_run) -> dict`  一个 run 的回测：读 pred_market + label ⇒ 逐 (fixture,play,option) 写 `analysis.backtest_market`
+         （列 `p_pred, outcome smallint 0/1, clv, src_run`），**`clv` 一律写 NULL**（无官方收盘价来源，P0-MODEL2 之后才有盘口时序；
+         宁缺毋假：**绝不允许写 0.0 占位**，会被 README §2-D2 的 CLV 指标当真）。返回值给计数：`{run_id, n_rows, n_fixtures, plays:{…}, no_label:…}`
+       · label 谓词**必须照抄** `store/query.py` 里的训练谓词（`r.source='api_football' AND f.status='ft' AND f.round <> 'Relegation Round'`），
+         不许自己另写一套；无 label 的场 **计入 skipped 并返回计数**，不许静默丢
+  2) 【改】scripts/store/query.py    新增只读汇总 `backtest_report(conn, *, src_run=None, league_key=None) -> list[dict]`：
+       按 (run, play_type, **fallback 分组**) 出 `n_fixtures, brier_mean, log_loss_mean, hit_rate`；
+       fallback 分组 = `pred_fixture.features->'fallback'` 是否非空（真升班马 vs 拟合队），**这是本单最重要的输出**：
+       兜底场若明显差于拟合场，说明"联盟平均先验"该换成合并多季训练。参数缺省＝全量（§9-33：读全局必须能给范围）。
+  3) 【新】tests/test_model_backtest.py    纯合成用例（不许依赖真库存量，一切断言用相对量或字面小表）：
+       ① 手算可核：3 选项 {0.6,0.25,0.15} 中奖 home ⇒ brier=0.275、hit=1；中奖 away ⇒ brier=1.105、hit=0
+       ② p=0 中奖 ⇒ log_loss 恰 = −ln(eps)（eps 传 1e-3 ⇒ 6.907755…），且返回值里 eps 回显
+       ③ 全对 {1.0,…} ⇒ brier=0、log_loss=-0 ⇒ 0；单选项退化 ⇒ `degenerate`
+       ④ n=0 ⇒ 不崩；⑤ `run()` 对回滚事务内造的 1 个假 run 写满 4 玩法并返回正确计数、`clv IS NULL` 全行成立
+【必须成立】
+  T1 `python -m pytest tests -q` → 零 FAILED 零 SKIPPED（用例数只增不减）
+  T2 `analysis.backtest_market` 中 **`clv IS NOT NULL` 的行数 = 0**（现在还没有收盘价，出现非 NULL 就是造假）
+  T3 `outcome` 只允许 0/1（DDL 有 CHECK），且每个 (fixture, play_type, src_run) 内 `sum(outcome) = 1`（恰一个中奖项）
+     ⇒ **`jqc` 例外必须处理**：jqc 两侧共 8 档，一侧恰一个 ⇒ `sum(outcome)` 按 (fixture,play,侧别前缀) 恰 1，两行侧合计 2。写进用例钉住。
+  T4 汇总函数对**空库**与**只有兜底场**两种状态都能出结果（不 ZeroDivisionError）
+  T5 真跑（队长执行）：10 个 run 全量回测 ⇒ 公布 had/crs/ttg/jqc 各自 brier、hit_rate、以及**兜底场 vs 拟合场分组对照**；
+     若某玩法样本内 `hit_rate` 显著低于"均匀猜测"（crs 1/31、ttg 1/8、jqc 1/8、had 1/3），**必须如实报出来**，不许挑好看的报
+【铁律】① 禁 git；② 禁 print（`core.log.logger`）；③ 机械搬移禁改逻辑/数值/顺序；④ 报告用锚点；
+  ⑤ 单文件 ≤100 行、AST 函数 ≤50 行、单行 ≤120 列，自检 0 违规：
+     `python3 ~/bin/omp-ast-check.py scripts/model scripts/store/query.py tests/test_model_backtest.py`；
+     禁新依赖（**不许 import numpy/scipy/pandas**，本机没有，全 stdlib）；`psycopg` 只准在 `scripts/store/`、`scripts/ingest/`
+     （model 层通过 `store.pg` 拿连接，沿用 model/walk.py 的写法）；
+     禁改 DDL/表结构（`analysis.backtest_market` 现有列够用；缺列就写进报告让队长加，别自己 ALTER）；
+     禁改 `scripts/core|derive|market/**` 与 `model/{fit,walk}.py`（只准 import）；
+     `analysis` 层是**可重算层**，league_app 有 INSERT/UPDATE/DELETE ⇒ 你的 `run()` 必须幂等（同一 src_run 重跑先删本 run 旧行再写，
+     且**只删自己 src_run 的行**，别的全局 DELETE 一律禁止）；
+  ⑥ 禁真联网；⑦ `~/bin/omp-ast-check.py`、`~/bin/league-accept.sh` 只读禁改（改工具＝拒收）
+  ⑧ 完成后写 `.omp-logs/P0-BACKTEST1.report.txt`（T1~T5 原始输出 + 你对"均匀猜测对照"的算法说明 + 复核"还有哪些地方可能在算指标时偷偷美化"清单**只列不改**），
+     然后 `echo TASK_DONE > .omp-logs/P0-BACKTEST1.done`
+【基线】开工前跑全量记数（队长 13:45Z：P0-MODEL2 落地后基线以他报告为准，别拿 392 当准绳）。
+【边界】若你发现 `jqc` 两侧编码与 T3 的"恰一个中奖项"真的冲突（例如官方一期内两侧都判错），**停下来写报告**，别放宽断言。
+【验收（队长逐字复跑）】
+  bash ~/bin/league-accept.sh P0-BACKTEST1 scripts/model tests/test_model_backtest.py scripts/store/query.py
+  # 队长另做：清空 analysis.backtest_market（可重算层，我用 league_app 权限）→ 10 个 run 全量回测 →
+  #   复算 had 的 brier（我另写独立脚本逐场手算 30 场对照）+ 抽 3 场 jqc 核 sum(outcome)=2

@@ -1,0 +1,85 @@
+【项目】league-v2（§2-D7 ≤100 行/文件 硬红线；§9：报告用锚点、禁 git、禁 print）
+
+【🅐 第一动作（违反即判失败）】**先创建文件、后读代码**：
+ 1. 立刻新建 `scripts/ingest/jc_load.py`，写 argparse 骨架（`--dir`（必填）+ `--batch`（可选）），空实现 + `logger` 一行；
+ 2. 然后才允许读下面【🅓 真包**实际布局**（队长 20:41Z 逐目录核过；**网上文档写的"批目录"与现实不符，以本节为准**）】
+· 根目录 `/tmp/incoming/` 下是 **7 个 topic 子目录** + **根级的 `.done` 标记文件** + 一个 `probe_pack.tar.gz`（忽略它）：
+    `jc_issue/  jc_issue_result/  jclq_offer/  jclq_result/  jczq_offer/  jczq_result/  lottery_draw/`
+    `2026-09-15T14-40-02Z.done   2026-09-15T15-03-45Z.done   2026-09-15T15-16-32Z.done`
+· **数据文件名 = `2026-09-15T14-35Z__001.jsonl`（或 `.empty`）= 采集分钟的 UTC 时间 + 序号**；
+  ⚠️ **`.done` 的名字（14-40-02）与数据文件名（14-35Z）对不上**——标记是"上传完成时刻"，文件是"采集时刻"，**两者相差 4 分钟，没有任何名字关联**。
+· 因此**批 ↔ 文件的唯一可靠关联 = 时间**：一个 `.done` 覆盖"它出现之前已存在的所有数据文件"。⇒ 规定算法（照抄，别自创）：
+    1) 列出根目录所有 `.done`，按文件名时间**升序**；
+    2) 每个 topic 目录下所有 `*.jsonl` / `*.empty` 按 **mtime** 排序；
+    3) **文件 mtime ≤ 该 `.done` mtime ⇒ 属于这批**；已被前一批处理过的（`ops.file_arrival` 里 `src_file` 已存在）**跳过**；
+    4) `--batch <名字>` 给定时只处理该标记覆盖、且**尚未登记**的文件。
+· `.empty` 表示"官方明确为空"（≠ 缺席）；**缺席** = 该 topic 在这一批既无 `.jsonl` 也无 `.empty` ⇒ 必须记 gap。
+  实测：`15-03-45Z` 批只有 `jczq_offer`/`jclq_offer(.empty)`；`15-16-32Z` 批缺 `jczq_offer`/`jc_issue`/`jclq_offer`。
+· 每行外壳的 `snap_ts` **在同一 topic 文件内相同、跨 topic 不同**（实测 14:35:37 / :39 / :40 / :45 / :49 五个值）⇒ 别假设全批一个 `snap_ts`。
+
+【🅑 只准读这些】列出的东西；
+ 3. 之后**每写完一个函数就跑一次** `PYTHONPATH=scripts python scripts/ingest/jc_load.py --dir /tmp/incoming --batch 2026-09-15T14-40-02Z`，
+    报错就地修。**不许"全部读完再动手"**——上一位工人 40 分钟 0 改动，就是这么废掉的（队长会看日志时间戳）。
+
+【🅑 只准读这些（别的一个文件都不许打开）】
+ · `scripts/ingest/jc_write.py` 全文（105 行，上一位工人留下的半成品，**本单要修它**）
+ · `scripts/store/parse_collector.py` 第 1-40 行（外壳校验 + `parse_line` 分派，只需知道返回结构）
+ · `scripts/ingest/collector_pull.py` 第 40-99 行（既有 CLI 的写库/归档/logger/ingest_log 模式，照抄风格）
+ · `docs/db/infra_p0_8_jc_tables.sql`（八表 DDL，只查列名）
+ · `tests/test_parse_collector_issue.py` 第 59-70 行（只为 D0 那一处）
+ · 不许读：`scripts/core|derive|market|web/**`、`tests/**` 其它文件、`scripts/store/parse_jczq|parse_jcissue|parse_misc|parse_values`
+   （你**不需要**懂解析层——它的返回结构在 `jc_write.py` 里已经被上一位用得很清楚了）
+
+【这一单是什么】把真包 `/tmp/incoming`（3 批 450 行，world-readable，`--dir` 直接指它）**写入 `fact.jc_*` 八表**，并证明幂等。
+真值队长全算好了，**照抄，不要自己重新发明**：
+| 表 | 跑完 3 批后的行数 |
+|---|---|
+| `fact.jc_match` | **17** | `fact.jc_offer` | **170** | `fact.jc_result` | **15** |
+| `fact.jc_issue` | **7**（4 真期头 + 3 由 result 合成的父行） | `fact.jc_issue_draw` | **3** | `fact.jc_issue_match` | **62** |
+| `fact.jc_issue_prize` | **0**（真包 `prizeLevelList` 全空 ⇒ **一行都不许造**） | `fact.lottery_draw` | **120** |
+同一目录**连跑两遍，八表 count 逐表一字不变**。
+
+【要修的四处已核实缺陷（队长读代码读出来的，点名到行）】
+ D1 `jc_write.py:46-65` `_upsert()`：`where` 是**纯文本拼列名比较**（没有 `%s` 占位符），却又 `params.extend(row.get(g) for g in gates)`
+    并 `row.get("where_note")`（**全树没有这个键**）⇒ 参数数量必不匹配，一跑就炸。**修法**：gates/extra_where 不进 params；删掉 `where_note` 那行。
+ D2 `jc_write.py:84-92` `upsert_jc_offer()`：**`snap_ts` 没进 `cols`**（它是 PK 成员、NOT NULL）⇒ 真跑必违反非空约束。
+    请对**每张表**自查"PK 列在不在 cols 里"。
+ D3 `jc_write.py:35-43` `_team()` 查 **`ref.team.jc_id` —— 该列不存在**（`ref.team` 只有 `team_id/sport/name_cn/aliases` + 生成列 `af_id/fd_id`）。
+    ⇒ 改成 `WHERE (aliases->>'sporttery') = ANY(%s)`（**text 比较**，把 id 转 str 传）。今晚真包 34 队**全部对不上是预期结果**
+    （`aliases ? 'sporttery'` 命中 0 行）⇒ `home_team_id/away_team_id` 全 NULL，**不许报错、不许当成失败、不许猜队伍**。
+ D4 删死代码全局 `INT`（`jc_write.py:14`）；首行 docstring 工单名拼写 `P0-COLECT2` → 改对。
+ D0（测试，只改这一处）`tests/test_parse_collector_issue.py:69` 的 `len(dash) > 0` 是上一位把 `== 2` **松绑**得来的 ⇒ 改成 **`len(dash) == 4`**
+    （队长 19:05Z 用夹具实算：`stakeAmount == "---"` 4 条、`stakeAmountFormat == "-1"` 4 条、两者同一批 ⇒ 4 是硬数）。
+
+ D5（队长 19:45Z **实测渲染确认**，比 D1 更致命）`jc_write.py:58` 把 WHERE 子句包成了 **`sql.Literal(clause)`**
+    ⇒ psycopg3 会把字符串**当值加引号**：`sql.Literal(' WHERE a>=b').as_string(None)` 实测输出 `' WHERE a>=b'`（带单引号！）
+    拼出来的 SQL 变成 `... DO UPDATE SET x = EXCLUDED.x ' WHERE ...'` ⇒ **每次 insert 必语法错误**。
+    **修法**：那里改用 `sql.SQL(clause)`（`clause` 为空串时用 `sql.SQL("")`），其余不动。
+
+【五条硬规定（口径不许改，这是设计不是实现细节）】
+ 1 **父行先行**：`jc_issue_result` 的期头（90/26126、98/26180、94/26187）在 `jc_issue` 里**不存在**（真期头是在售那期 26127/26181/26188）⇒
+   3/3 全孤儿。用 result payload 自带的 `lotteryGameName/lotterySaleBeginTime/lotterySaleEndtime/lotteryDrawTime` + `matchList` 长度**合成最小父行**，
+   `raw_head` 存原 payload 并加 `"head_source":"jc_issue_result"`（就是这个拼写，别自创），**不许为此改 DDL**；后到的真期头**只补空列、不覆盖非空**。
+ 2 **写入语义** `ON CONFLICT (pk) DO UPDATE ... WHERE EXCLUDED.<gate> >= <table>.<gate>`（防旧批回退）；`league_ing` 在 fact **没有 DELETE** ⇒
+   全链路永不依赖删除；`fact.jc_issue_prize` 有 `is_current` 列，重刷同期时差集用 **UPDATE 置 false**（本单真包产 0 行，只需代码路径正确 + 测试覆盖）。
+ 3 **类型容错**：`""`/缺键/类型不对 ⇒ 一律 NULL（不许抛、不许当 0）；原始值保留在 jsonb/text（例：`lotterySaleEndTimeUnix` 两批分别是 `0` 和 `{}`）。
+ 4 **一 payload 两表**：`jczq_offer` 必须同时写 `jc_offer` 与 `jc_match`（用解析层返回的第 5 个键 `match`），只写一张＝失败；
+   `play_type` 用解析层归一值（官方 `hafu` → DDL `haf`），**不许再映射**。
+ 5 **入库不去噪**：两批之间"变化的 6 行"只是 `*f` 箭头归零、价格未变 ⇒ **照原样落两行**，不许在 load 阶段合并/丢弃（去噪是后续 CLV 单的读侧规则）。
+ 另：**批内缺 topic ⇒ 记 gap**（写 `ops.file_arrival`，PK `(topic, src_file)`，`src_file` 用 `批名/topic` 占位即可，列结构照 `\d` 别猜）；只认带 `.done` 的批。
+
+【必须成立】
+ T1 `PYTHONPATH=scripts python scripts/ingest/jc_load.py --dir /tmp/incoming` 真跑成功，八表 count **逐表对上上表**（队长会跑 `/tmp/v2b.sh` 复算）
+ T2 **同命令第二遍**：八表 count 与第一遍**一字不变**（把两遍的 count 都打进报告）
+ T3 `source ~/.venvs/league/bin/activate && PYTHONPATH=scripts python -m pytest tests -q` → **428 passed / 0 failed**（D0 改完不能掉总数）
+ T4 `ops.file_arrival` 里能看到 `2026-09-15T15-03-45Z`、`15-16-32Z` 两批的**缺席 topic** 记录（贴查询输出）
+ T5 每个新/改文件 ≤100 行：`python3 ~/bin/omp-ast-check.py scripts/ingest/jc_load.py scripts/ingest/jc_write.py tests/test_parse_collector_issue.py` → 0 违规
+【铁律】① 禁 git 一切子命令；② 禁 print（用 `core.log.logger`，照 `collector_pull.py` 的风格）；③ ≤100 行/函数 ≤50 行/≤120 列；④ stdlib + psycopg（仅 `scripts/ingest|store/`）；
+ ⑤ 禁改：`scripts/store/parse_*.py`（解析层一字不许动）、`tests/fixtures/**`、`scripts/ingest/collector_pull.py`、任何 DDL/建表/加列/GRANT、`/srv/league-staging/**`（你没权限）、真联网；
+ 测试里写库一律单事务 + 收尾 ROLLBACK（**T1/T2 的真跑是唯一允许的落盘留痕**）；
+ ⑥ 报告 `.omp-logs/P0-COLLECT2c.report.txt`（T1~T5 原始输出 + "哪几处我很想顺手改但没改"）+ `echo TASK_DONE > .omp-logs/P0-COLLECT2c.done`
+【边界】如果按上面五条写到某一步发现"必须改解析层/必须加列"才能继续，**立刻停下来在报告点名**（写清楚哪张表哪一列），队长裁决；
+ 不许为了跑通而放宽任何一条（尤其不许"先造几行 prize 把表填满"——那是事故）。
+【验收（队长逐字复跑）】
+  bash ~/bin/v2b-check.sh                                  # 独立真跑两遍 + oracle 逐表 count + gap + 让球线抽查
+  bash ~/bin/league-accept.sh P0-COLLECT2c scripts/ingest/jc_load.py scripts/ingest/jc_write.py tests/test_parse_collector_issue.py

@@ -1,0 +1,73 @@
+【项目】league-v2（§2-D7 ≤100 行/文件；§9：报告用锚点、禁 git、禁 print）
+【这一单是什么】只写一个文件：`scripts/ingest/jc_load.py`（真包 → `fact.jc_match/jc_offer/jc_result` 三表装载器）。
+【🅣 本单**禁止读仓库里的任何源码文件**】所需材料**全部内联在下面**（队长 20:45Z 抄自现网代码，与仓库一字不差）。
+ 你**只许**：① 读这一张工单；② 用 `psql`/`python3` 查数据库与 `/tmp/incoming`；③ 写 `scripts/ingest/jc_load.py`。
+ ⇒ 前两单的工人各花 25~40 分钟读代码然后超时作废。**本单没有可读的代码。开单第 1 分钟就要 write/edit。**
+
+【A. 依赖：照抄这三行就够用】
+```python
+from contextlib import closing
+from store import pg                      # pg.connect("ing") -> 裸 psycopg 连接（非 autocommit）
+from ingest import jc_write                # 见 C 的三个函数
+```
+ logger：`from core.log import logger`（用法 `logger.info("x: a=%s b=%s", a, b)`）；**不许 print**。
+ 解析：`from store.parse_collector import parse_line`；入参 = 一行 `json.loads` 后的 dict；返回 `None`（噪音/不认识的 topic）
+ 或 dict：`{"table":..., "pk":[...], "row":{...}, "notes":[...], "match":{...}}`（`match` **只有 `jczq_offer` 有**）。
+ 连接用法（现网 `collector_pull.py:95` 原样）：`with closing(pg.connect("ing")) as conn:` … `conn.commit()` / `conn.rollback()`。
+
+【B. 真包**实际布局**（队长 20:41Z 逐目录 `find`/`stat` 核过，以本节为准，文档 §6 的"批目录"写法与现实不符）】
+· `/tmp/incoming/` 根下 = 7 个 **topic 目录** + 3 个 **根级 `.done` 标记** + `probe_pack.tar.gz`（忽略）。
+· 数据文件名 = `<采集分钟>Z__NNN.jsonl` 或 `.empty`，例：`jczq_offer/2026-09-15T14-35Z__001.jsonl`。
+· `.done` 名字 = **上传时刻**，例 `2026-09-15T14-40-02Z.done`，与数据文件名**无任何关联**（实测差约 4 分钟）。
+· ⇒ 批↔文件唯一可靠关联是**时间**：`文件 mtime <= marker.stat().st_mtime` 即属这批（照抄，别自创）。
+· 同一 topic 文件内 `snap_ts` 相同，**跨 topic 不同**（实测 14:35:37/:39/:40/:45/:49）⇒ 不许拿 `snap_ts` 当批身份。
+· `.empty` = 官方明确为空（**不算 gap**）；某批某 topic 既无 `.jsonl` 也无 `.empty` = **gap，必须登记**。
+· 实测 gap：`15-03-45Z` 批只有 `jczq_offer` + `jclq_offer(.empty)`；`15-16-32Z` 批缺 `jczq_offer`/`jc_issue`/`jclq_offer`。
+
+【C. `jc_write` 现成的三个函数（**已修好，一个字都不许改，只需调用**）】
+```python
+upsert_jc_match(cur, row, snap, source, home, away) -> int    # row = parse_line 返回里的 "match"
+upsert_jc_offer(cur, row, snap, source) -> int               # row = parse_line 返回里的 "row"
+upsert_jc_result(cur, row, snap, source, home, away) -> int
+```
+ · `snap` = 该行的外壳 `snap_ts`（字符串，直接传，别转 datetime）；
+ · `source` = `{"src_hash": 外壳["src_hash"], "src_file": 相对路径}`，**`src_file` 固定 = 数据文件的相对路径**（例 `jczq_offer/2026-09-15T14-35Z__001.jsonl`），
+   **不许写绝对路径、不许写 `.done` 名**；
+ · `home/away` = `ref.team.team_id` 或 `None`：**本单直接传 `None, None`**（映射函数在 `jc_write` 内部另有 `_team()`，
+   今晚 `ref.team` 里没有带 `sporttery` 别名的行，**全 NULL 是预期结果，不许报错、不许猜队伍、不许为此写映射逻辑**）。
+【D. 两张 ops 表的列（`\d` 队长已跑，照抄）】
+· `ops.file_arrival(topic text, src_file text, arrived_at timestamptz default now(), bytes bigint, rows integer, done_marker boolean not null default false)`
+   **PK = `(topic, src_file)`**；写入一律 `ON CONFLICT (topic, src_file) DO UPDATE`；gap 的 `src_file` 固定写成
+   `<marker 去掉 .done 后缀>/<topic>#MISSING` 且 `done_marker = false`、`rows = 0`。
+· `ops.ingest_log(topic, src_file, rows_in, rows_ups, rejected, ok)`（`collector_pull.py:26` 的原样 SQL，直接抄）：
+   `INSERT INTO ops.ingest_log (topic, src_file, rows_in, rows_ups, rejected, ok) VALUES (%s,%s,%s,%s,%s,%s)`
+【E. 要实现的函数（签名照抄，只填实现）】
+ 1. `def iter_markers(root: Path, only: str | None = None) -> list[Path]`：根下 `.done` 按名升序；`only` 可带可不带 `.done` 后缀。
+ 2. `def files_for_batch(root: Path, marker: Path) -> dict[str, tuple[Path | None, str]]`：7 个 topic 各给 `(路径|None, "jsonl"|"empty"|"missing")`；
+    候选 = `root/<topic>/*.jsonl` ∪ `*.empty` 且 `mtime <= marker.stat().st_mtime`；同 topic 多个 ⇒ 按名升序取最后。
+ 3. `def read_lines(path: Path) -> list[dict]`：逐行 `json.loads`，**空行跳过**，任一行失败 ⇒ 直接抛（不吞、不跳坏行）。
+ 4. `def load_topic(cur, root: Path, marker: Path, topic: str, path: Path | None, state: str) -> dict`：
+    返回 `{"topic":topic,"lines":n,"ups":m,"gap":bool}`；`jczq_offer` ⇒ 每行**必须同时**调 `upsert_jc_offer` 与 `upsert_jc_match`（用 `match` 键，只调一个＝失败）；
+    `jczq_result` ⇒ `upsert_jc_result`；**其余 5 个 topic 本单一律不写**（属 2e 范围），但要 `logger.info` 打 `"skip <topic> n=<行数> (2e 范围)"`；
+    写完顺手 `arrival(...)`（D 的口径）+ 一条 `ingest_log`。
+ 5. `def load_batch(conn, root: Path, marker: Path) -> dict`：topic 顺序固定 `("jczq_offer","jczq_result","jc_issue","jc_issue_result","lottery_draw","jclq_offer","jclq_result")`；
+    **一个 `.done` = 一个事务**（异常 `rollback` 后继续下一批并把异常记进返回值 `{"errors":[...]}`）。
+ 6. `def main(argv: list[str] | None = None) -> int`：`--dir`（必填）`--batch`（可选）；**最后 `logger.info` 打一行**：
+    `count jc_match=17 jc_offer=170 jc_result=15 jc_issue=0 jc_issue_draw=0 jc_issue_match=0 jc_issue_prize=0 lottery_draw=0`
+    （八表都用 `SELECT count(*)`，表名顺序照抄；这行是队长核对的主要证据）。
+【F. oracle（真包三批全跑完，队长独立算好）】`jc_match` **17** · `jc_offer` **170** · `jc_result` **15** · 其余五张 **0**（2e 才管）。
+ 同一目录**连跑两遍，八表 count 一字不变**（幂等）。
+【必须成立】
+ T1 `PYTHONPATH=scripts python scripts/ingest/jc_load.py --dir /tmp/incoming` 跑通并打出 F 那行 count（对上 17/170/15/0×5）
+ T2 **第二遍**同命令：count 一字不变
+ T3 贴**落地证据**（不能只有 pytest）：`select count(*)||'/'||count(distinct match_id)||'/'||count(distinct snap_ts) from fact.jc_offer`（**期望正好 `170/17/2`**：`jczq_offer` 只在 14-35Z 与 15-03Z 两个文件里，各 85 行 ⇒ 170 行 / 17 场 / 2 个 snap_ts）
+    + `select topic,src_file,rows,done_marker from ops.file_arrival order by topic,src_file` 全表输出（**gap 行必须出现**）
+ T4 `PYTHONPATH=scripts python -m pytest tests -q` → **428 passed / 0 failed**（不许增删用例）
+ T5 `python3 ~/bin/omp-ast-check.py scripts/ingest/jc_load.py` → **0 违规**（≤100 行；装不下就砍掉本单不写的 topic 分支，**别加文件**）
+【铁律】① 禁 git；② 禁 print；③ ≤100 行/函数 ≤50 行/≤120 列；④ stdlib + psycopg；
+ ⑤ **只许写 `scripts/ingest/jc_load.py` 这一个文件**（`jc_write.py`/`parse_*.py`/`tests/**`/DDL/`/srv/**` 一律禁改）；
+ ⑥ 报告 `.omp-logs/P0-COLLECT2g.report.txt`（T1~T5 原始输出 + "偏离 E 的哪一条"——应为空）+ `echo TASK_DONE > .omp-logs/P0-COLLECT2g.done`
+【边界】做不到就**停下点名那一条**（例：某个函数签名与 C 不符、某行 `parse_line` 返回缺 `match` 键），**不许自行改别人的代码或放宽 oracle**。
+【验收（队长逐字复跑）】
+  bash ~/bin/v2b-check.sh
+  bash ~/bin/league-accept.sh P0-COLLECT2g scripts/ingest/jc_load.py

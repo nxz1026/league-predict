@@ -1,0 +1,62 @@
+【项目】league-v2（规范 README §2-D5/D7；教训 §9-27/§9-33/§9-34；口径见 docs/框架设计-全玩法覆盖-v2-20260915.md）
+【本单三件事，都是 P0-MODEL1 真跑之后**由真实数据逼出来的**，不是凭设想加的功能】
+  事实基线（队长 12:30~13:40Z 实测，你复跑应当对上）：身份键 P0-TEAMKEY1 + P0-TEAMKEY1 收尾（FD 队 id 跨键 38 行已按
+  "两源同一场锚点"搬到正确 AF 行，`ref.team` 122 行、行行有 af_id、孤儿 0、重复 0）之后，10 个 (联赛,季) 组合
+  可预测 **2562 场**、跳过 **942 场 = 26.9%**，跳过原因**已全部核实为真升班马**（身份问题归零）。
+  且真跑到 bundesliga 2024 **当场崩溃**（不是测试没覆盖，是我先跑了没覆盖到的季）：
+    ValueError: grid[1][1]=0.0 非法：概率须为有限正数
+    前置日志：tau_correction clamped to 0: tau=-0.1217 (h=1,a=1,λ_h=3.78,λ_a=1.49,ρ=0.200)
+  现场 = 拜仁慕尼黑 v 1899 Hoffenheim（λ=(3.78,1.49)）与反向那场（1.90,2.95）；全库只有这 **2/2562 = 0.08%** 触发。
+【根因（v1 内核的 τ 参数化 + v2 包装层口径不一致，二者都不许改行为，改的是"可达域"）】
+  `core/model/poisson.py::tau_correction`（**v1 冻结，本单禁改**）：τ(1,1) = 1 − ρ·λ_h·λ_a，ρ=DC_RHO=0.2 ⇒ 当 λ_h·λ_a ≥ 5 时 τ 变负，
+  内核的处理是 **warn 后 max(0.0, τ)** ⇒ P(1:1) 变成**精确 0**；而 v2 的 `derive/grid.py::renormalize/_validate` 要求每格 **> 0** ⇒ 当场抛。
+  （v1 自己的消费端 `dixon_coles_match_probs` 用 `p > 0.0001` 静默丢格，所以这个洞在 v1 里不响，是**v1 的潜伏缺陷**：1:1 被整格抹掉并重新归一。）
+【任务】4 个文件（≤100 行/个）：
+  1) 【改】scripts/derive/grid.py     在 `dc_grid` 里加**ρ 可达域收缩**（不改 `_validate` 的严格性、不改内核）：
+       · 新增纯函数 `admissible_rho(lambda_h: float, lambda_a: float, rho: float, floor: float = 1e-3) -> float`：
+         返回 `min(rho, (1.0 - floor) / (lambda_h * lambda_a))`（λ 或 rho 非法就 ValueError；rho≤0 直接原样返回——τ(1,1)=1−ρλλ 只在 ρ>0 侧有约束）
+       · `dc_grid` 内部先取 `rho_eff = admissible_rho(...)` 再调内核 ⇒ 恒有 τ(1,1) ≥ floor > 0 ⇒ 不再出现 0 格，`_validate` 原样保留
+       · 收缩发生时 `logger.warning` 一行（带 λ_h/λ_a/ρ/ρ_eff），**不许静默**
+       · 导出给调用方读：walk 用它自己算 rho_eff 记进 features（别让 dc_grid 改返回类型，别的调用方会裂）
+  2) 【改】scripts/model/walk.py      三处：
+       (a) **未见队兜底**（治 26.9% 跳过）：目标场的主/客队不在训练季拟合结果里 ⇒ 该队 **atk=def=1.0（联盟平均先验）**，
+           γ 不变，照常算 λ；`pred_fixture.features` 记 `{"fallback": {"home": "league_avg_prior"|"fit", "away": …}, "rho_eff": …}`；
+           run 返回值与 `pred_run.params` 增加 `n_fallback`（**与 skipped 并存**：skipped 只留给"连名字都没有"的场，真跑应接近 0）；
+           docstring 写明该先验的**已知偏差**：升班马整体弱于联盟平均 ⇒ 其主场 λ 会被系统性高估，回测须按 fallback/fit 分组评估（BACKTEST1 会用到）。
+           禁止：因为"怕不准"就继续跳过大把真实场次；也禁止不加标记地偷偷当平均队用。
+       (b) **jqc 落两侧**：`derive_play('jqc', grid)` 返回 `(主队档, 客队档)` 两个 dict（当前是 goals4 的 '0'..'4' **5 档**）。
+           官方 4 场进球每队是 **0/1/2/3+ 四档** ⇒ 在本模块把 '3' 与 '4' **相加归并成 '3+'**（不许去改 `derive/goals4.py`，它是通用工具且已验收），
+           option_code 加侧别前缀：`h:0|h:1|h:2|h:3+|a:0|a:1|a:2|a:3+`（8 个/场，解决 P0-MODEL1 申报的 PK 撞键问题：
+           原实现只落了主队侧 8 个键里的 4 个是因为 `option_code` 不带侧别，客队侧同键会被 `pred_market` 主键吞掉）。
+           归并后每侧四档概率和须等于该侧 marginal（断言 Σ=1 内误差 ≤1e-12）。
+       (c) `pred_run.params` 补 `rho`（原值）与 `rho_clamped`（本 run 被收缩的场数），note 里带 `n_fallback`。
+  3) 【改】tests/test_derive_grid.py  只准新增用例：① **崩溃现场回归**：`dc_grid(3.78, 1.49, rho=0.2)` 不抛、9×9 每格 >0、Σ=1（1e-12）；
+       ② `admissible_rho` 单调性与边界：小 λ 时原样返回 ρ；λ_h·λ_a 恰等于 1/ρ 时返回 (1-floor)/(λλ)；ρ≤0 原样；非法入参 ValueError；
+       ③ 未触发收缩时 `dc_grid(...,rho=0.2)` 与手工 `_dc_pmf_grid` + 归一化**逐格相等**（不许改坏既有行为）
+  4) 【改】tests/test_model_walk.py   只准新增用例（既有断言一条都不许删/放宽）：
+       ① 升班马场走兜底：fixture 里塞一支训练季没有的队 ⇒ 该行**被写出**、`features.fallback` 标到位、`run()` 返回的 `n_fallback` 计数正确；
+       ② 兜底队的 λ 只由 γ 与对方强度决定（手算对照，≤1e-12）；
+       ③ `jqc` 每场写 8 行、两侧各自 Σ=1、'3+' 恰等于 goals4 的 '3'+'4'；同一 (run,fixture) 不再有键冲突导致的**静默丢行**（断言行数=8）
+【必须成立】
+  T1 `python -m pytest tests -q` → **392 passed 上下、零 FAILED、零 SKIPPED**（用例数只增不减）
+  T2 真跑（队长执行，也是本单的最终判据）：10 个 run 合计 **写 3504 场、跳过 ≈0、n_fallback=942、ρ 收缩 2 场**；
+     `model.v_run_summary` 的 `n_haf_illegal` 仍为 0；`pred_market` 行数 = 3504×(3+31+8+8) = **175 200**
+  T3 不改任何 DB 对象、不改 `scripts/core/**`（内核冻结）、不改 `derive/goals4.py`、不改 `derive/registry.py`
+  T4 全部写库断言用相对增量（存量：pred_fixture 有 1 个 run 的 240 行残留——那是队长崩溃后的半批，**验收时队长会清空重跑**，你别去 DELETE 生产 run）
+【铁律】① 禁 git；② 禁 print（`core.log.logger`）；③ 机械搬移禁改逻辑/数值/顺序；④ 报告用锚点；
+  ⑤ 单文件 ≤100 行、AST 函数 ≤50 行、单行 ≤120 列，自检 0 违规：
+     `python3 ~/bin/omp-ast-check.py scripts/derive scripts/model tests/test_derive_grid.py tests/test_model_walk.py`；
+     禁新依赖；`psycopg` 只准在 `scripts/store/`、`scripts/ingest/`（model 层沿用 store.pg 的连接，不新增依赖）；
+     **本单例外授权**：可改 `scripts/derive/grid.py`（仅按 §1 的三条）与 `tests/test_derive_grid.py`、`tests/test_model_walk.py`（仅新增用例）；
+     其余既有文件（含 `scripts/core|derive|market|store/**`、`model/fit.py`、`align.py`）禁改；
+     model/analysis 两层允许 INSERT/UPDATE/DELETE（可重算层），但**本单代码不需要删任何行**（幂等 upsert 已在 P0-MODEL1 建好）；
+  ⑥ 禁真联网；⑦ `~/bin/omp-ast-check.py`、`~/bin/league-accept.sh` 只读禁改（改工具＝拒收）
+  ⑧ 完成后写 `.omp-logs/P0-MODEL2.report.txt`（T1~T4 原始输出 + "如果不用兜底而改用**合并多季训练**，你评估的代价是什么"一段 +
+     你复核"还有哪些地方会产出 0 概率格"（只列不改）），然后 `echo TASK_DONE > .omp-logs/P0-MODEL2.done`
+【基线】开工前先跑全量记数（队长 13:45Z 实测 `392 passed`；快档是 `-m fast`，316 那条口径在本单不变就别动）。
+【边界】若你实现 (b) 时发现 `pred_market` 的 CHECK 或 PK 与"侧别前缀 option_code"真的不兼容（比如 CHECK 限定了 option_code 取值集），
+  **停下来写进报告**：DDL 归队长改，你不许动表结构。
+【验收（队长逐字复跑）】
+  bash ~/bin/league-accept.sh P0-MODEL2 scripts/derive/grid.py scripts/model tests/test_derive_grid.py tests/test_model_walk.py
+  # 队长另做：清空 model 三层 → 重跑 10 个 run → 核 T2 的 3504 / n_fallback 942 / ρ 收缩 2 / pred_market 175200，
+  #           并抽 3 场兜底场与 1 场 ρ 收缩场手算 λ 与 had 概率对照

@@ -1,0 +1,39 @@
+【项目】league-v2（**同一类 bug 的第三次发作**，这次轮到自己人了：P0-FACT2 的 `tests/test_upsert_from_raw.py`）
+【现象（队长 2026-09-15 11:12Z 真跑后复现）】
+```
+$ python -m pytest tests -q          # 派单前 308 passed；真装载跑完后
+FAILED tests/test_upsert_from_raw.py::test_i1_i2_i3_i4_two_sources_share_one_af_fixture
+1 failed, 307 passed
+```
+断言红在 `query.unmatched_fd(conn) == []`，而该用例自己的日志明明白白写着 `FD 未对齐 0 场`。
+【根因（跟 P0-BACKFILL1c 一模一样，只是换了张表）】
+  · 用例在**回滚事务**里跑 ⇒ 它自己不会往 `ops.ingest_log` 留行 ✅
+  · 但 `query.unmatched_fd()` 的实现是"取 `topic='fd_align'` **最新一条**的 rejected 数组"
+  · 队长真跑生产装载 ⇒ 库里落下 **3051 条真实未对齐**（FACT2 那轮）⇒ "最新一条"永远是生产数据
+  ⇒ 断言拿"生产状态"当"本次结果"，**测试对真库有隐式依赖**。派单时 `ops.ingest_log` 是空的，所以它"碰巧"绿——**这是我验收漏的**（§9-25 立的规矩我只在 backfill 上执行了，没推广到 fact 测试）。
+【任务】3 个文件（≤100 行/个；`upsert_*`/`parse_api`/`align` 的落库与判定逻辑**一律不动**）：
+  1) 【改】scripts/store/query.py    给 `unmatched_fd()` 加**作用域过滤**，让它能回答"本批次的未对齐"而不是"史上最新批次"：
+       `unmatched_fd(conn, limit=20, *, src_file: str | None = None, fd_ids: set[int] | None = None)`
+       · `src_file`：等值过滤 `ops.ingest_log.src_file`（生产路径写的是 `'raw.fd_raw'`；调用方可传**本批次唯一标记**）
+       · `fd_ids`：过滤 `rejected` 数组里 `->>'fd_id'` 落在该集合的条目（**这就是"我的批次"**，测试天然知道自己的哨兵 fd_id）
+       · 两者都给 ⇒ 取交集；都不给 ⇒ 保持现行为（最新一条），并在 docstring 写明"**生产读法**，测试与 CLI 汇总不许依赖它"
+       · 不改 `ops.ingest_log` 表结构（本单禁 DDL）：过滤在 SQL 里用 jsonb 完成即可
+  2) 【改】tests/test_upsert_from_raw.py   把 A3 那条 `unmatched_fd(conn) == []` 改成**不依赖真库存量**的写法（作用域过滤，或直接用 `upsert_*.run()` 的返回值/`caplog` 的"未对齐 0 场"计数）；
+       同文件里**其它任何"读全局状态再 == 字面量"的断言一并扫掉**（`source_coverage` 已有 `cov_before` 相对差 ✅ 保持）
+  3) 【改】scripts/store/upsert_results.py 或 `upsert_fixtures.py`（**二选一，最小改动**）：让 `run()` 的返回值里带上
+       `fd_unmatched` 计数（现在只在日志里 ⇒ 测试只能读库才能拿到，这是这次踩坑的深层原因：**结果没返回，测试被迫读全局**）
+【必须成立】
+  · `python -m pytest tests -q` → **308 passed、零 FAILED、零 SKIPPED**，且**在真库已有 5341 fixture / 8822 result / 3051+ 未对齐留痕的状态下**必须绿（这正是本单存在的理由）
+  · **决定性复现测试**：新加一条用例（或在既有用例里加一段）——**先往 `ops.ingest_log` 插一条含若干 rejected 的假"最新"记录（同事务内），再跑本批 0 未对齐的装载，断言 `unmatched_fd(带作用域) == []` 且旧的"最新一条"读法仍能看到那条假记录**
+    ⇒ 这条用例**专门钉住"生产留痕不得污染本批判定"**，写完请你在报告里说明它在修复前会红在哪一行
+  · 快档同绿；机检 0 违规；`print` 残留 0
+【铁律】① 禁 git；② 禁 print（`core.log.logger`）；③ **不许为了让测试绿而放宽任何既有断言**（A1/A2/A4~A7 全部保持），
+  也不许 `TRUNCATE`/`DELETE` 真库留痕（`league_ing` 也没那个权限）；④ 改文件优先整文件重写（§9-30）；
+  ⑤ ≤100 行/文件、AST 函数 ≤50 行、单行 ≤120 列，自检 0 违规：`python3 ~/bin/omp-ast-check.py scripts/store tests/test_upsert_from_raw.py`；
+  ⑥ 禁真联网；`scripts/core|derive|ingest/**`、`store/{pg,parse_api,upsert_official,align}.py`、既有其它 tests 禁改；禁建/改/删 DB 对象；
+  对 `fact.*`/`ref.*`/`ops.*` 的一切写必须发生在回滚事务里；
+  ⑦ `~/bin/omp-ast-check.py`、`~/bin/league-accept.sh` 只读禁改（改工具＝拒收）
+  ⑧ 完成后写 `.omp-logs/P0-FACT3b.report.txt`（改前/改后断言对照 + 新用例在修复前的失败原文 + 全量输出），然后 `echo TASK_DONE > .omp-logs/P0-FACT3b.done`
+【验收（队长逐字复跑）】
+  bash ~/bin/league-accept.sh P0-FACT3b scripts/store tests/test_upsert_from_raw.py
+  # 队长另做：不动真库任何一行（当前留痕 3051+ 条就是本单的"污染源"），直接复跑全量——**必须绿**

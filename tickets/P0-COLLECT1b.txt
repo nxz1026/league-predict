@@ -1,0 +1,41 @@
+【项目】league-v2（规范 README §2-D7「新文件 ≤100 行」是**用户确认的硬红线**，不许申请放宽；教训 §9-36、§9-38）
+【这一单是什么】P0-COLLECT1 的**收尾拆分单**：代码功能已全部正确落地（`426 passed`、T2 `fact.jc_*` 全 0、逐条夹具期望值复算一致），
+  唯一被拒收的原因是**三个文件超过 100 行**：`scripts/store/parse_collector.py` **234**、`tests/test_collector_contract.py` **121**、`tests/test_parse_collector.py` **149**。
+  队长已裁决：**红线不动，文件拆分**。上一单的实现逻辑**一行都不许改**。
+【本单唯一动作】机械拆分（§9 铁律③：机械搬移禁改逻辑/数值/顺序），建议这样切（你可另切，但每块 ≤100 行且**不许把逻辑改薄**）：
+  · `scripts/store/parse_values.py`   ← 从 `parse_collector.py` 原样搬出**值换算器**（`need` / `dec` / `clock` / `pair` / `build` 一类纯小函数）
+  · `scripts/store/parse_jczq.py`     ← `parse_jczq_offer` + `parse_jczq_result`（含 `match` 扩展键那部分，**保持返回体一字不动**）
+  · `scripts/store/parse_jcissue.py`  ← `parse_jc_issue` + `parse_jc_issue_result`
+  · `scripts/store/parse_misc.py`     ← `parse_lottery_draw` + `parse_jclq_result`（篮球"无落点表 ⇒ raise"的裁决行为**原样保留**）
+  · `scripts/store/parse_collector.py` 留**契约 §5.0 外壳校验 + `parse_line` 分派**，并从这里 import 上面各模块
+  ⚠️ import 必须**单向**（`parse_collector` → 各分模块 → `parse_values`；禁止分模块反向 import 壳模块，禁止形成环）；
+     模块内部私有名保持原名（别顺手改名——改名等于改逻辑，验收会逐字比对）；
+     分派表（topic → 函数）留在壳模块，**不许改成注册式/元编程**（可读性优先，且我要能一眼看全 7 个 topic）。
+  ⚠️ 对外接口零变化：`from store.parse_collector import parse_line` 的调用方式、签名、返回体（`table/pk/row/notes`，`jczq_offer` 多一个 `match`）
+     **一字不动**；测试里 import 的路径可以随文件走，但断言值不许动。
+  · 测试同理拆：`tests/test_parse_collector.py`(149) 按"offer/result"与"issue/lottery/负向"两块拆两文件；
+    `tests/test_collector_contract.py`(121) 把本单新增的 v1.1 用例（`src_hash` 篡改、`kind=error` 落 stg、同批重推幂等）移到
+    `tests/test_collector_v11.py`，**原文件恢复成只有既有断言**（那些断言语义一条都不许少）。
+【夹具已更新，别按旧内容写断言】`tests/fixtures/collector_v11/` 队长于 14:55Z 重生成：`jczq_offer` 的 payload 现在保留
+  官方**全部 40 个非玩法键**（新增 `isHide/isHot/poolList/vote/remark/groupName/lineNum/matchWeek/*TeamCode/*TeamAbbEnName/baseHomeTeamId…`），
+  体积 171K→276K；重跑本仓测试**仍 426 passed** ⇒ 说明解析层对多出来的键是容忍的。本单**不许改夹具一个字节**（禁改清单不变）。
+【必须成立】
+  T1 `python -m pytest tests -q` → **426 passed 且零 FAILED 零 SKIPPED**（用例数只增不减；拆测试不许丢用例：`--collect-only -q | tail -1` 的数不许降）
+  T2 `python3 ~/bin/omp-ast-check.py` 对**全部新拆文件**→ **0 违规**（每文件 ≤100 行、函数 ≤50 行、列 ≤120、无禁依赖、无 print、无 psycopg 越界）
+  T3 **逐字搬运证明**：报告里给出"搬移前 234 行文件"与"搬移后各文件"的**函数级 diff 摘要**（队长会用 `ast` 逐个函数比对文本是否一致，
+     函数体有任何非空白差异 = 不是机械搬移 = 拒收）
+  T4 行为零漂移：`python -c "…"` 现场对**同一行夹具**分别用旧入口 `parse_line` 跑，输出的 `table/pk/row/notes(/match)` 与拆分前**逐键相等**
+     （队长会另写脚本抽 10 行复算，你要在报告里先给同样的 10 行对照）
+  T5 `fact.jc_*` 八表在测试后仍**全 0 行**（本单不许扩任何写库范围）
+【铁律】① 禁 git；② 禁 print（`core.log.logger`）；③ **本单的核心就是铁律③：机械搬移禁改逻辑/数值/顺序**，任何"顺手优化/改名/合并重复"一律拒收；
+  ④ 报告用锚点；⑤ 单文件 ≤100 行、AST 函数 ≤50 行、单行 ≤120 列（这就是本单存在的理由）；禁新依赖（stdlib only）；
+     禁改 `tests/fixtures/collector_v11/**`、禁改 `scripts/core|derive|market/**`、禁建/改/删任何 DB 对象、禁真联网；
+     测试内写库一律单事务 + 收尾 ROLLBACK（`league_ing` 在 ref/fact/raw 无 DELETE，留痕洗不掉）；
+  ⑥ 完成后写 `.omp-logs/P0-COLLECT1b.report.txt`（T1~T5 原始输出 + **新文件清单与每文件行数** + 一句"有哪些地方我很想顺手改，但没改"），
+     然后 `echo TASK_DONE > .omp-logs/P0-COLLECT1b.done`
+【边界】如果你判断"要拆到每块 ≤100 行就**必然**得改一点逻辑"（比如某个函数跨块用局部变量），**停下来报告点名那一处**，
+  队长会决定是"该函数整块不拆"还是"把共享状态提成参数"——不许自己选。
+【验收（队长逐字复跑）】
+  # 路径用目录而非具体新文件名（拆分方案由你定，我不该预先把文件名写死进验收命令）
+  bash ~/bin/league-accept.sh P0-COLLECT1b scripts/store tests
+  # 队长另做：ast 逐函数比对搬移前后文本一致性（我从 HEAD 取旧版自己比）；抽 10 行夹具跑 parse_line 对逐键相等；核 fact.jc_* 仍全 0

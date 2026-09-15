@@ -1,0 +1,45 @@
+【项目】league-v2（规范 ~/league-v2/README.md §2-D7；设计 ~/league-v2/docs/框架设计-全玩法覆盖-v2-20260915.md §2 market 段；同类先例 `scripts/derive/*` 的"纯函数+黄金值"打法）
+【定位】`scripts/market/` 第一单：**只做纯数学**（去水 + 价值/校准指标）。零 DB、零网络、零新依赖、不碰 `fact.line_snapshot`（那张表还没建，本单不需要它）。
+【任务】4 个新文件 + 1 个**空** `scripts/market/__init__.py`（只准空或一行 docstring，为对齐 `scripts/derive/` 的先例；除此之外一个都不许多；
+  单文件 ≤100 行，**宁可拆逻辑也别为凑行数压缩可读性**——别学 align.py 那样贴着 100 行交）：
+  1) scripts/market/devig.py   ≤70 行
+       · `implied(odds: Mapping[str, float]) -> dict[str, float]`：`1/odds`（原水，含返奖率）
+       · `devig(odds) -> dict[str, float]`：比例去水 `p_k = (1/odds_k) / Σ(1/odds_j)`；**纯 stdlib，不许引入 numpy**
+       · `margin(odds) -> float`：`Σ(1/odds) - 1`（庄家水钱比例，0.072753 = 7.27%）
+       · 入参校验（一律 `ValueError`，消息带 offending 值）：空 map、任一 odds **不是有限正数**（`0`/负/`nan`/`inf`/`bool` 全拒）、选项数 < 2
+       · **不许改传入 dict**；返回新 dict；键顺序无关
+  2) scripts/market/clv.py     ≤80 行
+       · `clv(p_model: float, p_close: float) -> float` = `ln(p_model / p_close)`（收盘去水概率为基准；>0 表示模型比市场更看好该选项）
+       · `mean_clv(pairs: Iterable[tuple[float,float]]) -> float`（空序列 → `ValueError`；**不许静默返回 0.0**）
+       · `brier(preds: Mapping[str,float], outcome: str) -> float` = `Σ_k (p_k - 1[k==outcome])²`（多元 Brier，含未中奖项）
+       · `log_loss(preds, outcome) -> float` = `-ln(p_outcome)`
+       · 校验：`p_close` 必须在 `(0,1]`；`p_model` 在 `[0,1]`；`p_model==0` 时 `clv` → `ValueError`（`ln(0)` 不许返回 `-inf` 混进账本）；
+         `brier`/`log_loss` 要求 `outcome in preds`、`0<=p<=1`、且 `Σp` 与 1 的偏差不超过 `1e-6`（概率未归一就打分是错的）
+  3) tests/test_market_devig.py  ≤100 行
+  4) tests/test_market_clv.py    ≤100 行
+【黄金值（队长 2026-09-15 用独立 python 预算好，断言必须逐值相等到 1e-9）】
+  · `devig({'home':1.85,'draw':3.40,'away':4.20})` → `home 0.503881 / draw 0.274171 / away 0.221948`（三位相加 = 1）
+  · 同组 `margin` → `0.072753`；同组 `implied` 之和 → `1.07275343`
+  · 两向 `devig({'home':1.91,'away':1.91})` → `0.5 / 0.5`，`margin` → `0.04712`（**盘口水钱在纯二元盘依然存在，别以为两边和=1 就没水**）
+  · **结构不变式**（必须写成用例，用任意随机性小的多组赔率跑 ≥3 组）：记 `S = Σ(1/odds)`，则 `devig(odds)[k] * S == 1/odds[k]`（去水就是同除一个常数 ⇒ 两两比值不变：`devig(a)/devig(b) == implied(a)/implied(b)`）
+  · 幂等/归一：`sum(devig(odds).values()) == 1.0`（1e-12 内）；`devig(devig 结果当赔率用)` **不许**被当成合法输入（概率 ≤1 会撞 odds>1 校验，见下条）
+  · `clv(0.55, 0.50)` → `0.0953102`；`clv(0.50, 0.50)` → `0.0`；`mean_clv([(0.55,0.50),(0.45,0.50)])` → `-0.0050252`
+  · `brier({'home':0.5,'draw':0.3,'away':0.2}, 'home')` → `0.38`；`brier({'home':0.6,'away':0.4}, 'home')` → `0.32`
+  · `log_loss(同上前例,'home')` → `-ln(0.5) = 0.6931472`；`log_loss(...,'draw')` → `-ln(0.3) = 1.2039728`
+  · 边界：`brier({'home':1.0,'draw':0.0,'away':0.0},'home')` → `0.0`（全对）；同一组预测但 `outcome='away'`（全错）→ `(1-0)²+(0-0)²+(0-1)² = 2.0`（队长已复算，**不是 4.0**）
+【铁律】
+  ① 禁 git；② 禁 print/pdb/breakpoint/set_trace（纯函数库，日志都不该有）；③ 机械搬移禁改逻辑；④ 报告用锚点；
+  ⑤ 单文件 ≤100 行、函数 AST ≤50 行、**单行 ≤120 列**，自检 0 违规：
+     `python3 ~/bin/omp-ast-check.py scripts/market tests/test_market_devig.py tests/test_market_clv.py`；
+     **禁 numpy/scipy/pandas/新依赖**（本机 venv 没装，`math` 够用）；`psycopg` **本单一律不许出现**（连 store 都不 import）；
+     `scripts/core/**`、`web/**`、`static/**`、`scripts/store|ingest|derive/**`、既有 tests **一律禁改**；禁建/改/删任何 DB 对象；
+  ⑥ 测试零 DB、零网络（本单纯函数，做不到就是设计错了，写卡点别硬编）；
+  ⑦ `~/bin/omp-ast-check.py`、`~/bin/league-accept.sh` 只读禁改（改工具＝拒收）
+  ⑧ 完成后写 ~/league-v2/repo/.omp-logs/P0-MARKET1.report.txt（改动清单 + 上面每条黄金值的**实测原始输出** + 校验分支各抛什么异常的清单），
+     然后 `echo TASK_DONE > .omp-logs/P0-MARKET1.done`
+【基线】开工前自己先跑一次全量记下数字（队长 2026-09-15 11:10Z 实测 **308 passed / 快档 234**，本单开工时若已被后续工单改动则以你实测为准）；
+  **只许新增，一条都不许少**；如果你让总数变小了，说明你删了别人的用例——直接拒收。
+【边界】若你认为某个校验规则会导致合法场景被误拒（例：`p_model=0` 在某些玩法里合理），**停下来在报告写清楚**，别自行放宽；不许把"不许静默返回默认值"改成返回 0.0。
+【验收（队长逐字复跑）】
+  bash ~/bin/league-accept.sh P0-MARKET1 scripts/market tests/test_market_devig.py tests/test_market_clv.py
+  # 队长另用独立 python 复算全部黄金值（不复用你的实现），逐值比对到 1e-9

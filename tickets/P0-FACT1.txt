@@ -1,0 +1,72 @@
+【项目】league-v2（规范 ~/league-v2/README.md §2-D7；设计 ~/league-v2/docs/框架设计-全玩法覆盖-v2-20260915.md §2 store 段；DB 交付 docs/infra/README-infra.md §5/§6）
+【背景】raw 落地块已有真报文（队长手工回填完成）：`raw.af_raw` / `raw.fd_raw` 各 ~15 行，每行 `body jsonb` = 一次 `GET /fixtures?league=&season=` 或 `/v4/competitions/{CODE}/matches?season=` 的**完整原始响应**。本单把 raw → `fact.*` 长出来（"解析延后"的还账）。
+【第一动作（强制）】先用真报文核对字段路径，**禁止照 API 文档或记忆猜字段名**：
+```
+source ~/.venvs/league/bin/activate && cd ~/league-v2/repo && python - <<'EOF'
+import sys, json; sys.path.insert(0,'scripts')
+from store import pg
+with pg.read_conn("ing") as c:                       # 只读，强制不落任何写
+    for t in ('af_raw','fd_raw'):
+        b = c.execute(f"SELECT body FROM raw.{t} WHERE http_status=200 ORDER BY 1 LIMIT 1").fetchone()[0]
+        first = (b['response'][0] if isinstance(b, dict) and b.get('response') else b[0]) if b else None
+        print(t, '顶层键=', sorted(b)[:8] if isinstance(b, dict) else type(b).__name__)
+        print(t, '首节点键=', sorted(first) if first else '空响应')
+        print(t, '样例=', json.dumps(first, ensure_ascii=False)[:900])
+EOF
+```
+把这段**原始输出贴进 report**，字段路径以它为准（与本单下方清单冲突时以真报文为准并在 report 里点名）。
+
+【队长已从真报文核出的字段事实（2026-09-15 回填落块后实测，仍要求你自己再跑一遍"第一动作"复核）】
+  · **AF**（`raw.af_raw`，15 块全 200）：顶层 `{"response":[…], "paging":{…}, "errors":[]}`；
+    节点 = `fixture{id,date,timezone,timestamp,periods{first,second},venue{name,city},status{long,short,elapsed,extra}}`
+           + `league{id,name,country,season,round}` + `teams{home{id,name},away{id,name}}` + `goals{home,away}` + `score{halftime{home,away},fulltime{…},extratime,penalty}`
+    规模：**5341 场完赛，`score.halftime` 缺失 0 场（0.0000%）**，状态集合只有 `FT`（历史季）；单块最大 381 场
+  · **FD**（`raw.fd_raw`，**10 块 200 + 5 块 403**）：顶层键 `{"competition","filters","matches","resultSet"}` —— **数组键是 `matches` 不是 `response`**；
+    节点 = `id, utcDate, matchday(int), stage, group, status, season, lastUpdated, area, competition,
+            homeTeam{id,name,shortName,tla}, awayTeam{…}, score{winner,duration,fullTime{home,away},halfTime{home,away}}, referees, odds`
+    ⚠️ 大小写陷阱：FD 是 **`halfTime`/`fullTime`（驼峰）**，AF 是 **`halftime`/`fulltime`（全小写）**；FD 状态是 `FINISHED/SCHEDULED/…`，AF 是 `FT/NS/…`
+    ⚠️ **season=2022 的 5 块全是 403**（`errorCode 403`，免费档只给近两季）⇒ **2022 只有 AF 一个源**，
+       所以 `fact.fixture_result` 的"多源并存"在 2022 天然只有一行，**不许为此造第二源，也不许把 403 块当数据解析**
+  · 两源 id 体系不同（AF fixture.id vs FD id），**对齐只能靠 (league_key, kickoff_at, 队名)**；本单不做跨源对齐，
+    只保证"AF 权威 id 落 fact.fixture、FD 的 id 进 source_ids jsonb"，分歧留给 `fact.v_result_conflict` 与后续单
+【已就绪的 DB 事实（不许建/改/删任何对象）】
+  · `fact.fixture(fixture_id bigint PK, league_key text→ref.league, season int, round text, kickoff_at timestamptz,
+      home_team_id/away_team_id bigint→ref.team, status text CHECK(14 值白名单), venue text,
+      source_ids jsonb 默认'{}', jc bool 默认 false, updated_at)` —— `league_ing` 有 **SELECT/INSERT/UPDATE（无 DELETE/TRUNCATE）**
+  · `fact.fixture_result(fixture_id→fact.fixture, source text, ft_h/ft_a/ht_h/ht_a smallint, elapsed_ht int, status text,
+      confirmed_at timestamptz, raw jsonb, PRIMARY KEY(fixture_id, source))` —— 同上权限
+  · `fact.v_result_conflict`（视图，两源分歧暴露，只读）
+  · `ref.league` 已 seed 五联赛（`epl/laliga/bundesliga/seriea/ligue1`，`ids={"api_football":39…,"football_data":"PL"…}`；**`scope` 有 CHECK 只允许 `regular|irregular`**）
+  · `ref.team(team_id generated always as identity, sport, name_cn, aliases jsonb)`，**UNIQUE(sport,name_cn)**，`league_ing` 有 SELECT/INSERT/UPDATE
+  · 中文队名一律走既有内核能力：`from core.i18n import to_cn`（缓存 `scripts/references/team_translations.json` 已 98 条；未命中会原样返回英文名——**这是允许的行为，不许自己编中文名**）
+【任务】6 个新文件（**一个都不许多**）：
+  1) scripts/store/parse_api.py     ≤95 行  纯函数（零 DB、零网络）：`af_fixtures(body) -> list[dict]`、`fd_fixtures(body) -> list[dict]`、
+     统一输出中间行 `{fixture_id, league_key, season, round, kickoff_at, af_team_id, fd_team_id, home_name, away_name, status, venue, ft_h, ft_a, ht_h, ht_a, elapsed_ht}`；
+     **status 归一**：未知 short → `'unknown'`，绝不把原值直传（会撞 CHECK）；`aet/pen` 要区分；**HT 缺失就 NULL，不许填 0**
+  2) scripts/store/upsert_fixtures.py ≤90 行  从 `raw.af_raw`（权威 id）+ `raw.fd_raw` 读 body → 走 parse_api → 队伍 upsert（按 `UNIQUE(sport,name_cn)`，命中则 `aliases = ref.team.aliases || EXCLUDED.aliases`）→ `fact.fixture` upsert（`ON CONFLICT (fixture_id) DO UPDATE …`，`source_ids` 合并）
+  3) scripts/store/upsert_results.py  ≤90 行  → `fact.fixture_result` **每源一行**（`ON CONFLICT (fixture_id,source) DO UPDATE`），两源都不许覆盖对方；跑完可选 `SELECT count(*) FROM fact.v_result_conflict` 并 `logger.warning` 报数
+  4) scripts/store/query.py           ≤95 行  下游只读接口：`fixtures_between(conn, start, end, league_key=None)`、`fixture_with_result(conn, fixture_id)`（含 ht）、`league_season_count(conn)`（回填自检）、`unmatched_teams(conn)`（name_cn 仍是英文名的队，供后续翻译补全）
+  5) tests/test_parse_api.py          ≤100 行  纯函数用例：用**真报文里抠出来的最小片段**（手写常量，别塞整个响应）钉住字段路径、status 归一、HT 缺失=NULL、`aet/pen`
+  6) tests/test_upsert_from_raw.py    ≤100 行  真库但**单事务收尾 ROLLBACK**；夹具自己 `INSERT INTO raw.*`（league_ing 有 INSERT）摆假响应，跑 upsert 后断言 `fact.fixture`/`fixture_result`/`ref.team` 行为；重跑同一份 raw 两遍 → 行数不变（幂等）；连不上库 `pytest.skip` 带原因
+【必须成立的四条不变式（写成断言）】
+  I1 幂等：同一 raw 内容跑两遍 → `fact.fixture`、`fact.fixture_result`、`ref.team` 行数**一字不变**（`ON CONFLICT DO UPDATE` 只刷新不新增）
+  I2 多源并存：同一 `fixture_id` 的 AF 行与 FD 行同时存在，`PK(fixture_id,source)` 不塌；两源 ft 不一致时 `fact.v_result_conflict` 能查到它
+  I3 中文不编：`ref.team.name_cn` 只能是 `to_cn(原名)` 的结果（命中→中文，未命中→**原名**），断言里禁止出现任何你手写的中文队名
+  I4 外键不破：`fact.fixture.league_key/home_team_id/away_team_id` 全部可在 ref 里找到；未知 league_key 的报文行 → **计入 skipped 并 logger.warning**，不许静默丢弃也不崩整批
+【铁律】
+  ① 禁 git 一切子命令；② 禁 print()/pdb/breakpoint/set_trace（日志 `from core.log import logger`）；
+  ③ 机械搬移禁改逻辑/数值/顺序；④ 报告用锚点（函数名+行为）别贴大段代码；
+  ⑤ 新文件 ≤ 上面预算、单函数 AST ≤50 行、单行 ≤120 列，自检 0 违规：
+     `python3 ~/bin/omp-ast-check.py scripts/store scripts/ingest tests/test_parse_api.py tests/test_upsert_from_raw.py`；
+     `psycopg` 只准出现在 `scripts/store/`、`scripts/ingest/`；**禁 requests/numpy/pandas/新依赖**（读 raw 用 psycopg，解析用 stdlib json）；
+     `scripts/core/**`（含 `i18n.py`/`convert.py`，只准 import）、`web/**`、`static/**`、既有 tests、
+     `store/pg.py`+`store/upsert_official.py`、`ingest/*` 四文件、`derive/*` 六文件**一律禁改**；
+     **禁 CREATE/ALTER/DROP 任何 DB 对象、禁 TRUNCATE、禁对 `stg.` 七表做任何写**；
+  ⑥ 测试不许真联网、不许留痕（`fact.*`/`ref.*` 都没有 DELETE 权限，留了洗不掉）；
+  ⑦ `~/bin/omp-ast-check.py`、`~/bin/league-accept.sh` 只读禁改（改工具＝拒收）
+  ⑧ 完成后写 ~/league-v2/repo/.omp-logs/P0-FACT1.report.txt（真报文核对输出 + 改动清单 + I1~I4 断言的原始输出 + 验收命令输出），然后 `echo TASK_DONE > .omp-logs/P0-FACT1.done`
+【边界】若真报文与本单字段清单冲突，以真报文为准并在 report 点名差异；若 6 个文件装不下，停下来写卡点，**不许自行扩文件**。
+【验收（队长逐字复跑）】
+  bash ~/bin/league-accept.sh P0-FACT1 scripts/store tests/test_parse_api.py tests/test_upsert_from_raw.py
+  # 期望：全量在 P0-BACKFILL1 之后继续递增、零 FAILED；机检 0 违规；PG 留痕 0 行
+  # 队长另跑真数据自审（只读）：五联赛×三赛季场次总数、HT 非空率、两源分歧数、未翻译队名清单

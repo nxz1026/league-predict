@@ -1,0 +1,46 @@
+【项目】league-v2（规范 ~/league-v2/README.md §2-D7；设计 ~/league-v2/docs/框架设计-全玩法覆盖-v2-20260915.md §2 derive 段；上一单 P0-DERIVE1 已交付 grid/totals/scores31/goals4）
+【背景】L3a derive 纯函数层第二单：让球玩法 + 玩法注册表。**继续零 DB、零网络、零新依赖**（本机没有 numpy，内核是纯 stdlib，保持一样）。
+【输入契约（与 DERIVE1 完全一致，别自创）】比分矩阵 `grid[h][a]`，`(max_goals+1)²`，默认 `max_goals=8`；取矩阵一律用上一单的 `derive.grid.dc_grid(...)` / `derive.grid.renormalize(...)`（**先读那两个文件再动手**，复用它们，不许复制粘贴一份归一化逻辑）。
+
+【任务】4 个新文件（**一个都不许多**）：
+  1) scripts/derive/handicap.py   ≤60 行  `probs(grid, line: int) -> dict[str, float]`，键 `"home"/"draw"/"away"`
+       · 语义：**竞彩让球线加在主队身上** → 判定量是 `(h + line)` 与 `a` 比较：`>` 主胜、`==` 平、`<` 客胜（`line` 为负 = 主队让球，与竞彩官方"主-1"口径一致）
+       · `line` 必须是 `int`：`float`（哪怕是 1.0）一律 `TypeError`，`bool` 也拒（别让 True 当 1 混进去）；越界（如 ±10）不报错但必须落进"全主胜/全客胜"的退化边界（并写用例证明）
+       · 三向之和必须 == 1（用 `renormalize` 后的矩阵，浮点误差用 `approx(abs=1e-12)`）
+  2) scripts/derive/registry.py   ≤40 行  `PLAYS: dict[str, Callable]` + `derive_play(play_type, grid, line=None) -> dict`
+       · 只注册**已实现**的 5 个：`had`(胜平负＝line=0 三向) / `hhad`(让球，需 line) / `crs`(比分 31) / `ttg`(总进球 8 档) / `jqc`(4场进球：两队各自 8 档，直接透传 goals4)
+       · 未注册键（**含 `haf` 半全场**，它属 P1，要等 FD halfTime 回填）→ `KeyError` 且异常文案点名"未实现，勿用 0.0 占位"；**绝禁放占位假实现或返回均匀分布**
+       · `hhad` 不给 `line` → `TypeError`（不许默认 0，那会把让球悄悄算成胜平负）
+  3) tests/test_derive_handicap.py ≤100 行
+  4) tests/test_derive_registry.py ≤100 行
+  不许改 DERIVE1 交付的任何文件（含 `grid.py`；若你判断必须改它才能做完 registry，**停下来**在报告里写卡点并照样 `echo TASK_DONE`）。
+
+【队长独立算好的黄金数值（拿来断言，别自己另算一套；矩阵 = `dc_grid(1.5, 0.8, rho=0.2, max_goals=8)` 归一化后）】
+  · `line= 0` → `(home, draw, away) = (0.562667, 0.213104, 0.224229)`
+  · `line=-1` → `(0.277783, 0.284884, 0.437333)`
+  · `line=-2` → `(0.112401, 0.165382, 0.722217)`
+  · `line=+1` → `(0.775771, 0.163176, 0.061052)`
+  · **结构不变式（比数值更能抓错，必须写成用例）**：`probs(g,+1)["home"] == probs(g,0)["home"] + probs(g,0)["draw"]`
+     （主队+1 后"原平局全部变主胜"），同理 `probs(g,-1)["away"] == probs(g,0)["away"] + probs(g,0)["draw"]`
+  · **手算 3×3 小矩阵**（`[[.2,.1,.05],[.15,.2,.05],[.1,.1,.05]]`，和恰为 1.0）：
+     `line=0` → 主 0.35 / 平 0.45 / 客 0.20；`line=-1` → 主 0.10 / 平 0.25 / 客 0.65
+     → 用例注释里要写清算式（哪些格子被加进哪个桶），用来抓"实现者照抄自己的错"
+  · 断言一律 `pytest.approx(abs=1e-6)`（手算组用 `abs=1e-12`）；键集合用 `set(...) == {...}` 全等
+  · registry 用例：5 个键的返回值形状分别是 `had/hhad`→3 键、`crs`→31 键、`ttg`→8 键、`jqc`→2 个 8 档 dict；`"haf"`/`"unknown"` → KeyError；`hhad` 缺 line → TypeError
+【铁律】
+  ① 禁 git 一切子命令；② 禁 print()/pdb/breakpoint/set_trace（纯函数层不需要日志）；③ 机械搬移禁改逻辑/数值/顺序；
+  ④ 报告用锚点（函数名+行为），别贴大段代码；
+  ⑤ 新文件 ≤ 上面预算、单函数 AST ≤50 行、**单行 ≤120 列**，自检到 0 违规：
+     `python3 ~/bin/omp-ast-check.py scripts/derive tests/test_derive_handicap.py tests/test_derive_registry.py`；
+     **derive 层禁 import psycopg / requests / numpy / 任何新依赖**；`scripts/core/**`、`web/**`、`static/**`、既有 tests、
+     store/ingest 四个文件、DERIVE1 的 derive 四文件**一律禁改**；禁建/改/删任何 DB 对象；
+  ⑥ sys.path 口径跟既有写法（测试内 `sys.path.insert(0, <repo>/scripts)`，内核内部用 `from core...` 不要改成 `scripts.core`）；
+  ⑦ `~/bin/omp-ast-check.py`、`~/bin/league-accept.sh` 是队长验收工具，**只读禁改**（改工具＝拒收）
+  ⑧ 完成后写 ~/league-v2/repo/.omp-logs/P0-DERIVE2.report.txt（改动清单 + 黄金断言原始输出 + 3×3 手算算式 + 结构不变式证明），然后 `echo TASK_DONE > .omp-logs/P0-DERIVE2.done`
+【验收（队长逐字复跑）】
+  bash ~/bin/league-accept.sh P0-DERIVE2 scripts/derive tests/test_derive_handicap.py tests/test_derive_registry.py
+  python3 - <<'EOF'   # 队长侧独立复算（与你的实现无关的第三条路径，用来双向对账）
+  import sys; sys.path.insert(0,'scripts')
+  from derive.handicap import probs; from derive.grid import dc_grid
+  g=dc_grid(1.5,0.8,0.2,8); print([round(probs(g,l)['home'],6) for l in (0,-1,-2,1)])   # 期望 0.562667 0.277783 0.112401 0.775771
+  EOF

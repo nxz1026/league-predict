@@ -1,0 +1,56 @@
+【项目】league-v2（§2-D7 ≤100 行/文件 硬红线；§9 铁律：报告用锚点、禁 git、禁 print）
+【这一单是什么】**只做期望值修正，不写任何新功能**。队长已把工作树里的 `tests/fixtures/collector_v11/**` 换成**真包抽样（142 行）**；
+旧夹具来自探针用的 `getMatchListV1`（比生产多 18 个键），不代表生产形状 ⇒ 有 7 条断言是按旧数量写死的，必须换成真包真值。
+**第一动作：读 `tests/fixtures/collector_v11/PROVENANCE.md`**（新夹具构成与意图全在里面，包括"为什么故意保留 19 行没有 `fetched_at` 的旧外壳"）。
+
+【真包三批（队长已复制成 world-readable）】`/tmp/incoming`：`2026-09-15T14-40-02Z` 227 行（7 topic 齐）/
+`2026-09-15T15-03-45Z` 85 行（只有 offer）/ `2026-09-15T15-16-32Z` 138 行（缺 3 个 topic）⇒ 后两批**故意**缺 topic，不是数据损坏。
+
+· **队长已经把"必然会红"的 7 条断言逐条定位并算好真包值**（01:27Z 队长换完夹具跑出来的：`7 failed, 421 passed`）。
+   **只改这 7 处，改完必须 `428 passed / 0 failed`**（真包值一个都不许再改，也不要动 `scripts/`）：
+     1. `tests/test_parse_collector_offer.py::test_all_lines_pass_envelope_and_src_hash` — `seen == 77` → **142**（新夹具总行数）
+     2. `…test_jczq_offer_block_structure` — `len(offers)==40 and len(by_match)==8` → **91 / 17**
+     3. `…test_jczq_offer_goal_line_parsed_columns` — 首行 `pk.match_id` 2041483 → **2041485**（真包首场=周二006 阿布艾因vs利雅胜利）；
+        `SNAP` 常量的值 → **`2026-09-15T14:35:37Z`**（真包 snap_ts（该 topic 文件内同值））。真包 HHAD 让球线分布（`options.goalLine`/`goalLineValue`）：
+        **`+1/+1.00`×7、`-1/-1.00`×8、`-2/-2.00`×1、`+2/+2.00`×1、`-3/-3.00`×1** ⇒ 断言要按这个集合写，`HAD` 块这两个键是**空串** ⇒ 解析成 NULL 的口径不变。
+     4. `…test_jczq_result_cancel_and_empty_sp` — 真包**没有字面量「取消」（0 行）**；官方真实形态是 `sectionsNo999=''` + `matchResultStatus='1'` + `poolStatus='Close'`（实测 **2 行**）
+        ⇒ 判「取消/未开」一律改成这三字段组合，**不许再拿中文「取消」做字符串匹配**；报告里写清新口径与依据行号。
+     5. `tests/test_parse_collector_issue.py::test_jc_issue_head_and_issue_no_collision` — 期头 (90,26126)… → **(90,26127)、(900129,26127)、(98,26181)、(94,26188)**；
+        跨玩法重号的性质**仍然成立**（90 与 900129 同 26127）⇒ 断言换值不换语义。
+     6. `…test_lottery_draw_raw_numbers_and_dash_amount` — `len(parsed)==12` → **22**
+     7. `…test_negative_shapes_raise_and_keep_raw_values` — **StopIteration**：锚点 `sectionsNo999 == "5:1"` 真包没有 ⇒ 换 **"1:4"**（真包 `2041482` 周二003 卡塔尔亚vs韩国亚，半场 `0:3`、SP `18.00/7.20/1.07`、`winFlag='A'`、`poolStatus='Payout'`）
+   ⚠️ 这 7 处**全是期望值漂移，不是解析缺陷**（队长已独立验过：450 行真包过 `parse_line` **零异常**）⇒ 若你在改期望值时发现某条**必须改 `scripts/` 才能过**，立刻停下来报告点名，不许改源码迁就测试。
+   · **一个字节都不许改夹具**（禁改清单不变）；⚠️ 外壳**故意两态**：真包行 9 键（含 `fetched_at`）、旧探针行 8 键（无）共 19 行⇒ 解析层**不得要求 `fetched_at` 存在**（它不参与 `src_hash`／身份键／时序），"少一个可选键就报错"判缺陷；
+· 但**测试里那些按旧探针形状写的期望值可以改**——每改一条，报告里必须写"改了哪条断言 / 原值 / 真包值 / 为什么真包对"。
+   已知会变的至少：`jczq_offer` payload 由 44 键 → **26 键**（`isHide/isHot/poolList/vote/remark/groupName/lineNum/matchWeek/*TeamCode/*TeamAbbEnName/baseHomeTeamId/matchName/leagueCode/taxDateNo/backColor` 生产没有）；让球线**只在 `options.goalLine/goalLineValue`**（顶层无此键，真包 `HHAD` 样例是 `"+1"/"+1.00"`，同一行 `HAD` 块这两个键是空串）；`crs` 块 **66 键**、`ttg` **20 键**、`hafu` **23 键（比 had 多一个 `id`）** 不变，可继续当断言。
+
+【队长已做好的 DDL 预检（01:15Z，省得你试错）】解析层产出列与八表列**逐一比对过**，只有两处需要你显式处理：
+· `fact.jc_match.home_team_id / away_team_id` ← 解析层 `match` 里的 **`home_sporttery_id` / `away_sporttery_id`**（名字不同，映射写在 loader 里，**不许改 `parse_*.py`**）；
+  同表 `is_hide / is_hot` 两列**生产不返回**（v1.2 已禁止再补那 18 个键）⇒ 一律 NULL，别为了填它们去猜。
+· `fact.jc_issue_draw` 的 `game_name` 列队长刚 ALTER 上去（表 0 行）⇒ 直接写。
+· 其余表的差集只有 `src_hash / src_file / first_seen_at / last_seen_at` 这类元数据列 ⇒ **由 loader 负责填**：
+  `src_hash` 填**该行所属原始行的 src_hash**（子表行也一样，别自己重算），`src_file` 填相对批路径（如 `2026-09-15T14-40-02Z/jczq_offer/…jsonl`），时间列交给 DB 默认值。
+
+【必须成立】
+ T1 `source ~/.venvs/league/bin/activate && PYTHONPATH=scripts python -m pytest tests -q` → **全绿、零 FAILED 零 SKIPPED**（用例数只增不减；行数期望用夹具子集算，不许硬编 450 这类真包数）
+ T2 写库测试**一律单事务 + 收尾 ROLLBACK**（`league_ing` 在 ref/fact/raw 无 DELETE，留痕洗不掉）
+ T3 **一次真跑**：CLI 用 `--dir /tmp/incoming`（队长准备好的真包 3 批副本），把八表 count 打成一行（`core.log.logger`）——真跑允许留痕，这就是我们想要的数据。
+    ⚠️ **上表的 oracle 只对应真包 3 批，不是夹具**：夹具里那 3 行旧探针 `jc_issue_result` 带 `prizeLevelList`（会产 5 行 prize），真包 6 行全空（产 0 行）⇒ **不许拿夹具的真跑结果去对 oracle**，两码事，报告里分开写。
+ T4 幂等：同一目录连跑两次，八表 count **逐表相等**
+ T5 gap：造一个假批（复制夹具目录、删掉 `jc_issue/`、留 `.done`），跑完必须能在 `ops.file_arrival` 里看到"该批该 topic 缺席"，且**不许**因此改坏已有数据
+ T6 `python3 ~/bin/omp-ast-check.py <全部新文件>` → **0 违规**（每文件 ≤100 行、函数 ≤50 行、≤120 列、无禁依赖、无 print、`psycopg` 只许出现在 `scripts/store/`、`scripts/ingest/`）
+ T7 行数对账表：报告里给"表 / 期望（上表）/ 实得 / 差异原因"
+
+【铁律】① 禁 git 一切子命令；② 禁 print（用 `core.log.logger`）；③ 单文件 ≤100 行 / 函数 ≤50 行 / 单行 ≤120 列，
+  自检 `python3 ~/bin/omp-ast-check.py <你改过的每个文件>` 0 违规；④ stdlib only；
+  ⑤ **禁改清单（本单比平时更严）**：`scripts/**` 整棵树、`tests/fixtures/**`、`tests/conftest.py`、`tests/collector_helpers.py`、
+  任何 DDL/建表/加列/GRANT、真联网、`/srv/league-staging/**`（你的进程没有 `league` 组，读不到，别试）；测试写库一律单事务 + 收尾 ROLLBACK。
+【必须成立】
+ T1 `source ~/.venvs/league/bin/activate && PYTHONPATH=scripts python -m pytest tests -q` → **428 passed / 0 failed**（总数下降＝删了用例，直接拒收）
+ T2 `git diff --stat` 里 `scripts/` **零改动**（队长核）
+ T3 第 4 条（「取消/未开」）报告里必须写清**三个字段名 + 实测命中行数 + 两个真实 matchId**
+ T4 `fact.jc_*` 八表跑完仍**全 0 行**；PG 无测试留痕（`src_file` 含 test/pytest/tmp 的行 = 0）
+【边界】若某条断言**必须改 `scripts/` 才能过**，停下来点名报告，不许改源码迁就测试；若你判断真包某处含义与队长给的值不符，**贴原始行说话**，不要自行换口径。
+【验收（队长逐字复跑）】
+  bash ~/bin/league-accept.sh P0-COLLECT2a tests
+  # 队长另做：`git diff --stat` 核 scripts/ 零改动 + 自己复算 7 条新期望值 + fact 八表 count + PG 留痕查询。

@@ -1,0 +1,69 @@
+【项目】league-v2（规范 README §2-D2「CLV 是核心评价指标」、§2-D9；教训 §9-36、§9-37「汇总数字必须自带口径范围」）
+【前置状态（队长 14:40Z 实测，复跑应一致）】`model.pred_*` 10 个 run / 3504 场 / 175200 行 pred_market；
+  `analysis.backtest_market` 175200 行已回测。全量口径基线（**这是要被改善的数，别拿分组数当标题**）：
+    had  brier 0.6270  log_loss 1.0444  hit 0.4772     ｜ 均匀基线 brier 0.667  ll ln3=1.0986  hit 1/3
+    crs  brier 0.9405  log_loss 2.9963  hit 0.1019     ｜ 均匀基线 brier 0.967  ll ln31=3.4339  hit 1/31
+    ttg  brier 0.8350  log_loss 1.8974  hit 0.2012     ｜ 均匀基线 brier 0.875  ll ln8 =2.0794  hit 1/8
+    jqc  brier 0.7268  log_loss 1.3378  hit 0.3399     ｜ 均匀基线 brier 0.750  ll ln4 =1.3863  hit 1/4（按侧，2 组/场）
+  ⇒ **判别力是实的（hit 全面大幅高于随机），但概率标定只剩 3~6% 优势**（brier/ll 离均匀很近）
+  ⇒ 现在的 p 直接进 EV/Kelly 会在标定上亏钱。已知成因候选（各自都要被数据证实或否证，不许凭感觉选一个）：
+    ① `core` 内核 `DC_RHO=0.2` 写死、不随联赛变；② 训练只用**上一季**单季 ⇒ λ 方差大、尾部过自信；
+    ③ γ（主场优势）只乘主队侧；④ 升班马兜底用联盟平均先验（942 场，实测四玩法兜底组全部差于拟合组）。
+【队长 18:40Z 把 schema 全挖好了（**照用，别再花 20 分钟自己找**）】
+· `model.pred_market(run_id, fixture_id, play_type, option_code, p, p_ai_ref)` — **长表**，一行一个选项；`p_ai_ref` 是 AI 参考值，**本单不许掺进来**（只用 `p`）。
+· `analysis.backtest_market(fixture_id, play_type, option_code, p_pred, outcome, clv, src_run)` — `outcome` 是 **0/1 整数**（不是 bool），`src_run` 就是 run_id。
+· `model.pred_run(run_id, run_at, commit, params jsonb, n_fixtures, note)` — **没有 league_key/season 列**！关键信息在 `params`：
+  `{rho, gamma, plays[], max_goals, n_fallback, rho_clamped, train_season, skipped_unknown}` ⇒ 取 `params->>'train_season'`。
+· **run ↔ 联赛的唯一求法**（队长实测：每个 run **恰好一个联赛 × 一个训练季**，共 5×2=10）：
+  `select r.run_id, r.params->>'train_season' ts, f.league_key from model.pred_run r join model.pred_fixture pf on pf.run_id=r.run_id join fact.fixture f using(fixture_id) group by 1,2,3`
+  ⇒ 264/265 bundesliga(2022/2023) ｜ 266/267 epl ｜ 268/269 laliga ｜ 270/271 ligue1 ｜ 272/273 seriea；`n_fixtures` 306（德甲/法甲）或 380。
+· **兜底标记在 `pred_fixture.features->'fallback'`**，形如 `{"home":"fit","away":"fit"}`（不是布尔！两侧各自标）⇒ 分组口径 =
+  任一侧 ≠ `"fit"` 即算兜底场（写进 `query.py` 的 `include_fallback` 实现并在 docstring 写死这个口径）。
+· 现存量（用来核对"我没改数据"）：`pred_market` 175200 行 / `backtest_market` 175200 行 / `outcome=1` 共 17520 行 /
+  按玩法 `crs 108624、jqc 28032、ttg 28032、had 10512`。⚠️ **只有 4 个玩法**（`haf` 还没注册，别去算它）。
+· **形状实测**（省你试）：`pred_fixture.matrix` 是 **9×9 jsonb 数组**（`max_goals=8` ⇒ 下标 0..8），温度缩放要作用在整张格上再归一化；选项数 `had 3 / crs 31 / ttg 8 / jqc 8`（`jqc` 的 8 是**两侧各 4 档** ⇒ 按侧算 Brier 时每组 4 个选项、每场 2 组，别当成 8 分类）。
+· `pred_market` 里没有兜底信息，兜底只在 **`pred_fixture.features->'fallback'`** ⇒ 需要 `fixture_id` 回连，别在 `pred_market` 上找列。
+· `league_ing` 角色在 ref/fact **无 DELETE**、在 model/analysis 有全 DML ⇒ 本单**一律不写库**（`calib.py`/`calib_eval.py` 零 DB；`query.py` 只读）。
+
+【任务】把"标定"变成可度量、可回退的一件事。4 个文件：
+  1) 【新】scripts/model/calib.py    纯计算 + 零 DB（≤100 行）：
+       · `reliability_bins(probs, winners, n_bins=10) -> list[dict]`：每档 `{"bin":"[0.3,0.4)","n":…,"mean_p":…,"obs_freq":…,"gap":…}`；
+         **`n` 必须回显**（空档 `n=0` 也要出现在列表里，不许静默丢档——丢档＝把图变好看）
+       · `ece(bins) -> float`：加权 |mean_p − obs_freq| 之和；`n_total==0 ⇒ raise`（不是返回 0）
+       · `temperature_scale(probs, winners) -> float`：在**训练折**上搜 T 使 log_loss 最小（一维网格或黄金分割，**禁 scipy**），
+         返回 T 与所用 `n`；T 的搜索范围必须显式写死（建议 [0.5, 3.0] 步长 ≤0.01）并在返回值里回显范围
+       · `apply_temperature(grid_probs, T)`：对整张 9×9 格**先缩放再归一化**（不能只缩放不重归一）
+  2) 【新】scripts/model/calib_eval.py    交叉验证外壳（零 DB，≤100 行）：**必须 leave-one-run-out**——
+       在 9 个 run 上拟合 T、在第 10 个 run 上评估，轮转 10 次；输出逐 run 的
+       `{"league_key","season","T_fit","ll_raw","ll_cal","brier_raw","brier_cal","ece_raw","ece_cal","n"}`；
+       **禁止在同一批数据上又拟合又报告**（那是自证改善）。汇总另给 `improvement_pp` 与"几个 run 变差"计数。
+  3) 【改】scripts/store/query.py    加只读 `calibration_report(conn, *, league_key=None, play_type=None)`：
+       按 (play_type, 概率档) 出 `mean_p / obs_freq / n`（**全量口径**，兜底场包含在内；分组版本参数 `include_fallback=False` 时才排除）
+  4) 【新】tests/test_model_calib.py    纯合成：
+       ① 手算可核的小表：`[(0.5,1),(0.5,0),(0.5,1)]` ⇒ bins 里 `[0.4,0.5)` 空档必须存在且 `n=0`；ece 逐档手算对照
+       ② 完全校准的构造集（mean_p==obs_freq 逐档）⇒ `ece < 1e-9` 且 T_fit 落在 [0.99,1.01]
+       ③ 过自信构造集（把 ② 的概率向 0/1 推）⇒ **`T_fit > 1`** 且 `ll_cal < ll_raw`、`brier_cal < brier_raw`（方向性断言，不写死数）
+       ④ 欠自信构造集 ⇒ `T_fit < 1`
+       ⑤ `n_total==0` raise；T 越出搜索范围时返回边界值并带 `at_boundary: true`
+       ⑥ leave-one-run-out：**样本内不评估**——用一个 2 run 的构造集断言"在拟合它自己的那个 run 上评估"会给出更乐观的数
+         （即 `ll_cal_insample <= ll_cal_oot` 这一"诚实性"检查，能钉死自证改善）
+【必须成立】
+  T1 `python -m pytest tests -q` 零 FAILED 零 SKIPPED（基线以队长最新数为准，别拿旧数当准绳），用例只增不减
+  T2 **不改任何生成 p 的链路**：`scripts/core/**`（内核）、`scripts/derive/**`、`model/{fit,walk,sides}.py` 一律禁改；
+     `model.pred_market` 的数不许被本单改动（校准是**后处理**，通过 calib.py 独立表达；是否入库由队长后续单独决定并升 `pred_run.params`）
+  T3 队长真跑（我执行）：10 run leave-one-run-out 的 `ll_raw vs ll_cal`、`ece_raw vs ece_cal`、
+     **变差的 run 个数**；若 T 校准在 OOT 上**没有改善甚至变差，必须原样报出来**——那是一条有用的结论，不是失败
+  T4 每个数字都必须带 `n`；标题数必须是**全量口径**，分组数另列（§9-37）
+【铁律】① 禁 git；② 禁 print（`core.log.logger`）；③ 机械搬移禁改逻辑/数值/顺序；④ 报告用锚点；
+  ⑤ 单文件 ≤100 行、AST 函数 ≤50 行、单行 ≤120 列，自检 0 违规：
+     `python3 ~/bin/omp-ast-check.py scripts/model tests/test_model_calib.py scripts/store/query.py`；
+     禁新依赖（**stdlib only**，无 numpy/scipy/pandas）；`psycopg` 只准在 `scripts/store/`、`scripts/ingest/`（model 层经 `store.pg` 取连接）；
+     禁建/改/删任何 DB 对象；禁真联网；测试内写库一律单事务 + 收尾 ROLLBACK；
+     `python -m pytest tests -q` 之外还要跑一次 `-m fast` 并贴原始输出；
+  ⑥ 完成后写 `.omp-logs/P0-CALIB1.report.txt`（T1~T4 原始输出 + 你对"这个 T 到底该不该入库"的建议（含反例）+
+     复核清单"还有哪些地方可能把标定做得好看"（只列不改）），然后 `echo TASK_DONE > .omp-logs/P0-CALIB1.done`
+【边界】若你发现 λ 的量纲/归一化让"单一全局 T"在各联赛方向不一致（有的 >1 有的 <1），**停下来报告并列出逐 run 的 T 分布**，
+  不要偷偷改成 per-league 拟合（那是另一单的决策，且要先解决"上一季单季训练"这个根因）。
+【验收（队长逐字复跑）】
+  bash ~/bin/league-accept.sh P0-CALIB1 scripts/model tests/test_model_calib.py scripts/store/query.py
+  # 队长另做：我自己用 SQL 独立重算 3 个档的 obs_freq 与 mean_p（不碰你的代码），并复算一次 ece；确认 pred_market 行数与基线一字不差

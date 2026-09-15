@@ -1,0 +1,33 @@
+【项目】league-v2（§2-D7 ≤100 行/文件 硬红线；§9：报告用锚点、禁 git、禁 print）
+【这一单是什么】**纯机械搬移**：把 `scripts/ingest/jc_write.py`（100 行，验收时被抓出 1 条列宽违规）**拆成两个文件**，
+ 拆完两边都 ≤100 行、**且把那条 125 列的长 SQL 折行**。**除此之外一个字都不许改逻辑。**
+
+【🅣 本单禁止阅读任何其它源码】所需信息全在下面。开单第 1 分钟就 write/edit。**8 分钟内没有写动作 = 拒收。**
+
+【现状（队长 21:05Z 实测，照抄）】`scripts/ingest/jc_write.py` 100 行，内含 6 个函数：
+ `_sint`(30-31) · `_team`(34-42) · `_upsert`(45-60) · `upsert_jc_match`(63-78) · `upsert_jc_offer`(80-89) · `upsert_jc_result`(91-100)
+ 唯一违规：`python3 ~/bin/omp-ast-check.py scripts/ingest/jc_write.py` → `jc_write.py:39: 列宽 125 > 120`（就是 `_team()` 里那条 SELECT 单行写完）
+
+【要做什么（就这三步，不许加戏）】
+ 1. 新建 `scripts/ingest/jc_write_core.py`：把 `_sint` / `_team` / `_upsert` **三个函数原样搬过去**（**函数体逐字不许改**，队长用逐字比对工具核），
+    文件头照 `jc_write.py` 的 import 需要补齐（`from __future__ import annotations`、`typing.Any`、`psycopg.sql`）。
+ 2. `scripts/ingest/jc_write.py` 只留三个 `upsert_*`，开头 `from ingest.jc_write_core import _sint, _team, _upsert`；
+    **公开函数名与签名一律不变**（`jc_load.py` 在 import 它们，不许让它改）。
+ 3. 搬过去之后，把 `_team()` 那条 125 列的 SELECT **折成两行**（新文件只剩 ~45 行，有空间）；SQL 文本本身**不许改**
+    （`SELECT (aliases->>'sporttery') AS jc, team_id FROM ref.team WHERE (aliases->>'sporttery') = ANY(%s)` 一个字符都不能少/变）。
+【不许做】改任何列清单 / gates / extra_where / 返回结构 / 参数名 / 判空逻辑；改 `jc_load.py`；改 `tests/**`；改 DDL；跑真包入库（本单不碰数据）。
+
+【必须成立】
+ T1 `python3 ~/bin/omp-ast-check.py scripts/ingest/jc_write.py scripts/ingest/jc_write_core.py` → **0 违规**（两文件都 ≤100 行，无 >120 列）
+ T2 `python3 ~/bin/jc-move-check.py /tmp/jc_write.presplit.py scripts/ingest/jc_write.py scripts/ingest/jc_write_core.py` → **搬移函数逐字一致**
+    （队长已把拆前的原文件存好：`/tmp/jc_write.presplit.py`，就是你动手前 `jc_write.py` 的那份）
+ T3 `source ~/.venvs/league/bin/activate && PYTHONPATH=scripts python -m pytest tests -q` → **428 passed / 0 failed**
+ T4 `PYTHONPATH=scripts python -c "from ingest import jc_write as w; print(sorted(n for n in dir(w) if n.startswith('upsert')))"`
+    → 输出 `['upsert_jc_match', 'upsert_jc_offer', 'upsert_jc_result']`（**公开面没变**，`jc_load.py` 才不会炸）
+ T5 `PYTHONPATH=scripts python -c "from ingest.jc_write_core import _team; import inspect; print(len(inspect.getsource(_team).splitlines()))"`
+    → 打出行数（队长自证折行生效；**不许为凑数删 docstring**）
+【铁律】① 禁 git；② 禁 print；③ ≤100 行/函数 ≤50 行/≤120 列；④ stdlib + psycopg；⑤ 只许动上面那两个 `scripts/ingest/jc_write*.py` 文件；
+ ⑥ 报告 `.omp-logs/P0-COLLECT2h.report.txt`（T1~T5 原始输出 + 两个文件各自行数）+ `echo TASK_DONE > .omp-logs/P0-COLLECT2h.done`
+【验收（队长逐字复跑）】
+  python3 ~/bin/omp-ast-check.py scripts/ingest/jc_write.py scripts/ingest/jc_write_core.py
+  bash ~/bin/league-accept.sh P0-COLLECT2h scripts/ingest/jc_write.py scripts/ingest/jc_write_core.py

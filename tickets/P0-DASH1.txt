@@ -1,0 +1,55 @@
+【项目】league-v2（§2-D7 ≤100 行/文件 硬红线；§9：报告用锚点、禁 git、禁 print）
+【这一单是什么】给现有 FastAPI 应用加一个**只读"竞彩看板"**：新页面 + 3 个 JSON 端点，数据全部来自 `fact.jc_*` 与 `analysis.backtest_market`。
+ 老板要看的就是这个页面（D11），所以**跑不起来的界面＝没做**：T3/T4 必须是你贴出来的**真 curl 原始输出**。
+【🅣 只准读这 4 个文件】`web/api.py`(102 行) · `web/routers/predictions.py`(148 行，**照它的 `Depends(require_auth)` 风格抄**) · `web/auth.py`(只查 `require_auth` 的导入名) ·
+ `scripts/store/pg.py`(只查 `read_conn` 签名)。**其余一律不许读**（`scripts/core|derive|market|web/services/**`、`tests/**`、`static/index.html` 全禁）。
+
+【A. 分层铁规（不许违反，队长验收器会机检）】
+ · **`web/**` 里禁止 `import psycopg`**（`omp-ast-check.py` 对非 `store/ingest` 层出现 psycopg 直接判 FAIL）
+   ⇒ 所有 SQL 放 **`scripts/store/jc_view.py`**（store 层，允许 psycopg），router 只 `from store import jc_view` 调函数拿 `list[dict]`。
+ · 读库一律 `with pg.read_conn("ro") as conn:`（`league_ro` 实测对 `ref/fact/model/analysis` **只有 SELECT**，看板写不进去是好事）。
+ · 端点一律 `_: None = Depends(require_auth)`（照 `predictions.py:75` 的写法），**不许开免登录口子**。
+
+【B. 要产出的 5 个文件（每个 ≤100 行）】
+ 1. **新建 `web/lifecycle.py`**：把 `web/api.py` 里 `_start_cron()` 与 `lifespan` 相关代码**逐字搬过去**（函数体一个字都不许改，队长用逐字比对工具核），
+    `web/api.py` 现在 **102 行超红线** ⇒ 搬完必须 **≤100 行**；`create_app()` 里改成从 `web.lifecycle` 导入。**行为零变化**。
+ 2. **新建 `scripts/store/jc_view.py`**：三个纯函数，返回 `list[dict]`，**每个函数 ≤50 行**：
+    · `fixtures_on(day: str | None) -> list[dict]`：`fact.jc_match m` 左连"每个 (match,玩法) 最新一版盘"——
+      子查询用 `distinct on (match_id, play_type) ... from fact.jc_offer order by match_id, play_type, snap_ts desc`（**`snap_ts` 是文本列，按它排序即可**），
+      输出键：`match_num, league_cn, home_cn, away_cn, kickoff_bj, match_status, play_type, goal_line, options`（五玩法各一行 ⇒ 一场 5 行，**别在 SQL 里聚合**，前端摊开）。
+      `day` 为 `None` 时取 `business_date` 的最大值；给了非法日期字符串 ⇒ **返回 `[]`，不许抛**。
+    · `issues(limit: int = 20) -> list[dict]`：`fact.jc_issue i` 左连 `jc_issue_draw d`（同 `game_num,issue_no`），
+      输出 `game_num, issue_no, game_name, draw_at, n_matches, (i.raw_head->>'head_source') as head_source, d.draw_result`，按 `draw_at desc nulls last` 取 `limit` 行。
+    · `backtest() -> list[dict]`：`analysis.backtest_market` 原样字段（`play_type, n, brier, log_loss, hit, ...` 用 `select *` 后转 dict，**别手抄列名**），按 `play_type` 排序。
+      ⚠️ 表可能是**空的**（backtest 还没跑过）⇒ **必须返回 `[]` 并在前端显示"暂无数据"，不许 500**。
+ 3. **新建 `web/routers/jc.py`**：`router = APIRouter(prefix="/api/jc", tags=["jc"])`，三个 `@router.get`：
+    `/fixtures`（query `day`）、`/issues`（query `limit`，默认 20，**>200 直接 400**）、`/backtest`；各自 `return {"rows": jc_view.xxx(...)}`。
+ 4. **改 `web/api.py`**：加 `from web.routers.jc import router as jc_router` + `app.include_router(jc_router)`（放在 `jobs_router` 之后），
+    并保证文件 **≤100 行**（靠第 1 条搬走的量腾出来）。
+ 5. **新建 `static/jc.html`**（**不许动 `static/index.html`，它 377 行是遗留件**）：一个自包含页面，`fetch` 上面三个端点（带 cookie），渲染三张表；
+    拿到 401/未登录 ⇒ 页面显示"请先登录 /login"；纯原生 JS，**不许引入任何框架/CDN/外链脚本**。
+【C. 已知事实（照抄，别再查）】
+ · 表当前是**空的**（真包装载还没完成）⇒ **空库跑通就是你的验收**：三端点返回 `{"rows": []}` + HTTP 200，页面不报错。
+ · `fact.jc_match` 关键列：`match_id, match_num, league_cn, home_cn, away_cn, kickoff_bj, match_status, business_date(date), home_team_id(可空), last_seen_at`；
+ · `fact.jc_offer`：PK `(match_id, play_type, snap_ts)`，`play_type ∈ {had,hhad,crs,ttg,haf}`（**官方 `hafu` 已归一成 `haf`**），`options` 是 jsonb，`goal_line` 只有 `hhad` 有值；
+ · `fact.jc_issue`：`game_num, issue_no, game_name, sale_begin, sale_end, draw_at, n_matches, raw_head(jsonb)`，**合成父行的 `raw_head->>'head_source' = 'jc_issue_result'`**（真期头没这个键 ⇒ 前端要显示"(真期头)"）；
+ · `analysis.backtest_market`：`play_type, n, brier, log_loss, hit, ...`（以 `select *` 为准，别猜列名）。
+【必须成立】
+ T1 `python3 ~/bin/omp-ast-check.py web/api.py web/lifecycle.py web/routers/jc.py scripts/store/jc_view.py static/jc.html` → **0 违规**（**五个文件全 ≤100 行**、无 >120 列、无 print、web 层无 psycopg）
+ T2 `python3 ~/bin/jc-move-check.py /tmp/web_api.presplit.py web/api.py web/lifecycle.py` → 搬移函数**逐字一致**（队长已存 `/tmp/web_api.presplit.py`）
+ T3 **起服务真验**（这是本单核心，不许用 pytest 代替）：
+    `cd /home/ubuntu/league-v2/repo && source ~/.venvs/league/bin/activate && (PYTHONPATH=. nohup python -m uvicorn web.api:app --host 127.0.0.1 --port 8077 >/tmp/jc_dash_uvicorn.log 2>&1 &) ; sleep 6`
+    然后**未登录** curl 三个端点必须 **401/403**（证明鉴权生效）：`curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1/...`；
+    再**登录后**（`curl -c /tmp/jcj.txt -d '{"username":...,"password":...}' /api/auth/login`，凭据用测试账号，见 `web/auth.py` 的环境变量名，**别把口令写进报告**）
+    `curl -s -b /tmp/jcj.txt http://127.0.0.1:8077/api/jc/backtest` → 输出必须是 `{"rows":[]}` 之类**合法 JSON**（三端点各贴一条）
+ T4 `curl -s -b /tmp/jcj.txt http://127.0.0.1:8077/static/jc.html | head -5` 有内容，且 `curl -s -o /dev/null -w "%{http_code}\n" .../api/jc/issues?limit=9999` → **400**
+ T5 **收尾自清**：`pkill -f "uvicorn web.api:app --host 127.0.0.1 --port 8077"` 并贴 `ps -eo args | grep -c [u]vicorn` 的输出（**不许留进程**）
+ T6 `source ~/.venvs/league/bin/activate && PYTHONPATH=scripts python -m pytest tests -q` → **428 passed / 0 failed**（web 档测试若存在也一并跑：`PYTHONPATH=scripts python -m pytest tests/web -q` 必须 **0 failed**）
+【铁律】① 禁 git；② 禁 print（用 `core.log.logger`）；③ ≤100 行/文件、函数 ≤50 行、列 ≤120；④ **只准新增/修改 B 条列出的 5 个文件**，
+ 其它任何文件（含 `static/index.html`、`web/services/**`、`scripts/core/**`、`tests/**`、DDL）一律禁改；⑤ 不许装新依赖（uvicorn/fastapi 已在 venv 里）；
+ ⑥ 报告 `.omp-logs/P0-DASH1.report.txt`（T1~T6 **原始输出**）+ 只有全绿才 `echo TASK_DONE > .omp-logs/P0-DASH1.done`
+【边界】起不了服务、或某个端点 500，就**贴 uvicorn 日志尾部原文 + 停下点名是哪个函数哪一行**；
+ **绝对禁止**：为了 200 而删鉴权、把 SQL 写进 `web/**`、或改 `predictions.py`/`auth.py` 来迁就。
+【验收（队长逐字复跑）】
+  LEAGUE_FROZEN_RE="scripts/core/" bash ~/bin/league-accept.sh P0-DASH1 web/api.py web/lifecycle.py web/routers/jc.py scripts/store/jc_view.py
+  # 队长自己再起一次服务、自己 curl 三个端点（不采信报告）

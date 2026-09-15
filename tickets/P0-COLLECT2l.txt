@@ -1,0 +1,34 @@
+【项目】league-v2（§2-D7 ≤100 行/文件；§9：报告用锚点、禁 git、禁 print）
+【这一单只改一行，然后把真包跑通】上一单（`P0-COLLECT2k`）已把 E1（`jc_write.py:72`）与 E2（SET 子句）两行修完并通过 T3/T6（0 违规、428 绿），
+ 它取证出的第三颗 **E3** 是**我自己（队长）设计 `_upsert(cur, "fact.jc_match", ...)` 时埋的**，现在放行修它。**除下面这一行外，什么都不许改。**
+【🅣 只准读一个文件】`scripts/ingest/jc_write.py`（99 行）。开单第 1 分钟就 write/edit。
+
+【E3｜`jc_write.py:54` 第一个参数 `sql.Identifier(table)`】
+ `table` 传进来是**带点的两段名**（`"fact.jc_match"`），而 `sql.Identifier` 收到一个字符串就把它**整体当一个标识符**加引号：
+ 队长 23:06Z 亲测渲染：`sql.Identifier('fact.jc_match').as_string(None)` → `"fact.jc_match"`（**中间那个点被引号吃进去了**）
+ ⇒ PG 报 `UndefinedTable`；`jc_load.py` 的 `load_batch` 把异常吞进 `errors=[...]` 并 **rollback**，
+   所以 `fact.*` 与 `ops.file_arrival`/`ops.ingest_log` **一起回退** ⇒ 三批全部 `ups=0`、count 全 0、gap 也 0 条。
+ **改成**：`sql.Identifier(*table.split("."))`   ⇒ 渲染成 `"fact"."jc_match"`（我实测：`sql.Identifier(*'fact.jc_match'.split('.')).as_string(None)` → `"fact"."jc_match"`）。
+ ⚠️ **只改这一处、只这一行**。`_upsert` 的其余参数拼装（E2 修好的 `sql.SQL(u)` 那句）**保持原样**。
+
+【必须成立（这一单的价值全在这里，必须真跑）】
+ T1 `cd /home/ubuntu/league-v2/repo && source ~/.venvs/league/bin/activate && PYTHONPATH=scripts python scripts/ingest/jc_load.py --dir /tmp/incoming`
+    三行 batch 日志**都不许出现 `errors=[...]`**；最后一行 count 必须正好
+    `jc_match=17 jc_offer=170 jc_result=15 jc_issue=0 jc_issue_draw=0 jc_issue_match=0 jc_issue_prize=0 lottery_draw=0`
+ T2 同命令**第二遍**：count 一字不变、仍无 errors（两遍原始输出都要贴）
+ T3 `sudo -n -u postgres psql -d league -Atc "select count(*)||'/'||count(distinct match_id)||'/'||count(distinct snap_ts) from fact.jc_offer"` → **正好 `170/17/2`**
+ T4 `sudo -n -u postgres psql -d league -c "select topic,src_file,rows,done_marker from ops.file_arrival order by topic,src_file"` 全表输出：
+    **`#MISSING` gap 行必须正好 8 条**（队长 23:10Z 用**修好的** `files_for_batch` 亲自跑出来的真值，逐批点名）：
+      · 批 `2026-09-15T14-40-02Z`：7 个 topic **全齐 ⇒ 0 条 gap**；
+      · 批 `2026-09-15T15-03-45Z`：缺 5 个 ⇒ `jczq_result` `jc_issue` `jc_issue_result` `lottery_draw` `jclq_result`；
+      · 批 `2026-09-15T15-16-32Z`：缺 3 个 ⇒ `jczq_offer` `jc_issue` `jclq_offer`。
+    （⚠️ 我上一单工单里写的"5 条"是**队长的错**——那是只数了批 2 的旧口径；本单按 8 条核。若你实测不是 8，**贴实测原文并说明差在哪**，不许改代码凑数。）
+ T5 `python3 ~/bin/omp-ast-check.py scripts/ingest/jc_write.py scripts/ingest/jc_load.py scripts/ingest/jc_read.py` → **0 违规**
+ T6 `PYTHONPATH=scripts python -m pytest tests -q` → **428 passed / 0 failed**
+【铁律】① 禁 git；② 禁 print；③ ≤100 行/文件、函数 ≤50 行、列 ≤120；④ **只准改 `scripts/ingest/jc_write.py` 第 54 行那一个表达式**；
+ ⑤ 报告 `.omp-logs/P0-COLLECT2l.report.txt`（T1~T6 **原始输出**）+ 只有 T1/T2 真绿才 `echo TASK_DONE > .omp-logs/P0-COLLECT2l.done`
+【边界】还跑不出 17/170/15：**贴 count 原样 + `errors=[...]` 原文 + 你用只读探针取到的取证，然后停下**（上一单这么干过，很对，继续这样）。
+ 绝对禁止：为凑 count 少写行、跳表、造数据、改 `jc_load.py`、或把 `_upsert` 改回"只传裸表名"（那会牵动所有调用点，属队长决定）。
+【验收（队长逐字复跑）】
+  bash ~/bin/v2b-check.sh
+  bash ~/bin/league-accept.sh P0-COLLECT2l scripts/ingest

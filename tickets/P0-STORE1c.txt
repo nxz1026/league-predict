@@ -1,0 +1,34 @@
+【项目】league-v2（规范 ~/league-v2/README.md §2-D7；上一单报告 ~/league-v2/repo/.omp-logs/P0-STORE1b.report.txt §5.1/§8.1 是本单起因）
+【背景】P0-STORE1b 把 collector_pull 改成"逐文件独立事务 + 提交后才归档"，方向和实现都对、测试也补上了。但队长复核发现**这个保证是"碰巧成立"的**，实测证据：
+  · 新连接 `pg.connect()` 处于 IDLE 时，`with conn.transaction():` 会真发 BEGIN/COMMIT（上一单 §7.2 的 libpq 跟踪已证）；
+  · 队长实测：即使外面再套一层 `pg.write_conn`（`with conn:`），只要**进入内层时连接还是 IDLE**，真提交照样发生 → 现状 OK；
+  · **隐患**：一旦将来有人在 `main()` 里 run() 之前先执行任何一条语句（最可能的是"单实例防并发"的 `SELECT pg_advisory_lock(...)`，或先查一下 file_arrival 去重），外层事务就变成真事务，内层 `conn.transaction()` **退化成 SAVEPOINT**：
+    "提交成功后才归档"变成假象 → 进程被 kill（我们的派工器有 `timeout`，线上 cron 也会有 logrotate/重启）时 **stg/ops 全回滚、文件却已进 done/ = 无痕丢数据**，正是上一单要堵的洞。
+【任务】3 个文件（**一个都不许多**），把这个保证从"碰巧"变成"锁死"：
+  A) 改 scripts/ingest/collector_pull.py：
+     A1. `main()` **不再用 `pg.write_conn`** 包 run()：改成 `conn = pg.connect("ing")` + `try/finally conn.close()`（让逐文件事务处在"无外层事务"的确定环境里）。
+     A2. `_load()` 在 `commit=True` 分支进事务**之前**做一次自检：若 `conn.pgconn.transaction_status` 不是 IDLE（即已存在外层事务），立刻 `raise RuntimeError("…逐文件提交会退化成 SAVEPOINT，禁止在 run(commit=True) 外层再开事务…")`
+         （错误文案要能让人一眼看懂为什么禁，别只写 "bad state"）。`commit=False` 分支不做此检查（测试就是靠 False 走调用方边界）。
+     A3. 模块/函数 docstring 里把 A1/A2 的因果写清（3 行以内），并把 `run()` 的 docstring 中"psycopg 的 conn.transaction() 在 IDLE 连接上…"那段口径校准为**已加断言**。
+  B) 新增 tests/test_ingest_atomicity.py（≤100 行，**零 DB 连接**：用 stub 把行为钉死，这样没库的机器也能跑）：
+     B1. 用一个假 conn 对象（实现 `cursor()`（返回记录 execute 的假 cursor，含 `__enter__/__exit__`、`rowcount`）、`transaction()`（记录 enter/exit 的假上下文）、`pgconn.transaction_status`）+ monkeypatch `collector_pull._archive` 记录调用时机；
+     B2. 断言事件顺序：**事务 exit（提交）必须早于 `_archive` 调用**（这就是"提交后才动文件"的回归锁）；
+     B3. 断言 `commit=True` 且 `transaction_status` 非 IDLE → `_load` 抛 RuntimeError（把 A2 的守卫钉死）；
+     B4. 断言"第 2 个文件装载抛异常时，第 1、3 个文件仍各自完成（顺序不断）"，且失败文件仍产出 `ok=false` 留痕调用（用假 cursor 收到的 SQL 参数判断，不连库）。
+     B5. 断言 `main()` 用的是 `pg.connect` 而不是 `pg.write_conn`（monkeypatch 两个工厂函数，看哪个被调；这条直接钉住 A1，防将来被"顺手改回去"）。
+  C) 改 scripts/ingest/quota.py：**只改 docstring**（≤3 行，补一句上一单 §8.1 的语义：已有账本行的 `cap` 不会被 `charge(cap=更大)` 抬高，WHERE 比的是库里的 cap；将来要做当日动态扩容必须改 `CHARGE_SQL` 把 `EXCLUDED.cap` 一起 SET 并纳入守卫）。**SQL 一行都不许动**（改了会静默改写历史额度）。
+【已核实的 DB 事实】stg 七表=(line jsonb, src_hash text PK, loaded_at, src_file) UNLOGGED，league_ing 对 stg 只有 SELECT/INSERT/TRUNCATE（无 UPDATE/DELETE），对 ops 有 SELECT/INSERT/UPDATE。`league_ing` **也没有 CREATE TEMP TABLE 权限**（上一单实测），所以 B 一律用 Python stub，不要用临时表、不要连库写任何真数据。
+【铁律】
+  ① 禁 git 一切子命令；② 禁 print()/pdb/breakpoint/set_trace（日志走 `from core.log import logger`）；
+  ③ 除 A/B/C 描述的语义外**不得改动其它逻辑**：归档规则（clean→done/、dirty→原件 bad/、.done 恒进 done/、未知 topic→bad/_unknown/）、缺 .done 不处理、CLI 三参数默认值、`load_file`/`STG_TABLES`/store 层两文件一律保持原样；
+  ④ 报告用锚点（函数名+前后行为对照），别贴大段代码；
+  ⑤ collector_pull.py **仍 ≤100 行**、测试 ≤100 行、单函数 AST ≤50 行、单行 ≤120 列，自检到 0 违规：`python3 ~/bin/omp-ast-check.py scripts/ingest scripts/store tests/test_ingest_atomicity.py`；
+     禁新依赖；`scripts/core/**`、`web/**`、`static/**`、既有 tests、`store/` 两文件**禁改**；禁建/改/删任何 DB 对象；
+     **若 A1+A2 令 collector_pull.py 超 100 行**：不许自行拆文件，停下来在报告写卡点 + 拆法建议，照样 echo TASK_DONE（队长会拆）。
+  ⑥ 测试里 `sys.path.insert(0, <repo>/scripts)` 用既有写法（tests/test_quota.py 可抄）；B 的测试**必须无库也 pass**（不能 skip，这是它存在的意义）
+  ⑦ `~/bin/omp-ast-check.py`、`~/bin/league-accept.sh` 是队长验收工具，**只读禁改**（改工具＝拒收）
+  ⑧ 完成后写 ~/league-v2/repo/.omp-logs/P0-STORE1c.report.txt（改动清单 + A 前后对照 + 验收命令原始输出 + B 的事件序列实测打印），然后 `echo TASK_DONE > .omp-logs/P0-STORE1c.done`
+【验收（队长逐字复跑）】
+  bash ~/bin/league-accept.sh P0-STORE1c scripts/ingest scripts/store tests/test_ingest_atomicity.py tests/test_quota.py tests/test_collector_contract.py
+  python3 -m pytest tests/test_ingest_atomicity.py -q -rs     # 期望真跑 pass，**不许出现 skip**
+  # 期望：全量在 P0-DERIVE1 之后 = 227+derive 新增+本单新增 全绿零 FAILED；机检 0 违规；PG 14 表零留痕

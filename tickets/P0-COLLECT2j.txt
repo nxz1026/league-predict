@@ -1,0 +1,51 @@
+【项目】league-v2（§2-D7 ≤100 行/文件；§9：报告用锚点、禁 git、禁 print）
+【这一单只有两处要修，修完就把真包跑通】前两单已把 `jc_load.py`(87 行) / `jc_read.py`(34 行) / `jc_write.py`(100 行) 写好，
+ 队长 22:30Z 亲跑 `bash ~/bin/v2b-check.sh` 得到：**三个批次全部 `ups=0`，八表 count 全 0**，报错原文：
+ `ValueError: offset must be a timedelta strictly between -timedelta(hours=24) and timedelta(hours=24), not datetime.timedelta(days=-2, seconds=28680)`
+ ⇒ **装载器一行都没写进库**，原因锁定在下面第①条。
+【🅣 禁止阅读其它源码】只许读 `scripts/ingest/jc_read.py`、`jc_load.py`、`jc_write.py` 这三个文件（都是本层文件，一共 221 行）。
+ 开单第 1 分钟就 write/edit；**8 分钟内没有写动作 = 拒收**。
+
+【① 必修：`jc_read.py` 的 `_stamp()` 解析不了自家时间戳（这就是全 0 的根因）】
+ 现状（`jc_read.py:8-10`）：`re.search(r"(\d{4}-\d\d-\d\dT\d\d-\d\d)(?:-(\d\d))?", name)` 然后 `fromisoformat(f"{group1}:{group2 or '00'}")`。
+ ⇒ `group(1)` 只吃到 `2026-09-15T14-40`，拼出来是 **`2026-09-15T14-40:02`**，Python 3.11 的 `fromisoformat` 把 `-40:02` 当成 **UTC 偏移 −40:02**
+ → 超出 ±24h ⇒ 抛上面那个 `ValueError`（`timedelta(days=-2, seconds=28680)` 正好等于 −40h02m，队长已换算核对）。
+ **修法（规定到这一步，别用 `fromisoformat` 碰运气）**：从名字里取出 `日期 / 时 / 分 / 秒` 四个**整数**，用 `datetime(y, mo, d, h, mi, s)` **显式构造**（无时区）。
+ 必须满足这张表（队长用来复验，逐条打印断言）：
+| 输入 | 期望输出 |
+|---|---|
+| `2026-09-15T14-40-02Z.done` | `datetime(2026, 9, 15, 14, 40, 2)` |
+| `2026-09-15T14-35Z__001.jsonl` | `datetime(2026, 9, 15, 14, 35, 0)` |
+| `2026-09-15T15-03Z__001.jsonl` | `datetime(2026, 9, 15, 15, 3, 0)` |
+| `2026-09-15T15-16-32Z.done` | `datetime(2026, 9, 15, 15, 16, 32)` |
+| `lottery_draw/2026-09-15T15-16Z__001.jsonl`（整条相对路径里带名字） | `datetime(2026, 9, 15, 15, 16, 0)` |
+ ⚠️ 只改 `_stamp` 的实现，**函数签名、返回类型、调用点都不许动**；`.done` 与数据文件共用的这个解析**必须一致**（窗口 `(t_{i-1}, t_i]` 的语义不许改）。
+
+【② 必修：`jc_write.py` 唯一的 D7 违规（提交前的最后一道闸）】
+ `python3 ~/bin/omp-ast-check.py scripts/ingest/jc_write.py` → `jc_write.py:39: 列宽 125 > 120`（就是 `_team()` 里那条单行 SELECT）。
+ 文件现在**正好 100 行**，折行会撑到 101 ⇒ **先在文件里回收一行空白**：`jc_write.py:13-14` 是**连续两个空行**（第 12 行 `from store.parse_values import clock, dec` 之后），
+ 合成一个空行就腾出 1 行；然后把第 39 行的 SQL **折成两行**。
+ **硬约束**：SQL 文本**一个字都不许变**，必须是
+ `SELECT (aliases->>'sporttery') AS jc, team_id FROM ref.team WHERE (aliases->>'sporttery') = ANY(%s)`
+ （用括号包住的相邻字符串字面量拼接即可，**不许加 `%s`、不许改列名、不许动参数**）；改完 `wc -l` 必须仍是 **≤100**。
+
+【不许做】改 `_stamp` 与 `jc_write.py:39` 之外的任何逻辑；改 `jc_load.py` 的任何函数；加/删测试用例；碰 DDL；跑真联网。
+
+【必须成立】
+ T1 `PYTHONPATH=scripts python scripts/ingest/jc_load.py --dir /tmp/incoming` **真跑通**，最后一行 count 必须是
+    `jc_match=17 jc_offer=170 jc_result=15 jc_issue=0 jc_issue_draw=0 jc_issue_match=0 jc_issue_prize=0 lottery_draw=0`
+    （后五张 0 是对的，传统足彩属 P0-COLLECT2e；**前三张必须正好 17 / 170 / 15，不许"差不多"）
+ T2 同命令**第二遍**：count 一字不变（两遍原始输出都要进报告）
+ T3 ①条的表**逐条打印实测**（脚本跑 `for` 循环打印 5 个输入的解析结果），贴进报告
+ T4 `select count(*)||'/'||count(distinct match_id)||'/'||count(distinct snap_ts) from fact.jc_offer` → **正好 `170/17/2`**
+ T5 `select topic,src_file,rows,done_marker from ops.file_arrival order by topic,src_file` 全表输出：
+    **`#MISSING` 的 gap 行必须有 5 条**（批 `15-03-45Z` 缺 5 个 topic、批 `15-16-32Z` 缺 3 个 ⇒ 报告里写清各批缺哪几个）
+ T6 `python3 ~/bin/omp-ast-check.py scripts/ingest/jc_load.py scripts/ingest/jc_read.py scripts/ingest/jc_write.py` → **0 违规**
+ T7 `source ~/.venvs/league/bin/activate && PYTHONPATH=scripts python -m pytest tests -q` → **428 passed / 0 failed**
+【铁律】① 禁 git；② 禁 print（用 `core.log.logger`；T3 的实测脚本请写到 `/tmp/` 里跑，别塞进 repo）；③ ≤100 行/文件、函数 ≤50 行、列 ≤120；
+ ④ stdlib + psycopg；⑤ 只许动 `scripts/ingest/jc_read.py` 与 `scripts/ingest/jc_write.py` 两个文件（`jc_load.py` 不许改）；
+ ⑥ 报告 `.omp-logs/P0-COLLECT2j.report.txt`（T1~T7 原始输出）+ `echo TASK_DONE > .omp-logs/P0-COLLECT2j.done`
+【边界】T1 跑不出 17/170/15 就**贴出 count 原样 + 你判断的根因**，然后停下；**绝对禁止**改 oracle、少写行、跳表、造数据、或改 `jc_load.py` 来绕。
+【验收（队长逐字复跑）】
+  bash ~/bin/v2b-check.sh
+  bash ~/bin/league-accept.sh P0-COLLECT2j scripts/ingest

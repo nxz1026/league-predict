@@ -1,0 +1,63 @@
+【项目】league-v2（§9 铁律：报告用锚点、禁 git、禁 print；§2-D7 ≤100 行/文件 是**用户确认的硬红线**）
+【用户红线（本单最高优先级）】**宁可不插，不可插错** ⇒ 任何"猜出来的对齐"都是事故，比缺数据严重得多。**可确认数允许是 0，那也是一条有用的结论。**
+
+【这一单是什么】把**竞彩的队伍身份**接到我们自己的 `ref.team` 上——这是"竞彩盘口 × 我们的模型概率"唯一的第一把钥匙。
+
+【队长 01:45Z 用真包实测过的事实（先读这几条，别重复劳动、别推翻）】
+· 生产 payload **自带队伍数字 ID**：`homeTeamId / awayTeamId`（sporttery 内部稳定 id：阿森纳=1、利物浦=11、阿斯顿维拉=2、巴塞罗那=401、皇家马德里=664、巴列卡诺=849…）
+  + `homeTeamAllName`（中文全名）+ `homeTeamAbbName`（中文简称），另有 `matchId`（场次唯一身份）。
+  ⇒ **不要退回到"只能靠名字模糊匹配"这个错误前提。**
+· `ref.team` 真实结构（`league` 库）：`team_id bigint identity` / `sport text` / **`name_cn text NOT NULL`** / `aliases jsonb DEFAULT '{}'` /
+  生成列 `af_id`（= `aliases->>'api_football'`）与 `fd_id`；**没有 `league_key` 列**（球队不属于某联赛，靠 `fact.fixture` 出现关系推）。
+  全表 **122 行**；`aliases ? 'sporttery'` **命中 0 行**；`name_cn` **混用拉丁原名**（实测样例：`1899 Hoffenheim`、`Ajaccio`、`Alaves`、`Almeria`）。
+· 真包 17 场 = 34 队：`name_cn == 竞彩全名` **精确命中 11 队**；加上"只有简称命中"的去重后 **可确认 12 / 34**；
+  双方都可确认的场次**只有 3 / 17**（周二007 巴列卡诺vs西班牙人、周二011 利物浦vs热刺、周二013 埃尔切vs皇马）。
+· 剩下 22 队**绝大多数不是我们没有，是写法不同**：巴伦西亚 / 马德里竞技 / 阿拉维斯 / 莱万特 / 桑坦德竞技 / 拉科鲁尼亚…（都是西甲在售队伍）
+  ⇒ **本单不许"聪明地"把它们对上**，只许把它们**列成给人看的候选**（T3）。
+
+【任务】
+ 0) 先 `\d ref.jc_match_num` 与 `\d ref.team` 看清列（别猜类型）
+ 1) 【新】一个纯计算模块（落点建议 `scripts/ref/jc_team_align.py`；目录不存在就放 `scripts/store/` 同名文件，**不许建包、不许动 `__init__` 之外的既有文件**）：
+    · 输入 = 我方球队清单（`team_id, name_cn, aliases`）+ 竞彩队伍（`sporttery_id, 全名, 简称`）——**全部走参数注入，模块内零 DB**；
+    · 输出三档：
+      **档 1** 竞彩 `teamId` 已存在于某行 `aliases->>'sporttery'` ⇒ 直接得 `team_id`（幂等重跑就靠这条，第二遍必须与第一遍完全一致）；
+      **档 2** `name_cn` 与竞彩**全名**全等（唯一允许的归一 = 去空格 + 大小写折叠，**别的都不许做**）⇒ 可确认；
+      **档 3** `name_cn` 与竞彩**简称**全等，且**同一批里该简称只对应一个我方球队**（一对多 ⇒ 立刻降为候选）⇒ 可确认；
+      其余一律不可确认 ⇒ 进候选。
+    · **严禁清单（错一行整单拒收）**：编辑距离 / 音译 / 翻译 / 包含关系 / 前缀 / 子串 / "去掉'队'字" / 任何相似度打分。
+ 2) 【新】`docs/db/seed_jc_team_map.sql`：把可确认结果写成**可人工复核的 seed**（**本单不许真执行**，执行由队长在用户点头后做）。
+    每行形如 `-- 证据: 竞彩 401 巴塞罗那/巴萨 = name_cn 巴塞罗那 (team_id=…, af_id=…)` + `UPDATE ref.team SET aliases = jsonb_set(aliases,'{sporttery}','"401"') WHERE team_id = … AND NOT aliases ? 'sporttery';`
+    ⇒ **`jsonb_set` 只加新键，绝不动 `api_football`/`football_data` 原键**；文件头注释必须写清**档 1/2/3 各自行数**与总行数。
+ 3) 【新】候选清单 `docs/待人工-竞彩队名候选.md`：**按竞彩 `leagueAllName` 分组**（映射写死在代码里：`西班牙甲级联赛→laliga`、`英格兰超级联赛→epl`、`意大利甲级联赛→seriea`、`德国甲级联赛→bundesliga`、`法国甲级联赛→ligue1`；映射不到的组写"联赛未覆盖"），
+    每组给我方**该联赛出现过（`fact.fixture`）的球队列表**（不是按字符串相似度挑的！）+ 明确标注 **"未经人工确认，禁止入库"**。
+    若你认为需要建 DB 表放候选，**停下来点名要列**，不要自己建。
+【队长 18:35Z 补一张**已经存在但空着的桥表**（本单的真正目标，别错过）】
+· `ref.jc_match_num(jc_match_id, display_num, fixture_id, sell_date, play_types)` —— **0 行**，结构早就设计好了：
+  `jc_match_id` = 竞彩 `matchId`、`display_num` = `周二013` 这种展示编号、`fixture_id` = **我们 `fact.fixture` 的主键**。
+  ⇒ 这张表填满的那一刻，`fact.jc_offer ↔ model.pred_market` 才第一次能 join，"竞彩盘口 × 我们的概率"才算真的通。
+· **允许写 seed 的唯一条件（三样全中，缺一不可）**：① 该场主队 team_id 可确认；② 客队 team_id 可确认；
+  ③ 竞彩 `kickoff_bj` 与我们 `fact.fixture.kickoff_at`（转北京时间）**同一分钟**。任一不满足 ⇒ 只进候选清单，不写映射。
+· 因此本单产出两个 seed 文件（**都不许执行**）：`docs/db/seed_jc_team_map.sql`（队伍别名）与 `docs/db/seed_jc_match_num.sql`（场次桥），
+  后者每行必须带**证据注释**（竞彩编号 / 我方 fixture_id / 双方 name_cn / 两个 kickoff 值）。
+· 队长给的预期上界（照此校验你自己别写超）：今晚真包 17 场里**双方队伍都可确认的只有 3 场** ⇒ `seed_jc_match_num.sql` 的行数**不该超过 3**；
+  若你算出更多，**几乎一定是哪里松了**，停下来点名，别继续。
+
+
+【必须成立】
+ T1 全量 pytest 绿（数以队长最新基线为准，当前 `428 passed`），用例只增不减
+ T2 **零误插**：seed 每一行都能被"全等 / sporttery id 已在 aliases"解释；队长会**逐行反查 `ref.team`** 核对，**错一行整单拒收**（优先级高于"多插几行"）
+ T3 候选清单必须覆盖真包那 22 支未命中队伍，且每支给的是**同联赛我方球队全集**（不超 5 个就写实际个数），不许按相似度筛
+ T4 **不改任何解析层 / loader / DDL / GRANT**；`ref.team` 本单**一行都不许真写**（seed 只是文件）
+ T5 数字自带口径（§9-37）：报告里"可确认 12 队"必须写清分母与批名（34 队 = 真包 17 场主客全集，批 `2026-09-15T14-40-02Z`）
+ T6 纯函数单测必须包含**反例**：构造一个"编辑距离很近但不该确认"的对（例：`阿拉维斯` vs `Alaves`、`巴伦西亚` vs `Valencia`）断言其**落在候选而不是 seed**
+【铁律】① 禁 git 一切子命令；② 禁 print（用 `core.log.logger`）；③ 单文件 ≤100 行 / 函数 ≤50 行 / 单行 ≤120 列，自检
+  `python3 ~/bin/omp-ast-check.py <你新建的每个文件>` 0 违规；④ stdlib only（无 numpy/scipy/pandas/rapidfuzz）；
+  ⑤ 禁改清单：`scripts/core|derive|market|store/parse_*`、`scripts/ingest/jc_load.py`（别的工单在写）、`tests/fixtures/**`、任何 DDL/建表/GRANT、
+  `ref.team` 真数据、真联网、`/srv/league-staging/**`；测试写库一律单事务 + 收尾 ROLLBACK；
+  ⑥ 完成后写 `.omp-logs/P0-JCALIGN1.report.txt`（T1~T6 原始输出 + 逐档行数 + "我特别想确认但忍住了的 3 个队"清单），
+  然后 `echo TASK_DONE > .omp-logs/P0-JCALIGN1.done`
+【边界】如果你发现"要做到 T3 就必须能查 `fact.fixture` 才知道某队打过哪个联赛"，那是**只读查询**，允许（用 `store/pg.py` 的连接）；
+  但不许为此写任何库、不许建物化视图。若你判断 12 队里有你**不确定**的（例如同批出现两个 name_cn 相同的队），**降级进候选**并点名。
+【验收（队长逐字复跑）】
+  bash ~/bin/league-accept.sh P0-JCALIGN1 scripts/ref scripts/store/jc_team_align.py tests/test_jc_team_align.py
+  # 队长另做：逐行反查 seed（对 `ref.team` 真查 `name_cn` 是否全等）+ 用我自己的脚本独立重算三档命中数，与报告对表；`ref.team` 必须仍 0 行含 sporttery 别名。

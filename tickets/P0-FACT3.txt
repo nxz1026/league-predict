@@ -1,0 +1,61 @@
+【项目】league-v2（规范 ~/league-v2/README.md §2-D5/D7；上一单 P0-FACT2 的**算法前提被我写错了**，本单修它）
+【队长实测数据（2026-09-15，真跑 `store.upsert_*` 后的留痕统计，本单的起点）】
+```
+fact.fixture                5341 行（全 AF 权威 id；FD 不再插场 ✅ A1 成立）
+FD 对齐成功                     453 / 3504 = 12.9%（太低，等于多源核对没建立）
+两源分歧 v_result_conflict        0 场（对齐上的那 453 场两源比分完全一致 ⇒ 机制没错，是"对齐不到"）
+ops.ingest_log(topic='fd_align') 未对齐 3051 行，按原因：
+    name_mismatch   1730   ← 主因：AF 用短名，FD 用长名（AF "Newcastle" vs FD "Newcastle United FC"；"Marseille" vs "Olympique de Marseille"）
+    ambiguous_time  1299   ← 主因：**同一联赛同一秒多场同时开球是常态**（周六 15:00 全开、法甲 20:00 九场齐开）
+    no_time            22   ← 真分歧：两源开球时刻就是不一样（极少量，属正常）
+```
+【根因＝我上一单的两条指令错在哪】
+  ① 我写"同 (league_key, kickoff) 出现两条候选 ⇒ 判 `ambiguous_time`，不许任选其一"。
+     我以为"同秒两场"是病理现象，**其实它是常态**（一轮比赛集中开球）⇒ 这条把 1299 场直接判死。
+  ② 我写"命中后要求主/客队名 `normalize_team` **相等**"。
+     两源命名习惯是"短名 vs 长名"，**相等**永远不成立 ⇒ 1730 场判死。
+  ⇒ 修的方向不是"放宽到模糊匹配"，而是**把唯一性从"键唯一"改成"配对唯一"**：约束照样硬，只是落在正确的位置上。
+【任务】2 个文件（**就这两个**）：
+  1) 【改】scripts/store/align.py（≤100 行，允许重写这个文件，**别改别的文件**）
+       · `af_index(rows) -> dict[Key, list[int]]`：同 (league_key, kickoff) 的 AF 场次收成**候选列表**（不再置 None）
+       · `match_fd(fd_row, index, name_pairs) -> (fixture_id, reason)`，判定顺序：
+         a. 取该 (league_key, kickoff) 候选列表；空 ⇒ `no_time`
+         b. 对每个候选做**队名 token 子集匹配**（见下），收集所有"主客都对得上"的候选
+         c. 恰好 1 个 ⇒ `ok`；0 个 ⇒ `name_mismatch`；≥2 个 ⇒ `ambiguous_pair`（**这才是真正的歧义**：同秒同对阵出现两场）
+       · token 规则（必须写成独立小函数，好测）：`tokens(name)` = 小写 + 去变音符 + 按非字母数字切词
+         + **剥停用词**（`fc afc cf sc ac club of the de olympique ogc rc as ajax`… 由你按五大联赛真名补全，但**必须是显式常量表**，不许子串猜测）
+         + 剩下来的 token 集合满足 **子集关系**（`AF ⊆ FD` 或 `FD ⊆ AF`，任一向都行）即算该侧对上；
+         ⚠️ 子集必须**非空**（两边都被剥成空集 ⇒ 不许判命中，返回 `name_mismatch`）
+         ⚠️ 主客**不许互换**（沿用 `home_away_swapped`）
+       · 现有 reason 值保持兼容：`ok / no_time / name_mismatch / home_away_swapped`，把 `ambiguous_time` 改名 `ambiguous_pair`（语义变了），
+         `upsert_fixtures/upsert_results` 里若按字符串判 reason 的，一并改（**只改 reason 常量，别动落库逻辑**）
+  2) 【改】tests/test_align.py（≤100 行）
+       · 保留既有用例语义，新增/改写这几条（**用真报文里的真实队名**，别自己编）：
+         - "同时开球 3 场、队名各不同" ⇒ 三条 FD 行各自命中各自 AF 场（**旧实现会全判 ambiguous**）
+         - AF "Newcastle" vs FD "Newcastle United FC" ⇒ `ok`；AF "Manchester City" vs FD "Manchester United" ⇒ `name_mismatch`
+           （**这是子集规则最危险的反例，必须钉住**：两队 token 差一个词，绝不能互配）
+         - "全部 token 被剥成空集" ⇒ 不判命中
+         - 同秒同对阵两场（假想的背靠背） ⇒ `ambiguous_pair`
+         - `no_time`（差 1 秒）与 `home_away_swapped` 保持原行为
+       · 断言一律**相对量**（库里已有真实存量，禁止 `== 字面量` 总数）
+【必须成立（本单的硬指标）】
+  · 队长改完会**亲自重跑真装载**，验收线：**FD 对齐率从 12.9% 提到 ≥90%**（3504 里至少 3150 场），且 `v_result_conflict` 仍可读
+  · `fact.fixture` 行数**必须仍等于 5341**（FD 一律不插场，这是 P0-FACT2 立住的规矩，不许为了提对齐率破它）
+  · 全量 `python -m pytest tests -q` **308 passed 上下、零 FAILED、零 SKIPPED**；机检 0 违规
+【铁律】① 禁 git；② 禁 print（日志走 `core.log.logger`）；③ 机械搬移禁改逻辑；④ 报告用锚点；
+  ⑤ 单文件 ≤100 行、AST 函数 ≤50 行、单行 ≤120 列，自检 0 违规：`python3 ~/bin/omp-ast-check.py scripts/store tests/test_align.py`；
+     **只许改上面 2 个文件 + 必要时 `upsert_fixtures.py`/`upsert_results.py` 里的 reason 常量引用**（改动最小化，别重构）；
+     禁新依赖；`scripts/core|derive|ingest/**`、`store/pg.py`、`store/parse_api.py`、`store/query.py`、既有其它 tests **禁改**；
+     禁建/改/删 DB 对象；**不许真跑生产装载**（写 fact/ref 的落库一律在回滚事务里；真数据由队长跑）；
+  ⑥ 禁真联网；⑦ `~/bin/omp-ast-check.py`、`~/bin/league-accept.sh` 只读禁改（改工具＝拒收）
+  ⑧ 完成后写 `.omp-logs/P0-FACT3.report.txt`：把 `ops.ingest_log` 最新 rejected 里的真实队名对子挑 **20 组**，
+     逐组给出 `tokens()` 两侧结果与判定，**特别标出你担心会误配的**（尤其曼市双雄、伦敦多队、"Inter"vs"Milan"类）
+【显式同义表＝唯一允许的补漏手段（预先授权给你）】子集规则注定有一批配不上，因为两源用的是**不同的专名**（真例：FD "Olympique Lyonnais" vs AF "Lyon"、
+  FD "FC Internazionale Milano" vs AF "Inter Milan"、FD "Stade Brestois 29" vs AF "Brest"）。这类**不许**用编辑距离/模糊相似度去蒙，
+  只准用一张**人可审的常量同义表**：`TEAM_SYNONYMS: dict[str, str]`，键=归一后的 FD 名，值=归一后的 AF 名（或反向），命中即在 reason 里回 `ok_synonym`。
+  要求：① 表里**每一条**都要在 report 里列出并注明是哪个真实对阵暴露出来的；② 不许"一个键配多个值"；③ 表命中前先试子集规则（同义表是补丁不是主路）；
+  ④ 停用它必须仍然保持"配对唯一"（同秒多候选时同义表也不能二选一）。
+【边界】若加了同义表仍到不了 ≥90%，**停下来**在报告里给出剩余未对齐的分类统计与前 20 个真实样本，让我决定是否值得为剩下的补表。
+【验收（队长逐字复跑）】
+  bash ~/bin/league-accept.sh P0-FACT3 scripts/store tests/test_align.py
+  # 队长另做：真重跑 upsert_fixtures+upsert_results → 公布对齐率、ambiguous_pair 数、v_result_conflict 真分歧场数（≥3000 场双源才算多源核对兑现）

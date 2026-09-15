@@ -1,0 +1,78 @@
+【项目】league-v2（§2-D7 ≤100 行/文件；§9：报告用锚点、禁 git、禁 print）
+【这一单是什么】把 `scripts/ingest/jc_load.py` 从 18 行空壳**按下面的蓝图填成能跑的装载器**（三批真包 → `fact.jc_*` 八表）。
+**设计已由队长定死：函数名、签名、返回值、调用顺序都不许你改**；你只填实现。**这不是让你思考架构的单——是照图施工的单。**
+
+【施工前必读（只读这 3 处，5 分钟内读完，读完立刻开始写第 1 个函数）】
+ · `scripts/ingest/jc_write.py`（100 行，上一单已修好：`_upsert`/`upsert_jc_match`/`upsert_jc_offer`/`upsert_jc_result` 可直接调用）
+ · `scripts/store/parse_collector.py` 第 1-40 行（`parse_line(dict) -> None | dict{table,pk,row,notes[,match]}`）
+ · `scripts/ingest/collector_pull.py` 第 40-99 行（**照抄它的连接方式、`ops.ingest_log` 写法、logger 用法、异常处理风格**）
+ 不许读：`scripts/core|derive|market|web/**`、其它 `parse_*.py`（你不需要懂解析细节）、`tests/**`。
+
+【🅓 真包**实际布局**（队长 20:41Z 逐目录核过；**网上文档写的"批目录"与现实不符，以本节为准**）】
+· 根目录 `/tmp/incoming/` 下是 **7 个 topic 子目录** + **根级的 `.done` 标记文件** + 一个 `probe_pack.tar.gz`（忽略它）：
+    `jc_issue/  jc_issue_result/  jclq_offer/  jclq_result/  jczq_offer/  jczq_result/  lottery_draw/`
+    `2026-09-15T14-40-02Z.done   2026-09-15T15-03-45Z.done   2026-09-15T15-16-32Z.done`
+· **数据文件名 = `2026-09-15T14-35Z__001.jsonl`（或 `.empty`）= 采集分钟的 UTC 时间 + 序号**；
+  ⚠️ **`.done` 的名字（14-40-02）与数据文件名（14-35Z）对不上**——标记是"上传完成时刻"，文件是"采集时刻"，**两者相差 4 分钟，没有任何名字关联**。
+· 因此**批 ↔ 文件的唯一可靠关联 = 时间**：一个 `.done` 覆盖"它出现之前已存在的所有数据文件"。⇒ 规定算法（照抄，别自创）：
+    1) 列出根目录所有 `.done`，按文件名时间**升序**；
+    2) 每个 topic 目录下所有 `*.jsonl` / `*.empty` 按 **mtime** 排序；
+    3) **文件 mtime ≤ 该 `.done` mtime ⇒ 属于这批**；已被前一批处理过的（`ops.file_arrival` 里 `src_file` 已存在）**跳过**；
+    4) `--batch <名字>` 给定时只处理该标记覆盖、且**尚未登记**的文件。
+· `.empty` 表示"官方明确为空"（≠ 缺席）；**缺席** = 该 topic 在这一批既无 `.jsonl` 也无 `.empty` ⇒ 必须记 gap。
+  实测：`15-03-45Z` 批只有 `jczq_offer`/`jclq_offer(.empty)`；`15-16-32Z` 批缺 `jczq_offer`/`jc_issue`/`jclq_offer`。
+· 每行外壳的 `snap_ts` **在同一 topic 文件内相同、跨 topic 不同**（实测 14:35:37 / :39 / :40 / :45 / :49 五个值）⇒ 别假设全批一个 `snap_ts`。
+【蓝图（逐函数，签名照抄）】
+ 1. `def iter_markers(root: Path, only: str | None = None) -> list[Path]`
+     返回 `root` 下的 **`.done` 标记文件**（注意：真包里 `.done` 在**根目录**、名字是"上传时刻"如 `2026-09-15T14-40-02Z.done`），按文件名**升序**；
+     `only` 给了就只返回同名那一个（`only` 允许带或不带 `.done` 后缀）。
+ 2. `def files_for_batch(root: Path, marker: Path) -> dict[str, tuple[Path | None, str]]`
+     对 7 个 topic 各返回 `(文件路径 | None, 状态)`，状态 ∈ `{"jsonl", "empty", "missing"}`：
+     · 候选 = `root/<topic>/*.jsonl` 与 `root/<topic>/*.empty`，**只取 `mtime <= marker.stat().st_mtime` 的**（这就是"属于这批"的定义）；
+     · 同一 topic 命中多个 ⇒ 取 **mtime 最新**那个（文件名里带 `__NNN` 序号，按名字升序取最后）；
+     · 两者都没有 ⇒ `(None, "missing")` —— **missing 是 gap，必须能被调用方记进 `ops.file_arrival`**；不许静默当"无变化"；
+     · `.empty` ⇒ `(path, "empty")` 表示**官方明确为空**（≠ 缺席，不算 gap）。
+ 2b. `def read_lines(path: Path) -> list[dict]`：整文件 `json.loads` 逐行；**空行跳过**；任何一行解析失败 ⇒ 直接抛（不吞、不跳坏行）。
+ 3. `TOPICS: tuple[str, ...] = ("jczq_offer", "jczq_result", "jc_issue", "jc_issue_result", "lottery_draw", "jclq_offer", "jclq_result")`
+     —— **就是这 7 个**，顺序固定（offer 先，好让 `jc_match` 先于子表存在）。
+ 4. `def load_topic(conn, marker: Path, topic: str, path: Path | None, state: str) -> dict`
+     逐行 `json.loads` → `parse_line(...)`：
+     · `jczq_offer` ⇒ 每行调 **两次**写：`jc_write.upsert_jc_offer(cur, row, snap, src)` **且** `upsert_jc_match(cur, match_row, src, home, away)`（只写一张＝失败，硬规定④）；
+     · `jczq_result` ⇒ `upsert_jc_result(...)`；
+     · **fact 行的 `src_file` 也用同一个相对路径值**（与 5 号函数一致，别写绝对路径、别写 `.done` 名）
+     · 其余 topic 本单**一律不写**（`jc_issue*` / `lottery_draw` 是 P0-COLLECT2e 的范围；`jclq_*` 解析层按裁决本就 raise）——
+       但**必须计数并 `logger.info` 打出"跳过 N 行（属 2e 范围）"**，不许当没看见；
+     · `parse_line` 抛异常 ⇒ **整批不提交、直接向上抛**（不吞异常，不"跳过坏行"）；返回 `{"topic":t,"lines":n,"written":m,"gap":bool}`。
+ 5. `def arrival(conn, marker: Path, topic: str, path: Path | None, rows: int, state: str) -> None`
+     写 `ops.file_arrival`（PK `(topic, src_file)`），**src_file 口径固定如下（幂等就靠它）**：
+     · 正常文件 ⇒ `src_file = str(path.relative_to(marker.parent))`，例如 `jczq_offer/2026-09-15T14-35Z__001.jsonl`；`rows` = 实际行数；`done_marker = true`；`bytes` = 文件字节数；
+     · `empty` ⇒ 同上，但 `rows = 0`；
+     · `missing` ⇒ `src_file = f"<marker 去 .done 名>/{topic}#MISSING"`，`rows = 0`，`done_marker = false`（**这就是 gap 的记录形态**）；
+     **一律 `ON CONFLICT (topic, src_file) DO UPDATE`**（重跑第二遍不许产生第二行、也不许改变 `rows`）。
+ 6. `def load_batch(conn, root: Path, marker: Path) -> dict`
+     先 `files_for_batch` 拿 7 个 topic 的落点，再依次走 4→5；**一个事务**（成功才 commit；任何异常 rollback 后抛）；
+     返回 `{"batch":marker.name,"written":总,"gaps":[missing 的 topic 名]}`。
+ 7. `def main(argv: list[str] | None = None) -> int`
+     `--dir`（必填）`--batch`（可选，= 标记名）；对每个 `.done` 调 `load_batch`；**最后 `logger.info` 打一行八表 count**（用 `SELECT count(*)`，表名顺序固定：
+     `jc_match, jc_offer, jc_result, jc_issue, jc_issue_draw, jc_issue_match, jc_issue_prize, lottery_draw`）。
+     ⇒ 这一行是队长核对 oracle 的主要证据，**格式必须是 `count jc_match=17 jc_offer=170 ...`**。
+
+【oracle（真包 3 批全跑，队长独立算好，逐表核对）】
+ `jc_match 17 / jc_offer 170 / jc_result 15 / jc_issue 0 / jc_issue_draw 0 / jc_issue_match 0 / jc_issue_prize 0 / lottery_draw 0`
+（后五张是 0 因为本单只写前三张 ⇒ **2e 才负责把它们变成 7/3/62/0/120**。）
+ 同一目录**连跑两遍，八表 count 逐表一字不变**（幂等）。
+
+【必须成立】
+ T1 `PYTHONPATH=scripts python scripts/ingest/jc_load.py --dir /tmp/incoming` 跑通，count 行对上 oracle
+ T2 **第二遍**同命令：count 一字不变；`ops.file_arrival` 里 `2026-09-15T15-03-45Z`/`15-16-32Z` 的**缺席 topic 有 gap 记录**（贴查询输出）
+ T3 **写入证据**：报告必须贴 `select count(*), min(snap_ts), max(snap_ts) from fact.jc_offer` + 一条 `ops.ingest_log` 行 —— 只有 pytest 绿不算（D5 类炸弹就靠这个露馅）
+ T4 `PYTHONPATH=scripts python -m pytest tests -q` → **428 passed / 0 failed**（不新增用例也算过；**不许删用例**）
+ T5 `python3 ~/bin/omp-ast-check.py scripts/ingest/jc_load.py` → **0 违规**（≤100 行；装不下就新增 `scripts/ingest/jc_read.py` 放 1~3 号函数，**函数体逐字照蓝图**）
+【铁律】① 禁 git；② 禁 print；③ ≤100 行/函数 ≤50 行/≤120 列；④ stdlib + psycopg（仅 ingest/store）；
+ ⑤ 禁改：`scripts/store/parse_*.py`、`scripts/ingest/jc_write.py`（要复用就 import）、`tests/**`、`tests/fixtures/**`、
+ 任何 DDL/建表/加列/GRANT、`/srv/league-staging/**`、真联网；测试写库一律单事务 + ROLLBACK；T1/T2 真跑是唯一允许的落盘留痕；
+ ⑥ 报告 `.omp-logs/P0-COLLECT2f.report.txt`（T1~T5 原始输出 + "我偏离蓝图的地方"——**应为空**，若非空就是越界）+ `echo TASK_DONE > .omp-logs/P0-COLLECT2f.done`
+【边界】若你发现蓝图某条**做不到**（例：`_upsert` 的签名跟你需要的不匹配），**停下来点名那一条**，队长裁决；不许自行改设计、不许改别人写好的文件。
+【验收（队长逐字复跑）】
+  bash ~/bin/v2b-check.sh
+  bash ~/bin/league-accept.sh P0-COLLECT2f scripts/ingest

@@ -1,0 +1,73 @@
+【项目】league-v2（规范 README §2-D5/D7；设计 docs/框架设计-全玩法覆盖-v2-20260915.md §2、**§6 标注口径**；同类先例 `scripts/derive/*` 的"纯函数 + 队长独立预算黄金值"打法）
+【定位】把 5341 场真数据变成**可回测的预测**。本单两件事：① 纯函数拟合 Dixon-Coles 攻防强度（零 DB）；② 一个"上一季拟合 → 当季预测"的编排脚本，把 λ、9×9 矩阵、四玩法概率写进 `model.*`。
+【队长已用独立实现跑通并把数字钉死（2026-09-15，你的断言必须逐值对上；对不上就是你的实现有问题）】
+```
+约定（⚠️ 差一个常数就会整体偏 1.4422 倍，先读这条再动手）：
+  λ_home = γ · atk_home · def_away      λ_away = atk_away · def_home
+  可辨识性约束 = **攻击参数几何平均为 1**（Π atk_i = 1，等价 exp(mean(log atk))=1）；def 与 γ 不再有自由度
+  固定点迭代：atk_t = GF_t / (γ·Σ_{t主}def_opp + Σ_{t客}def_opp)；def_t = GA_t / (Σ_{t主}atk_opp + γ·Σ_{t客}atk_opp)
+                （γ 必须乘在"主队分母的主场项"与"客队分母的客场项"上——**放错位置在对称数据上看不出来**，故有黄金 2）
+黄金 1（两队完全对称：A 主 1-0 B，B 主 1-0 A）
+  atk = {A:1, B:1}   def = {A:0.5, B:0.5}   γ = 1   两场 λ 均为 (0.5, 0.5)
+黄金 2（**方向敏感往返试验**，本单最关键的一条）：真值 A={A:1.4,B:1.0,C:1/1.4}、D={A:0.8,B:1.1,C:0.9}、γ*=1.25
+  以真值生成 λ 当作"进球数"（**允许非整数进球**，拟合只用线性统计量），全部有序主客对 ×10 重复 = 60 场喂进拟合：
+  ⇒ 必须恢复 γ=1.250000000000（误差 0）、atk_A=1.400000000000、atk_C=0.714285714286、def_B=1.100000000000（全部 err ≤ 1.5e-14）
+  ⇒ 且 λ(A 主 vs B) 恢复 1.925000000000
+黄金 3（真数据一阶条件，**这是最省事的自检**：拟合收敛后 Σλ主 == Σ实际主队进球、Σλ客 == Σ实际客队进球）
+  谓词见下"训练口径"，epl 2024（380 场 20 队）：γ=1.064815  Σλ主=575.000000000（实际 575，差 1.14e-13）  Σλ客=540.000000000
+  bundesliga 2023（306 场 18 队）：γ=1.280093  Σλ主=553  Σλ客=432     ligue1 2023（306 场 18 队）：γ=1.156658  Σλ主=443  Σλ客=383
+  合理性强信号（用来抓"队名配对搞反"这类错）：epl 2024 最强攻=利物浦 1.582、最弱攻=南安普顿 0.498、最优防=阿森纳 0.846；
+                                       bundesliga 2023 最强攻=拜仁 1.811、勒沃库森 1.675、最优防=勒沃库森 0.605
+训练口径（**必须逐字用这个谓词，理由已实测**）：
+  source='api_football' AND f.status='ft' AND f.round <> 'Relegation Round'
+  ⇒ 排除的正是那 3 场 `aet/pen`（bundesliga 2023 / ligue1 2023 / ligue1 2024 的 'Relegation Round' 附加赛）：
+    升降级附加赛有加时与点球，90 分钟口径与常规轮次不一致，进拟合会污染 λ；余 5338 场。
+  ⇒ 注意 `fact.fixture.status` 存的是**小写** 'ft'/'aet'/'pen'（parse 层已归一，别写 'FINISHED'——那匹配 0 行，我踩过）。
+【任务】5 个文件（≤100 行/个；**贴着 100 行交＝没拆干净，宁可多加一个小函数**）：
+  1) 【新】scripts/model/__init__.py        空文件或一行 docstring
+  2) 【新】scripts/model/fit.py       ≤100  纯函数，零 DB、零 io、`math` 之外不 import：
+       · `fit_attack_defense(matches: Sequence[tuple[str,str,int|float,int|float]], teams=None) -> LeagueFit`
+         （`LeagueFit` 用 dataclass/NamedTuple：`atk: dict, def_: dict, gamma: float, n_matches: int`；**`def` 是关键字，字段名用 `def_` 并在 docstring 说明**）
+         - 迭代上限 5000、收敛阈值 `max|Δatk|+|Δdef| < 1e-12`，**不收敛必须抛 `ConvergenceError`**（自定义，继承 RuntimeError），不许静默返回未收敛结果
+         - 分母为 0（某队 GF 或 GA 为 0 ⇒ 该队强度无法辨识）⇒ **抛 `ValueError` 且消息里带队名**；⚠️ 绝不允许"默认 1.0"这种静默兜底（队长的参考实现就这么干过，是 bug）
+         - 入参校验：空 matches、未知队名出现在 matches 里、进球数为负、同一 (主队,客队) 场次为 0 支球队参与 ⇒ ValueError
+         - **顺序无关性**：打乱 matches 顺序结果必须在 1e-12 内一致（写成用例）
+       · `match_lambdas(fit, home, away) -> tuple[float, float]`（未知队名 ValueError）
+  3) 【新】scripts/model/walk.py     ≤100  编排：按 (league_key, season) 取真数据、**用上一季拟合预测当季**、派生四玩法、落 `model.*`
+       - 谓词逐字用上面"训练口径"；2022 赛季**只当训练集**（没有更早的赛季可预测它 ⇒ 不许把 2022 放进预测目标）
+       - 一次 (league_key, 预测季) = 一个 `model.pred_run`（`params` 里必须写清 `{'train_season':…,'plays':[…],'gamma':…}`，`commit` 用 `git rev-parse --short HEAD`，
+         `n_fixtures` 用真实写入场数）；λ 与矩阵写 `pred_fixture`（`matrix` 存 `derive.grid.dc_grid` 的 9×9 原样，`features` 存 `{'atk_home':…,'def_away':…,'gamma':…}` 便于复盘）；
+         四玩法写 `pred_market`
+       - **本单只写 `had / crs / ttg / jqc` 四种；`hhad` 明确不写**（它要官方让球线，那是竞彩盘口到货后的活），并在模块 docstring 写死这个缺口
+       - 全程 `store.pg.write_conn('app')`（**`league_ing` 对 model 无权限，用错角色会直接 42501**）；每个 run 一个事务；**跑真库由队长执行**，你在单事务里回滚自测
+  4) 【新】tests/test_model_fit.py   ≤100  黄金 1/2/3 + 全部校验分支 + 顺序无关
+  5) 【新】tests/test_model_walk.py  ≤100  真库单事务 + 收尾 **ROLLBACK**，断言**全部用相对增量**（§9-33）：
+       · 跑一个最小 (league,season) 子集 ⇒ `pred_run/pred_fixture/pred_market` 各按预期增量增长，且 `pred_fixture` 每场一行不重复
+       · 四玩法每个 (fixture, play_type) 的 `Σp == 1`（1e-9 内）；**选项数按队长 11:32Z 实测**：`had`=3、`crs`=31、`ttg`=8、`jqc`=8
+         （调法 `registry.derive_play(play_type, grid, line=None)`；`registry.PLAYS` 里就这五个键，`haf` 一律 `KeyError("玩法 'haf' 未实现，勿用 0.0 占位")`）
+       · **`play_type='haf'` 与 `'hhad'` 在 pred_market 里出现次数必须为 0**（前者未注册、后者缺盘口线）
+       · 同一子集跑两遍 ⇒ 行数翻倍（新 run_id 不覆盖旧 run）；断言两遍的 `pred_fixture` 增量相同（幂等指的是"同一 run 不重复插"，不是全表唯一）
+【必须成立】
+  M1 黄金 1/2 逐值相等（黄金 2 的 γ 误差必须为 0，atk/def 误差 ≤ 1e-12）
+  M2 真数据一阶条件：`|Σλ主 - Σ实际主进球| < 1e-9`（主客两边都要），三个样本联赛/赛季各自成立
+  M3 收敛与兜底：不收敛 ⇒ `ConvergenceError`；GF 或 GA 为 0 ⇒ `ValueError` 且带队名；**代码里不得出现 `or 1.0` / `default=1.0` 之类的静默强度**
+  M4 泄漏防线：`walk.py` 里预测季的训练季必须**严格更早**（写成断言/守卫，不许靠人记）；2022 不得出现在预测目标里
+  M5 玩法白名单：落库 play_type ⊆ {had, crs, ttg, jqc}
+  M6 `league_ing` 连 `SELECT model.*` 都不行（p0_5 已这么建）⇒ 若你被 42501 挡住，**说明你用错角色了**，不许来要我改权限
+【铁律】① 禁 git（`git rev-parse` 只读取 commit 号，不许 add/commit/checkout/restore）；② 禁 print（`core.log.logger`）；
+  ③ 机械搬移禁改逻辑/数值/顺序；④ 报告用锚点；
+  ⑤ 单文件 ≤100 行、AST 函数 ≤50 行、单行 ≤120 列，自检 0 违规：
+     `python3 ~/bin/omp-ast-check.py scripts/model tests/test_model_fit.py tests/test_model_walk.py`；
+     禁新依赖（`fit.py` 只准 `math`/`dataclasses`；`numpy` 本机没装）；`psycopg` 只准出现在 `scripts/store/`、`scripts/ingest/`，
+     `scripts/model/**` **禁止直接 import psycopg**（一律经 `store.pg` / `store.query`）；
+     `scripts/core|derive|store|ingest|market/**` 与既有 tests **一律禁改**（发现生产 bug 写进报告，别顺手改）；
+     禁建/改/删任何 DB 对象（model/analysis 已建好，直接用）；对 `model.*` 的一切写在测试里必须回滚；
+  ⑥ 禁真联网；⑦ `~/bin/omp-ast-check.py`、`~/bin/league-accept.sh` 只读禁改（改工具＝拒收）
+  ⑧ 完成后写 `.omp-logs/P0-MODEL1.report.txt`（M1~M6 原始断言输出 + 三联赛拟合的 γ 与最强/最弱三队攻守表 + 你判断哪些数字"不像真的"）
+     然后 `echo TASK_DONE > .omp-logs/P0-MODEL1.done`
+【基线】开工前先自己跑 `python -m pytest tests -q` 记数（队长 11:10Z 实测 308 passed / 快档 234；MARKET1 那单可能已并进若干条），**只许新增**。
+【边界】若黄金 2 你只能对上 λ 对不上 atk/def（说明归一化口径不同），**停下来回报**，别改我的约定；
+  若 9×9 网格对 λ>4.7 的高进攻场（bundesliga 2023 最大值 4.734）出现尾部质量损失明显的情况，如实写在报告里（网格放宽是另一单的事，本单不许自己改 `derive/grid.py`）。
+【验收（队长逐字复跑）】
+  bash ~/bin/league-accept.sh P0-MODEL1 scripts/model tests/test_model_fit.py tests/test_model_walk.py
+  # 队长另做：真跑 walk（10 个 (league, 2023/2024) run）→ 亲验 Σλ 一阶条件、pred_market 分玩法条数、hhad/haf 均为 0

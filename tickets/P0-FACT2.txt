@@ -1,0 +1,52 @@
+【项目】league-v2（规范 ~/league-v2/README.md §2-D5/D7、§6.6；设计 ~/league-v2/docs/框架设计-全玩法覆盖-v2-20260915.md §2 store 段）
+【上一单结论 = 本单存在的理由】P0-FACT1 把 raw 解析进了 fact，但**我上一单自相矛盾**：
+  我写"AF 权威 id 落 `fact.fixture`、FD 的 id 进 `source_ids`"，同时又写"本单不做跨源对齐"——
+  不对齐就不可能知道哪条 FD 行对应哪条 AF 行。coder 做了当时唯一可行的事（把 3504 条 FD 场次各自插成一行 fixture）并在 report §4 如实交代。
+  后果：`fact.fixture` 8845 行里有 3504 行是**同一批比赛的第二个副本**（2023/2024 每场两条），回测样本直接翻倍。
+  队长已用 postgres 权限清掉那 3504 行（`fact.fixture`/`fact.fixture_result` 现各 **5341** 行，全 AF 源），本单**不许**再插 FD-only 行。
+  ⚠️ 顺带说明：`league_ing` 对 fact/ref **没有 DELETE**，插错了我也要用超级用户洗 ⇒ "宁可不插，不可插错"是硬要求。
+【真报文事实（队长已核，仍要求你自己 SELECT 复核一遍再动手）】
+  · AF `body.response[]`：`fixture{id,date(带 +00:00),status{short,long},periods{first}}`、`league{id,season,round}`、`teams{home{id,name},away{id,name}}`、`goals{home,away}`、`score{halftime,fulltime}`
+  · FD `body.matches[]`：`id`、`utcDate(以 Z 结尾)`、`stage`、`matchday`、`homeTeam{id,name,shortName,tla}`、`awayTeam{…}`、`score{fullTime,halfTime}`、`status(FINISHED/…)`
+    ⚠️ 大小写与键名两源**不同**（`halftime` vs `halfTime`、`response` vs `matches`）；`season=2022` 的 FD 块全 **403**（免费档只给近两季）⇒ 2022 只有单源，这是**正常**不是错误
+  · 现役 `ref.team` 164 行（UNIQUE(sport,name_cn)，name_cn 来自 `core.i18n.to_cn`，63 行仍是英文原名）
+【任务】5 个文件（4 改 1 新；每个 ≤100 行，**超预算就拆逻辑进 align.py，别压缩可读性**）：
+  1) 【新】scripts/store/align.py    ≤95 行  跨源对齐（**纯函数为主，零 DB**，好测）
+       · `normalize_team(name: str) -> str`：小写、去变音符、剥掉常见后缀词（`fc af cf sc ac club if kc` 之类，按**整词**剥、不许子串误伤）
+       · `af_index(rows) -> dict[(league_key, kickoff_at), fixture_id]`；同 key 撞两条 ⇒ 记 collision 并**保留 None**（歧义不猜）
+       · `match_fd(fd_row, index, name_pairs) -> tuple[str, str]` 返回 `(fixture_id, reason)`，reason ∈
+         `ok | no_time | ambiguous_time | name_mismatch | home_away_swapped`
+         规则：**先 (league_key, kickoff_at) 精确等值**（差 1 秒都不算），命中后再要求
+         `normalize_team(AF.home)==normalize_team(FD.home)` 且 `normalize_team(AF.away)==normalize_team(FD.away)`；
+         主客互换单列 `home_away_swapped`（那是数据问题，不许当对齐成功）
+  2) 【改】scripts/store/upsert_fixtures.py  **FD 块一律不再新建 fixture 行**；对齐命中时只把 `football_data` id 合并进该 AF fixture 的 `source_ids`
+       （`UPDATE … SET source_ids = source_ids || jsonb_build_object('football_data', %s), updated_at = now()`）；FD-only → 归入 unmatched，**不插**
+  3) 【改】scripts/store/upsert_results.py   FD 赛果写到**对齐后的 AF fixture_id** 下（`PK(fixture_id,source)` 仍是两源各一行）；
+       未对齐的 FD 赛果**不落 fact**，改为往 `ops.ingest_log` 追加一条（`topic='fd_align'`, `src_file='raw.fd_raw'`, `rows_in`, `rows_ups`,
+       `rejected jsonb`（未匹配明细数组，含 FD id + 两队原名 + utcDate + reason）, `ok=false`）—— 这是 ops 表既有的"留痕"用途，`league_ing` 有 INSERT
+  4) 【改】scripts/store/query.py     加 `source_coverage(conn) -> dict`（AF 场数 / FD 场数 / 双源重叠数 / FD 未对齐数）与 `unmatched_fd(conn, limit=20)`（读 ops.ingest_log 最新一条 rejected）
+  5) 【新】tests/test_align.py       ≤100 行  以**纯函数**用例为主；需要库的部分一律"单事务 + 收尾 ROLLBACK"，且**全部用相对增量断言**（不许假设表空，见【必须成立】A7）
+【必须成立（写成断言，编号进 report）】
+  A1 `fact.fixture` 只可能因 AF 增长：跑完含 FD 块的 raw 后，fixture 行数增量 == **AF 新增场数**（FD 贡献 0）
+  A2 双源真实并存：任一"对齐成功"的 fixture 有且仅有 2 行 `fact.fixture_result`（source=api_football / football_data），且 `source_ids` 两键齐全
+  A3 未对齐不造假：FD-only 场次既不建 fixture 也不写 result，只进 `ops.ingest_log.rejected`
+  A4 kickoff 差 60 秒 ⇒ 不对齐（`no_time`）；同 key 两条候选 ⇒ `ambiguous_time`，不许任选其一
+  A5 主客互换 ⇒ `home_away_swapped`，不许当命中；队名带不带 `FC`/变音符不影响命中（`normalize_team` 用例覆盖）
+  A6 幂等：同一份 raw 连跑两遍，`fact.fixture` / `fact.fixture_result` 行数与两遍前**完全一致**
+       （`ops.ingest_log` 是 append-only 日志，允许第二遍多一条 ⇒ 断言里显式豁免它并说明）
+  A7 全部断言用相对量：库里已有真实存量（fixture 5341 / result 5341 / team 164），**任何 `== 字面量` 的总数断言都算错**
+【铁律】
+  ① 禁 git；② 禁 print（日志 `from core.log import logger`）；③ 机械搬移禁改逻辑/数值/顺序；④ 报告用锚点；
+  ⑤ 单文件 ≤100 行、函数 AST ≤50 行、**单行 ≤120 列**，自检 0 违规：
+     `python3 ~/bin/omp-ast-check.py scripts/store tests/test_align.py tests/test_upsert_from_raw.py`；
+     禁新依赖（`psycopg` 只准出现在 `scripts/store/`、`scripts/ingest/`）；**改文件优先整文件重写，别做大段原地 Edit**（§9-30：OMP 的 "Streaming edit preview failed" 已吞掉两个回合）；
+     `scripts/core/**`（`i18n.py` 只 import）、`web/**`、`static/**`、`scripts/derive|ingest/**`、既有 tests、
+     `store/pg.py`、`store/upsert_official.py`、`store/parse_api.py`（解析层不动，本单只动"怎么落库"）**一律禁改**；
+     **禁建/改/删任何 DB 对象**；对 `fact.*`/`ref.*` 的任何写**必须发生在回滚事务里**（真装载由队长亲自跑）；
+  ⑥ 禁真联网；⑦ `~/bin/omp-ast-check.py`、`~/bin/league-accept.sh` 只读禁改（改工具＝拒收）
+  ⑧ 完成后写 `.omp-logs/P0-FACT2.report.txt`（A1~A7 原始断言输出 + `normalize_team` 抽样表 + 你认为有歧义的对齐样例清单），然后 `echo TASK_DONE > .omp-logs/P0-FACT2.done`
+【边界】若你发现对齐率极低（比如 <50%），**停下来**在报告里给出 10 个未命中样本与原因分析，别硬把断言放宽；若 `match_fd` 需要 AF 侧队名（FD 块里没有 AF 的 team id），
+  就明确写出你从哪里取（`ref.team.aliases` / `fact.fixture` 已存的名字）——**不许为此新增 DB 对象**。
+【验收（队长逐字复跑）】
+  bash ~/bin/league-accept.sh P0-FACT2 scripts/store tests/test_align.py tests/test_upsert_from_raw.py
+  # 队长另做：真装载重跑（幂等）→ 公布 AF/FD 双源重叠数、对齐率、`fact.v_result_conflict` 真分歧场数（**这才是多源并存的兑现**）

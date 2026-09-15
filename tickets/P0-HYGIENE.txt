@@ -1,0 +1,28 @@
+【项目】league-v2（规范 ~/league-v2/README.md §2-D7；OMP-SKILL.md §4 噪声说明、§5 冻结区自伤）
+【背景】测试套件会写脏仓库，两处，都是**既有测试自己的实现问题**（不是 v2 新代码的问题）：
+  ① `tests/web/test_m6_ai_enrich.py` 真写 tracked 的 `predictions/ai_scores.json`（每次 +245 行）→ `web/services/ai.py:20` 的
+     `BASE_DIR = Path(__file__).resolve().parent.parent` 硬编码，`LP_OUTPUT_DIR` 环境变量**隔离不掉**；后果：每轮验收都要人工 `git restore`，污染 diff 判据。
+  ② `tests/web/test_m3_jobs.py:283 test_ai_broken_app_starts` **把 `_broken = 1 / 0` 真写进 tracked 的 `web/services/ai.py`** 再在 finally 还原；
+     只要有一次被 `timeout`/kill 打断，线上 FastAPI 源码（D5 不许它挂）就留在坏状态。**这个比 ① 严重得多。**
+【本单例外授权】规范里"既有 tests 一律禁改"是防 coder 顺手改测试蒙验收；**本单明确授权你只改上面两个测试文件**（外加 1 个 conftest）。
+  除这 3 个文件外，任何文件（尤其 `web/**`、`scripts/**`、`predictions/**`、既有其它 tests）被改＝拒收。
+【任务】3 个文件：
+  A) 新增 `tests/conftest.py`（≤60 行）：session 级 autouse fixture，做两件事——
+     A1. **快照-还原护栏**：记录 `web/services/ai.py` 与 `predictions/ai_scores.json` 的**原始字节**，用例全部跑完后若字节有变则**还原并 warning**（不是 fail：还原才是目的，让套件红会掩盖真回归）。要求：还原逻辑必须幂等、必须放在 finally 语义（fixture teardown）里、只碰这两个路径。
+     A2. 提供 `ai_scores_tmp` fixture（function 级，返回 tmp 目录下的目标路径）供 B 用。
+     ⚠️ conftest 是**全局生效**的，别往里面塞任何跟这两个文件无关的逻辑。
+  B) 改 `tests/web/test_m6_ai_enrich.py`：让它写的 ai_scores.json 落到 `tmp_path`（monkeypatch `web.services.ai` 里的落盘路径常量/BASE_DIR，**看它实际怎么拼路径就怎么打补丁**，先读代码再动手），断言"文件真被写过且内容含预期键"。要求：删掉对 tracked `predictions/ai_scores.json` 的一切写入（跑完 `git status --porcelain` 里它必须不再出现）。
+  C) 改 `tests/web/test_m3_jobs.py` 的 `test_ai_broken_app_starts`：**不再原地改 tracked 源文件**。改成把坏代码写成 tmp 目录里的**副本模块**再用 `importlib`/`monkeypatch.setattr` 注入的方式让 app 起得来（保持断言语义不变：某个 service 坏掉时 app 仍能启动、其余端点 200）。
+     若你判断副本注入无法保留原用例语义（"真文件被 import 失败"这种就是要靠磁盘上的坏文件），**退一步方案**：保留改真文件，但把"写坏"限定在 `try/finally` + `atexit` + 信号处理三重兜底，并在用例开头先 `git diff --quiet -- web/services/ai.py` 断言起点干净；**同时**在报告里明确写"退一步方案，根因未消除"。选哪条由你定，但必须说明理由。
+【铁律】① 禁 git 一切子命令（B/C 的验收要 `git status` 时**由队长跑**；你自己判断改动是否干净用文件比对，不要用 git）；
+  ② 禁 print()/pdb/breakpoint/set_trace；③ **禁改被测逻辑**：`web/**`、`scripts/**` 一个字节都不许动，本单只改测试侧；数值/顺序/断言语义保持；
+  ④ 报告用锚点（fixture 名 + 用例名 + 改法），别贴大段代码；⑤ 文件 ≤100 行、单函数 AST ≤50 行、单行 ≤120 列，自检 0 违规：
+     `python3 ~/bin/omp-ast-check.py tests/conftest.py tests/web/test_m6_ai_enrich.py tests/web/test_m3_jobs.py`；禁新依赖（`web/**` 冻结区禁改）
+  ⑥ `~/bin/omp-ast-check.py`、`~/bin/league-accept.sh` 只读禁改（改工具＝拒收）
+  ⑦ 完成后写 ~/league-v2/repo/.omp-logs/P0-HYGIENE.report.txt（改动清单 + **改前/改后各跑一次全量测试后的 `git status --porcelain` 对照**（这条请你自己用文件比对方式自证，把两次结果贴进报告）+ 验收命令原始输出），然后 `echo TASK_DONE > .omp-logs/P0-HYGIENE.done`
+【验收（队长逐字复跑）】
+  bash ~/bin/league-accept.sh P0-HYGIENE tests/conftest.py
+  git status --porcelain                        # 期望：跑完全量测试后 **不再有 predictions/ai_scores.json**
+  grep -c "_broken = 1 / 0" web/services/ai.py  # 期望 0
+  python -m pytest tests/web -q                 # 期望 74+新增 全绿（web 档不能因本单变红）
+【边界】C 若两条路都走不通，停下来在报告写清卡点与你的建议方案，照样 echo TASK_DONE；不许自行扩到 3 个文件以外。

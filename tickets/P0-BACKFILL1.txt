@@ -1,0 +1,53 @@
+【项目】league-v2（规范 ~/league-v2/README.md §2-D7、§3.1 更正；设计 ~/league-v2/docs/框架设计-全玩法覆盖-v2-20260915.md §2 ingest 段）
+【重大前置事实（队长 2026-09-15 实测，**推翻内核 v1 注释**）】`scripts/core/data/fetch.py:276` 注释写"免费计划不支持 season 过滤"——**错的**。实测免费档：
+  · `GET https://v3.football.api-sports.io/fixtures?league=39&season=2024` → `errors=[]`、`paging.total=1`、**380 场全在一个响应里**、`status` 全 FT、**`score.halftime` 非空 380/380**
+  · `?league=140&season=2022` → 380 场 / HT 380；`?league=78&season=2023` → 308 场（307 FT）/ HT 308
+  ⇒ 五联赛×三赛季（2022/2023/2024）**只要 15 次请求**（不是原先按日抓的 2-3 周），且半场数据一次到位（P1 halftime 模型的数据前提解除）。
+【已就绪的地基（照用，不许重建）】
+  · DB：`raw.af_raw` / `raw.fd_raw`（**LOGGED**，结构相同：`id, endpoint text, params jsonb, params_hash text UNIQUE, http_status int, quota_cost int, body jsonb, captured_at, src_host`）
+    权限：`league_ing` 对 raw **只有 INSERT+SELECT**（无 UPDATE/DELETE/TRUNCATE）⇒ 写路径只有"追加 + 唯一键冲突即视为已取过"。
+  · 配额：`ops.quota_ledger` + `scripts/ingest/quota.py`（`remaining(conn,day,source,cap)` / `charge(...)` 越界抛 `QuotaExceeded`，SQL 守卫原子）。今日已入账 `api_football 4/100`、`football_data 2/30`。
+  · 连接：`scripts/store/pg.py` 的 `write_conn(role)` / `connect(role)` / `read_conn`；DSN 只从环境变量 `DSN_ING` 取（`core/constants.py` 已 load `repo/.env`）。**口令/key 绝不允许出现在代码、日志、report 里。**
+  · key 变量名（**注意不是** `API_FOOTBALL_API_KEY`）：`API_FOOTBALL_KEY`（AF，header `x-apisports-key`）、`FOOTBALL_DATA_API_KEY`（FD，header `X-Auth-Token`）。
+【任务】4 个新文件（**一个都不许多**）：
+  1) scripts/ingest/api_get.py     ≤100 行  统一"取一次远程 → 落 raw 块"的最小内核
+       · `params_hash(source, endpoint, params) -> str` = `sha256(endpoint + "?" + urlencode(sorted(params.items())))`（**排序规范化**，同一逻辑请求必须得同一键）
+       · `cached(conn, table, params_hash) -> dict | None`：命中即返回已存 body，**不发请求、不扣配额**（`league_ing` 无 UPDATE，重复插会撞 UNIQUE，故先查后插 + `ON CONFLICT (params_hash) DO NOTHING` 双保险）
+       · `fetch(conn, *, source, table, endpoint, params, cap) -> dict`：查缓存 → 未命中则**先 HTTP 后扣账**（见下条顺序理由）→ 落块 → 返回 body
+       · **写库顺序**：HTTP 成功后必须先 `quota.charge(...)` 再 INSERT raw（若 INSERT 失败要 `logger.error` 明说"配额已花、原始响应未落块、重跑会再花 1 次"，绝不静默）
+       · **失败也落块**（`http_status` 记真值、`body` 存原始 JSON 或 `{"_error": "..."}`）：防"坏请求被反复重试烧配额"；解析侧一律先按 `http_status==200 AND errors==[]` 过滤
+       · 传输只用 stdlib `urllib.request`（**禁用 requests/新依赖**）；重试：仅**网络异常/5xx**退避 `5/15/45s` 三次；`429`/`401/402/403/404` **绝不重试**（429 重试只会更糟）；超时用 `core.constants.TIMEOUT_API_FOOTBALL`
+       · `QuotaExceeded` 必须原样向上抛（这是"今天到此为止"的信号，编排层靠它收尾）
+  2) scripts/ingest/run_backfill.py ≤100 行  回填编排（CLI，`python -m ingest.run_backfill`）
+       · 计划集 = `LEAGUE_CONFIG` 里 `api_football_id` 非 None 的五联赛（epl=39 / laliga=140 / bundesliga=78 / seriea=135 / ligue1=61）× season `2022,2023,2024` → AF 15 条；
+         FD 用同一张表的 `league_id` 字段（实测值：**PL / PD / BL1 / SA / FL1**，别自己编代号）× 同三季 → 15 条
+       · `--plan` 只读：打印每条 `source league season 待取/已有`（用 `cached()` 判定）+ `quota.remaining`；**一条 HTTP 都不许发**
+       · `--execute --limit N`（N 默认 10，硬上限 20）：只发"待取"的，逐条 api_get.fetch；**FD 两次请求之间 `time.sleep(7)`**（免费档 10 req/min，实测 6.1s 会 429）；`QuotaExceeded` → 打印"今日到此为止"并 `return 0`（**这是正常收尾不是错误**）；其它异常 → 记 log 并 `return 1`
+       · `--source af|fd|all`（默认 all）；`--seasons 2022,2023,2024` 可覆盖
+  3) tests/test_backfill_transport.py ≤100 行  **假 transport，零真网络**（monkeypatch `api_get.urllib.request.urlopen`）
+  4) tests/test_backfill_plan.py       ≤100 行  计划生成 + 幂等 + limit，**零真网络**；需要 DB 的用例一律走"单事务收尾 ROLLBACK"（`league_ing` 没有 DELETE，留了洗不掉），连不上库则 `pytest.skip` 带原因
+【必须被测试钉死的行为】
+  A. 同一 (endpoint, params) 第二次调用：**假 urlopen 调用次数 == 0**、配额**不再增加**、返回同一 body（顺序无关的 params dict 也必须命中同一 hash）
+  B. 非 2xx / `errors` 非空：仍落 raw 块（`http_status` 真值），且第二次调用**不再发请求**（坏请求不重烧配额）
+  C. 5xx：退避重试 3 次（用假 sleep 断言等待序列 `[5,15,45]`，**不许真 sleep**）；429/401：**只发 1 次**、不重试
+  D. `charge` 越界 → `QuotaExceeded` 原样抛出，且此时**不应已发 HTTP**（预检语义）
+  E. 计划：AF 15 条 + FD 15 条、五联赛齐全、`nba` 不出现（其 `api_football_id` 为 None）；`--limit 3` 只发 3 条
+  F. 端点形态（**照此拼，别改**）：AF = `https://v3.football.api-sports.io/fixtures?league={id}&season={s}`（header `x-apisports-key`）；
+     FD = `https://api.football-data.org/v4/competitions/{CODE}/matches?season={s}`（header `X-Auth-Token`；队长实测该形态 380 场、`halfTime` 380/380 非空）。
+     两源 params 都只放 `league/season` 或 `competition/season` 这类**逻辑参数**，别把 key 塞进 params（会进 raw.body 邻接列与 hash）。
+【铁律】
+  ① 禁 git 一切子命令；② 禁 print()/pdb/breakpoint/set_trace（CLI 的对外输出例外：`run_backfill` 的 `--plan` 打印**允许走 `logger.info`**，不要 print）；
+  ③ 机械搬移禁改逻辑/数值/顺序；④ 报告用锚点（函数名+行为）别贴大段代码；
+  ⑤ 新文件 ≤ 上面预算、单函数 AST ≤50 行、**单行 ≤120 列**，自检 0 违规：`python3 ~/bin/omp-ast-check.py scripts/ingest tests/test_backfill_transport.py tests/test_backfill_plan.py`；
+     **禁 requests / numpy / pandas / 任何新依赖**（传输只准 stdlib urllib）；`psycopg` 只准出现在 `scripts/store/` 与 `scripts/ingest/`；
+     `scripts/core/**`（含 fetch.py 那句错注释，**别去改它，内核冻结**）、`web/**`、`static/**`、既有 tests、
+     store 两文件、`collector_pull.py`、`quota.py`、derive 六文件**一律禁改**；**禁建/改/删任何 DB 对象**（raw 两块队长已建好）；
+  ⑥ **测试一律不许真联网、不许真花配额**（今日 AF 只剩 96、FD 只剩 28，都是队长手工探测留下的真实余额）；
+  ⑦ `~/bin/omp-ast-check.py`、`~/bin/league-accept.sh` 只读禁改（改工具＝拒收）
+  ⑧ 完成后写 ~/league-v2/repo/.omp-logs/P0-BACKFILL1.report.txt（改动清单 + A~E 五条的实测原始输出 + `--plan` 真实输出打印），然后 `echo TASK_DONE > .omp-logs/P0-BACKFILL1.done`
+【边界】预算就是仓库规范的 ≤100 行：**宁可把 4 个文件拆成 5 个（多一个 `api_get` 的辅助模块）也不许为凑行数压缩可读性**；
+  若确实需要拆，先在报告里写清拆法并照样 `echo TASK_DONE`（拆到第 5 个文件不算违规，第 6 个才要问队长）；**不许自行 `--execute` 真跑回填**（真跑由队长亲自执行并逐条核对配额账本）。
+【验收（队长逐字复跑）】
+  bash ~/bin/league-accept.sh P0-BACKFILL1 scripts/ingest tests/test_backfill_transport.py tests/test_backfill_plan.py
+  cd ~/league-v2/repo/scripts && python -m ingest.run_backfill --plan          # 期望：30 条计划全"待取"、AF 剩余 96 / FD 剩余 28，**且不产生任何网络请求**
+  # 队长随后亲自 --execute 真跑，并核对 raw.af_raw 行数与 ops.quota_ledger.used 一致

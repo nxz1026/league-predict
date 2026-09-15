@@ -1,0 +1,67 @@
+【项目】league-v2（规范 ~/league-v2/README.md §2-D7、§3.1；上一单 P0-BACKFILL1 你交的东西**有 P0 缺陷，本单修它**）
+【队长亲自 `--execute` 真跑暴露的 P0 缺陷（2026-09-15 09:30Z，取证完整，别推翻，照着修）】
+  症状：`python -m ingest.run_backfill --execute --source af --limit 20` 发出 15 条，日志逐条打印
+        `[api_football] 落块 raw.af_raw HTTP 200 <hash前12>` 共 10 条 + `HTTP 429` 5 条，末行"本轮发出 15 条"。
+        **但 `select count(*) from raw.af_raw` = 0，`ops.quota_ledger` 一格未动。** 15 次真请求全部**无痕蒸发**。
+  取证（队长用 PQtrace 在假 transport 下复现，2 条计划即稳定重现）：
+        协议统计 = `BEGIN×2 / SAVEPOINT×4 / RELEASE×4 / COMMIT×0`；同连接内能 SELECT 到 2 行，`conn.close()` 后新连接 SELECT = 0 行。
+  根因（和 P0-STORE1→1c 是**同一个坑的第二实例**，不是新问题）：psycopg3 非 autocommit 连接上，
+        **第一条 SELECT 就已经开了隐式事务**（`run()` 里 `api_get.cached()` 先跑了 SELECT，`fetch()` 里 `quota.remaining()` 又跑一条）
+        ⇒ 随后 `with conn.transaction():` 进去时状态不是 IDLE ⇒ 它**自动降级成 SAVEPOINT** ⇒ `RELEASE SAVEPOINT` 不是提交
+        ⇒ 最外层那条隐式事务从头到尾没人 COMMIT ⇒ 关连接即整体回滚。
+        代码"看起来"完全正确（事务块写了、异常处理写了、日志也打了），**只有真跑/看协议才暴露**——所以这单最重要的产出是"把它变成结构上不可能"。
+【任务】4 个文件（3 改 1 新；**一个都不许多**）：
+  1) 【改】scripts/ingest/run_backfill.py
+       · `main()` 拿到裸连接后**立刻** `conn.autocommit = True`（一行；**禁改 `scripts/store/pg.py`**，别新增工厂函数），
+         并在该处注释写死理由：非 autocommit 下 `cached()`/`remaining()` 的 SELECT 会先开隐式事务，
+         导致后面的 `conn.transaction()` 退化为 SAVEPOINT、永不提交（本单根因，引用 §9-19）。
+       · 计划条与条之间**两个源都要限速**：AF 免费档除 100/天外还有 **10/分钟**（实测：连发第 11 条起全 429）
+         ⇒ 统一 `PAUSE_S = 7`（原来的 `FD_PAUSE_S` 改名或两源都走），且**第一条之前不 sleep**、跳过（已 cached）的不 sleep。
+       · **收到 429 立即收工**：`fetch` 之后能拿到 body/状态——本单要求 `api_get` 暴露状态（见 2），
+         编排层见到 429 → `logger.warning("限流，本轮到此为止（10 req/min）")` + `return 0`（**正常收尾，不是异常**）；
+         绝不允许"429 之后继续把剩下 14 条打完"（那是拿配额练自杀）。
+       · 每轮结束打印自审数：`发出 N 条 / 新落块 M 块 / 命中缓存 K 块`，且 **`M != N` 时 `logger.error` 点名**（配额花了没落块就是本次这种事故）。
+  2) 【改】scripts/ingest/api_get.py
+       · `fetch()` 返回值改为 **`(status: int, body: dict)` 二元组**（编排层要凭 status 判 429 收工）；
+         命中缓存时返回 `(200, body)` 并在 `raw` 里读到的真状态更好（缓存路径把库里的 `http_status` 一起回）。
+       · 发 HTTP **之前**加与 `_load` 同款守卫：`conn.autocommit` 为假 **或** `conn.pgconn.transaction_status != pq.TransactionStatus.IDLE`
+         ⇒ 立刻 `RuntimeError`（"提交权不可降级：要么 autocommit，要么在 IDLE 上开事务"），不许静默 SAVEPOINT。
+       · `CACHED_SQL` 现在只 SELECT body；改为 `SELECT http_status, body FROM {} WHERE params_hash = %s AND http_status = 200`
+         （**只有成功块算"已取过"**；队长 2026-09-15 已把 DB 的表级 `UNIQUE(params_hash)` 换成 partial unique `WHERE http_status=200`，
+          实测：同 hash 连插 3 条 429 全成功留证、插 2 条 200 只剩 1 条 ⇒ 失败不再永久挡路）。
+       · **必须改 `INSERT_SQL` 的 ON CONFLICT 目标**（**不改就是线上必炸**，队长实测）：
+         `ON CONFLICT (params_hash) DO NOTHING` → 现在抛
+         `InvalidColumnReference: there is no unique or exclusion constraint matching the ON CONFLICT clause`；
+         改成 `ON CONFLICT (params_hash) WHERE http_status = 200 DO NOTHING`（与 partial unique 完全一致才认这个仲裁目标）。
+         本条要有一个用例钉住：同 hash 先落一条 429、再落一条 200，两行都在；再落第二条 200 → 行数不变。
+       · 其余（`RETRY_STATUS` 不含 429/401/404、`params_hash` 排序规范化、失败也落块、`ON CONFLICT DO NOTHING`）一律不动。
+  3) 【新】tests/test_backfill_commit.py  ≤100 行  把上面根因**钉成回归锁**，且**零真网络、零落块**：
+       · 用假 transport（monkeypatch `api_get.urllib.request.urlopen`）+ 真 `pg.connect("ing")`，
+         收尾 `conn.rollback()`（`league_ing` 对 raw 无 DELETE，绝不允许提交任何测试行）。
+       · 断言 A：`main(["--execute", ...], conn=conn)` 走的连接在发请求前 `conn.autocommit is True`（守卫不破）。
+       · 断言 B（**核心**）：把 `conn.autocommit` 强行设回 False 再走一次 `api_get.fetch` → 必抛 `RuntimeError`，
+         且**假 transport 的调用次数 == 0**（守卫在发请求之前，不烧配额）。
+       · 断言 C：429 场景（假 transport 返 `HTTPError(code=429)`）→ `run()` **第一次就 return 0**，剩余计划条**一条都不再发**
+         （假 transport 计数 == 1）。
+       · 断言 D：限速生效（monkeypatch `time.sleep` 记序列，不许真 sleep）：两条计划之间 sleep 一次 7s，第一条之前不 sleep。
+       · 连不上库则 `pytest.skip` 带原因（A/B 两条要真连接才成立；C/D 用假连接也能跑，务必让 C/D **不依赖 DB**）。
+  4) 【改】tests/test_backfill_transport.py / test_backfill_plan.py 里**因 fetch 返回值变二元组而受影响的断言**（最小改动，别重构别人的用例）
+【必须成立】
+  · 全量 pytest 只许**新增或持平**：基线 **281 passed**（快档 207）；机检 `python3 ~/bin/omp-ast-check.py scripts/ingest tests/test_backfill_commit.py tests/test_backfill_transport.py tests/test_backfill_plan.py` 0 违规（含 ≤120 列）。
+  · `bash ~/bin/league-accept.sh P0-BACKFILL1b scripts/ingest tests/test_backfill_commit.py`：全量绿 + PG 留痕 0 行。
+  · `cd ~/league-v2/repo/scripts && python -m ingest.run_backfill --plan` 仍**零 HTTP**、打印两源剩余配额。
+  · **测试里绝对不许出现 COMMIT**（本单一律不许往 raw 真落一块），全部靠回滚 + 协议守卫断言保证。
+【铁律】① 禁 git；② 禁 print（CLI 输出走 logger）；③ 机械搬移禁改逻辑；④ 报告用锚点；
+  ⑤ 新文件 ≤100 行、函数 AST ≤50 行、单行 ≤120 列；禁 requests/numpy/新依赖；`psycopg` 限 `scripts/store|ingest/`；
+     `scripts/core/**`、`web/**`、`static/**`、既有 tests、`store/pg.py`（**尤其这个，不许为了 autocommit 去改它**）、
+     `upsert_official.py`、`collector_pull.py`、`quota.py`、`derive/*` **一律禁改**；禁建/改/删任何 DB 对象；
+  ⑥ 禁真联网（今日 AF 真实余额已被上一轮无痕跑烧掉 10 次，队长已手工补记账本；剩余一律以 `--plan` 打印为准，**一次都不许多花**）；
+  ⑦ `~/bin/omp-ast-check.py`、`~/bin/league-accept.sh` 只读禁改（改工具＝拒收）
+  ⑧ 完成后写 `.omp-logs/P0-BACKFILL1b.report.txt`（改动清单 + A~D 断言原始输出 + 协议自证：说明为什么现在 `with conn.transaction()` 是真 BEGIN/COMMIT），
+     然后 `echo TASK_DONE > .omp-logs/P0-BACKFILL1b.done`
+【边界】若发现 `conn.autocommit=True` 与"每块独立事务"不能两全（比如 `quota.charge` 与 INSERT 需要原子），
+  停下来在报告写卡点 + 备选方案（例如显式 `conn.commit()` 收尾），照样 `echo TASK_DONE`；**不许自行改 pg.py 或建 DB 对象绕过**。
+【验收（队长逐字复跑）】
+  bash ~/bin/league-accept.sh P0-BACKFILL1b scripts/ingest tests/test_backfill_commit.py
+  # 队长另做协议复核：用 /tmp/trace_backfill_tx.py（PQtrace 假 transport）跑 2 条计划，
+  # 期望协议里出现 COMMIT≥2 且**收尾手工 rollback**；然后我亲自 --execute 真跑 15 条 AF，逐条核对 raw 行数与配额。

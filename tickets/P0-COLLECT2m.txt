@@ -1,0 +1,43 @@
+【项目】league-v2（§2-D7 ≤100 行/文件；§9：报告用锚点、禁 git、禁 print）
+【这一单一次修完三处，然后把真包彻底跑通】前两单（2j/2k/2l）已修好 `_stamp`(T3 5/5 PASS)、E1、E2、E3。
+ 队长 23:22Z 用**新工具 `~/bin/jc-cols-check.py`（静态比列）+ 只读探针**把整条写路径扫了一遍，**剩余缺陷已穷尽为 E4/E5/E6 三条**
+（探针结论：`upsert_jc_match` 与 `jc_load._ops` **实测干净可写**，`jc_offer`/`jc_result` 两个函数各有列级/适配级炸弹）。
+【🅣 只准读一个文件】`scripts/ingest/jc_write.py`（99 行）。开单第 1 分钟就 edit；**8 分钟内无写动作＝拒收**。
+
+【E4｜`jc_write.py` offer 的 `options` 是 dict，PG 列是 jsonb ⇒ `ProgrammingError: cannot adapt type 'dict'`】
+ 加一行导入 `from psycopg.types.json import Json`（放在 `from psycopg import sql` 下面），并把 offer 的 `data` 里
+ `"options": row["options"],` 改成 `"options": Json(row["options"]),`。
+ ⚠️ **只包 `options` 这一个键**（其它 jsonb 列本单不涉及）；**不许**改成 `json.dumps(...)`（会变 text 塞 jsonb）。
+【E5｜`jc_write.py:96` 往 `fact.jc_result` 写 `home_team_id` / `away_team_id`——**这张表没有这两列**】
+ `UndefinedColumn: column "home_team_id" of relation "jc_result" does not exist`（`fact.jc_result` 真列 27 个，
+ team 映射只在 `fact.jc_match` 上）。
+ 修法：从第 96 行的 `data.update({...})` 里**删掉 `"home_team_id": home, "away_team_id": away,` 这两个键**。
+ **函数签名不许动**（`home`/`away` 两个形参留着不用即可——`jc_load.py:46` 还在按 6 参调用，改签名会牵动别的文件）。
+【E6｜offer 的 cols/data 里的 `last_seen_at`——**`fact.jc_offer` 也没有这一列**】
+ 真列 11 个：`match_id, snap_ts, play_type, pool_code, goal_line, goal_line_value, options, odds_update, src_hash, src_file, odds_history`。
+ 修法：offer 的 cols 里删 `"last_seen_at"`，data 里删 `"last_seen_at": snap,`。**`gates=["snap_ts"]` 保持不动**
+ （同 PK 只有重采同一分钟才会撞，取最新一次写入即可，不需要防回退门控）。
+ ⚠️ `odds_history` 这列**本单继续留空**（P0-COLLECT3 的活），别顺手写。
+【不许做】除 E4/E5/E6 三处（含那一行 import）外改任何东西；动 `jc_load.py`/`jc_read.py`；加删测试用例；碰 DDL；真联网。
+ 文件必须 **≤100 行**（现在 99，加 1 行 import = 100，正好）。
+
+【必须成立——oracle 是队长 23:24Z 用真包**逐行重算**出来的，不许讨价还价】
+ T1 `cd /home/ubuntu/league-v2/repo && source ~/.venvs/league/bin/activate && PYTHONPATH=scripts python scripts/ingest/jc_load.py --dir /tmp/incoming`
+    三行 batch 日志**都不许出现 `errors=[...]`**；最后一行必须正好 `jc_match=17 jc_offer=170 jc_result=15 jc_issue=0 jc_issue_draw=0 jc_issue_match=0 jc_issue_prize=0 lottery_draw=0`
+ T2 同命令**第二遍**：count 一字不变、仍无 errors
+ T3 `sudo -n -u postgres psql -d league -Atc "select count(*)||'/'||count(distinct match_id)||'/'||count(distinct snap_ts) from fact.jc_offer"` → **`170/17/2`**
+ T4 `... -c "select count(*) from ops.file_arrival where src_file like '%#MISSING%'"` → **8**；并贴 `select topic,src_file,rows,done_marker from ops.file_arrival order by 1,2` 全表
+ T5 **新包（含 639 字节 `.done` 清单的那两批）**：`PYTHONPATH=scripts python scripts/ingest/jc_load.py --dir /tmp/incoming_all`（该目录 = 旧 3 批 + 新 2 批 + 5 个 `.done`）
+    跑**两遍**，两遍 count 必须一致且正好 **`jc_match=17 jc_offer=250 jc_result=15`**
+    （新两批是 07:01/07:03 的 10 分钟快照，**40 行/批、覆盖的还是同一批 17 场在售比赛** ⇒ 场次不涨、盘口行涨到 250；
+     再复算一次 T3 应变 **`250/17/4`**（4 个不同 snap_ts），gap 仍 **8**（新批 7 topic 全齐，`.empty` 不算缺））
+ T6 `python3 ~/bin/omp-ast-check.py scripts/ingest/jc_write.py scripts/ingest/jc_load.py scripts/ingest/jc_read.py` → **0 违规**
+ T7 `python3 ~/bin/jc-cols-check.py scripts/ingest/jc_write.py` → **三行全 ✔、exit=0**（这工具是队长写的列级比对器，专门抓 E5/E6 这一族）
+ T8 `PYTHONPATH=scripts python -m pytest tests -q` → **428 passed / 0 failed**
+【铁律】① 禁 git；② 禁 print；③ ≤100 行、函数 ≤50 行、列 ≤120；④ 只准改 `scripts/ingest/jc_write.py` 一个文件；
+ ⑤ 报告 `.omp-logs/P0-COLLECT2m.report.txt`（T1~T8 **原始输出**）+ 只有 T1~T8 **全绿**才 `echo TASK_DONE > .omp-logs/P0-COLLECT2m.done`
+【边界】若某条又跑出新的 `errors=[...]`：贴**原文** + 只读探针取证 + 停下（2l 的干法就是标准答案）；
+ **绝对禁止**为了 count 好看少写行、跳表、造数据、或改 `jc_load.py`/DDL 来绕。
+【验收（队长逐字复跑）】
+  bash ~/bin/v2b-check.sh
+  bash ~/bin/league-accept.sh P0-COLLECT2m scripts/ingest

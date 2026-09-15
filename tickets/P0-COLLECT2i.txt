@@ -1,0 +1,55 @@
+【项目】league-v2（§2-D7 ≤100 行/文件 硬红线；§9：报告用锚点、禁 git、禁 print）
+【这一单是什么】`scripts/ingest/jc_load.py` 上一单已写好（**108 行**，逻辑基本对），本单做三件事：**① 缩到 ≤100 行（机械拆分，函数体逐字不许改）② 修一个会丢数据的缺陷 ③ 真跑通 `/tmp/incoming` 并给出八表 count + 幂等**。
+【🅣 禁止阅读其它源码】材料全在下面。开单第 1 分钟就 write/edit；**8 分钟内没有写动作 = 拒收**。
+
+【A. 现状：`jc_load.py` 108 行的 8 个函数（照抄，这就是你要拆的东西）】
+ `_TS`(21) · `_stamp`(23-26) · `_adaptd`(28-31) · `iter_markers`(33-36) · `files_for_batch`(38-47) · `read_lines`(49-50)
+ · `load_topic`(52-76) · `load_batch`(78-88) · `main`(90-105)　**违规**：文件 108 > 100 行。
+【B. 怎么缩（就这么定，别自创方案）】新建 `scripts/ingest/jc_read.py`，把 **`_stamp` / `_adaptd` / `iter_markers` / `files_for_batch` / `read_lines` 五个函数 + `_TS` 常量原样搬过去**
+ （**函数体一个字符都不许改**，队长有逐字比对工具）；`jc_load.py` 顶部改成
+ `from ingest.jc_read import _adaptd, _stamp, files_for_batch, iter_markers, read_lines`，其余**一字不动**。
+ ⇒ 拆完两个文件都在 60~70 行，D7 达标；`TOPICS/WRITE/TABLES` 三个常量**留在 `jc_load.py`**（`jc_read.py` 不要 import `jc_load`，会成环）。
+⚠️ 唯一允许的**逻辑**改动在下面 C 条，除此之外任何"顺手优化"都算越界拒收。
+
+【C. 必修缺陷（队长 21:41Z 复核发现，会**静默丢数据**）】`files_for_batch()` 第 45-46 行：
+```python
+cands.sort(key=lambda p: p.name)
+out[topic] = (cands[-1], ...)          # ← 同一窗口内若有 __002 分片，前面的文件被静默丢掉
+```
+ 改成**返回该 topic 在窗口内的全部文件（按名升序）**：`out[topic] = [(p, "jsonl"|"empty"), ...]`（可能为空列表 = missing）。
+ ⇒ 连带 `load_topic`/`load_batch` 各加一层 `for` （**每个文件单独算 `src_file`、单独写一条 `ops.file_arrival`**，幂等键不变）；
+ `state` 的判定：有文件 ⇒ 取每个文件自己的后缀；无文件 ⇒ `(None,"missing")` 语义照旧（gap 行 `<marker去后缀>/<topic>#MISSING`）。
+ 今晚真包每窗口每 topic 都只有 `__001` ⇒ **改完 count 不该变**；这条改动是为将来 10 分钟档防丢，**不许用"今晚没这情况"搪塞掉**。
+
+【D. 依赖与事实（照抄，别去验证）】
+· 三张表的写入函数（**已修好，禁改**）：`from ingest import jc_write`；
+  `upsert_jc_match(cur,row,snap,source,home,away)` / `upsert_jc_offer(cur,row,snap,source)` / `upsert_jc_result(cur,row,snap,source,home,away)`；
+  `source={"src_hash":外壳["src_hash"],"src_file":相对路径}`；`home/away` **一律传 None**（`ref.team` 今晚无 sporttery 别名，全 NULL 是预期）。
+· `ops.file_arrival(topic,src_file,bytes,rows,done_marker)` PK `(topic,src_file)`；`ops.ingest_log(topic,src_file,rows_in,rows_ups,rejected,ok)`。
+· 连接：`with closing(pg.connect("ing")) as conn:`（裸连接，非 autocommit）；一个 `.done` 一个事务，异常 rollback 后**继续下一批**并把异常记进返回值。
+· 真包布局与批归属（**上一单已实测确定，别再改动**）：`/tmp/incoming/<topic>/<采集分钟>Z__NNN.jsonl|.empty` + 根级 `<上传时刻>.done`；
+  **`.done` 与数据文件的 mtime 全部相同（= 我方解包时刻）⇒ 禁止依赖 mtime**，只能用文件名时间戳窗口 `(t_{i-1}, t_i]`（现实现就是这么做的，保持）。
+· 实测 gap 分布（改完 C 条之后 `ops.file_arrival` 里应能对上）：批 1（`14-40-02Z`）7 个 topic 齐；批 2（`15-03-45Z`）只有 `jczq_offer` + `jclq_offer(.empty)`；
+  批 3（`15-16-32Z`）缺 `jczq_offer` / `jc_issue` / `jclq_offer` ⇒ **共 5 条 `#MISSING` gap 记录**。
+
+【oracle（真包三批全跑完，队长独立算好，逐表核对）】
+ `jc_match 17 / jc_offer 170 / jc_result 15 / jc_issue 0 / jc_issue_draw 0 / jc_issue_match 0 / jc_issue_prize 0 / lottery_draw 0`
+（后五张是 0：传统足彩属 P0-COLLECT2e 范围。**同一目录连跑两遍，八表 count 一字不变**。）
+【必须成立】
+ T1 `PYTHONPATH=scripts python scripts/ingest/jc_load.py --dir /tmp/incoming` 跑通并打出 count 行，对上 oracle
+ T2 同命令**第二遍**：count 一字不变（两遍原始输出都要进报告）
+ T3 `python3 ~/bin/omp-ast-check.py scripts/ingest/jc_load.py scripts/ingest/jc_read.py` → **0 违规**（都 ≤100 行、无 >120 列、无 print）
+ T4 `python3 ~/bin/jc-move-check.py /tmp/jc_load.presplit.py scripts/ingest/jc_load.py scripts/ingest/jc_read.py` → **搬移的函数逐字一致**
+    （队长已存拆前原文件 `/tmp/jc_load.presplit.py`；**C 条改的 `files_for_batch` 允许不一致，其余五个函数必须逐字一致**，报告里点名说明）
+ T5 落地证据（**不能只有 pytest**）：
+    `select count(*)||'/'||count(distinct match_id)||'/'||count(distinct snap_ts) from fact.jc_offer` → **期望正好 `170/17/2`**；
+    `select topic,src_file,rows,done_marker from ops.file_arrival order by topic,src_file` 全表输出（**5 条 `#MISSING` 必须在里面**）；
+    `select topic,rows_in,rows_ups,ok from ops.ingest_log order by topic,src_file` 全表输出
+ T6 `source ~/.venvs/league/bin/activate && PYTHONPATH=scripts python -m pytest tests -q` → **428 passed / 0 failed**（不许增删用例）
+【铁律】① 禁 git；② 禁 print；③ ≤100 行/文件、函数 ≤50 行、列 ≤120；④ stdlib + psycopg；
+ ⑤ 只许动 `scripts/ingest/jc_load.py` 与新建 `scripts/ingest/jc_read.py`；**`jc_write.py` / `parse_*.py` / `tests/**` / DDL / `/srv/**` 一律禁改**；
+ ⑥ 报告 `.omp-logs/P0-COLLECT2i.report.txt`（T1~T6 原始输出 + "改完 C 条后哪些地方和上一单不一样了"）+ `echo TASK_DONE > .omp-logs/P0-COLLECT2i.done`
+【边界】跑不通就**贴出报错原文**并停下点名原因（哪张表哪一列哪个函数），**绝对禁止**：改 `jc_write.py` 来迁就、少写行、跳表、造数据、或把 count 改成"看起来对"。
+【验收（队长逐字复跑）】
+  bash ~/bin/v2b-check.sh
+  bash ~/bin/league-accept.sh P0-COLLECT2i scripts/ingest/jc_load.py scripts/ingest/jc_read.py

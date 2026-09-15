@@ -1,0 +1,45 @@
+【项目】league-v2（规范 README §2-D2「盘口最高优先但配额要省」、§0 红线；教训 §9-33「返回值即证据」、§9-36）
+【用户决定（2026-09-15，原话）】"我同意你的看法，要省着用，功能留着，默认关闭，有config/env文件控制吗？"
+【现状（队长 13:55Z 实测，动手前先读懂）】
+  · 有"文件"没"配置层"：`core/constants.py::_load_dotenv()` 已零依赖读 `repo/.env`，且**真实环境变量优先于文件**（`if key and not os.environ.get(key)` 那行，别改这个优先级）
+  · 但**没有任何开关**：全库 7 个文件直接 `os.environ.get(...)`（core/log.py、core/backtest.py、core/data/fetch.py、core/constants.py、ingest/api_get.py、store/pg.py、bball/run.py、bball/config_bball.py）
+  · 每日上限**不是配置是调用点默认值**：`ingest/quota.py::charge(conn, day, source=DEFAULT_SOURCE, cap=100, n=1)`、`remaining(..., cap=0)` ⇒ 谁忘了传 cap 就按 100 烧
+  · 源注册表已存在，这就是插入口：`ingest/api_get.py::SOURCES = {source: (key 环境变量名, 鉴权头, 超时秒)}`，且已有"无 key 直接抛、不发无名请求"的先例（照它的风格做）
+【任务】5 个文件（≤100 行/个）：
+  1) 【新】scripts/core/config.py    零依赖配置层（**新建文件，禁改 `core/constants.py` 等任何既有 v1 文件**；.env 已由 constants 在 import 时载入，本模块只读 os.environ）：
+       · `flag(name: str, default: bool = False) -> bool`：读 `LEAGUE_<NAME>`，接受 `1/0 true/false on/off yes/no`（大小写不敏感、去空白），**无法识别的值直接 ValueError**（不许猜成 False 蒙混）
+       · `source_policy(source: str) -> SourcePolicy`（frozen dataclass：`source, enabled, daily_cap, key_env, paid`）
+         默认表（写死在代码里，env 可覆盖）：
+           api_football    enabled=1  cap=100  key=API_FOOTBALL_KEY       paid=0
+           football_data   enabled=1  cap=30   key=FOOTBALL_DATA_API_KEY  paid=0
+           odds_api        enabled=0  cap=0    key=NBA_API_KEY            paid=1     ← P0-MARKET2 那条外部盘口链路，**功能在、默认关**
+         env 覆盖名：`LEAGUE_SOURCE_<SOURCE>=on|off`、`LEAGUE_QUOTA_CAP_<SOURCE>=N`（cap 必须是非负整数，否则 ValueError）
+       · `spend_allowed(source) -> None`：非 enabled 或 paid 且无一次性授权 ⇒ 抛 `SourceDisabled(source, why)`；**why 里带上是哪个 env 变量控制的**（人读的报错）
+       · `describe() -> list[dict]`：全源当前生效策略（给 `--plan` 打印，§9-33：开关状态必须看得见）
+  2) 【改】scripts/ingest/api_get.py  只改两处：取 key 前调 `config.spend_allowed(source)`（关掉时**根本不发请求、不写 raw、不记 ledger**）；
+       `SOURCES` 的 key 环境变量名改从 `config.source_policy(source).key_env` 取（保持行为：无 key 仍抛原错）
+  3) 【改】scripts/ingest/quota.py    `charge(...)` 的 `cap` 默认值从写死的 `100` 改成**从 `config.source_policy(source).daily_cap` 取**；
+       显式传 cap 仍以参数为准（回填脚本要按源精确控制）。`remaining` 同口径。不许改账本表结构。
+  4) 【改】scripts/ingest/run_backfill.py  `--plan` 输出顶部加一段 `config.describe()` 的策略表（含"关闭"字样）；新增 `--allow-paid`（**只放行本次进程**：写进程内 env，不落 .env）
+  5) 【新】tests/test_config.py       纯函数 + 无 DB 用例（`monkeypatch.setenv` 全覆盖，不许真发请求）：
+       flag 六种写法与非法值；默认表逐源断言（**`odds_api.enabled is False` 与 `api_football.daily_cap == 100` 各钉一条**）；
+       env 覆盖生效（含"关掉 api_football 后 `spend_allowed` 抛 SourceDisabled 且报错含变量名"）；cap 非法值 ValueError；
+       `describe()` 行数==源数；**回归护栏**：`api_get.fetch` 在 odds_api 关闭时**零请求**（用假 opener/monkeypatch 断连）且不调 `quota.charge`
+【必须成立】
+  T1 `python -m pytest tests -q` 零 FAILED 零 SKIPPED（用例只增不减；基线以 P0-MODEL2 之后为准，队长实测 397）
+  T2 不设任何 LEAGUE_* 时：`api_football`/`football_data` 可用且 cap=100/30，**`odds_api` 一律不可用**（默认关闭＝不需要用户记得设）
+  T3 关闭路径**零副作用**：不发 HTTP、不写 `raw.*`、不写 `ops.quota_ledger`（用回滚事务 + 假请求层证明）
+  T4 `.env` 现有键一个不动、`.env` 仍不入库；新增 **`.env.example`**（提交进仓库）：列出全部键名与 `LEAGUE_*` 开关，**值一律占位/注释**，禁写真 key
+  T5 既有真跑链路不倒退：`run_backfill.py --plan` 在关闭 paid 源时仍能正常出计划并打印策略
+【铁律】① 禁 git；② 禁 print（`core.log.logger`；`--plan` 的面向人输出沿用该文件既有写法，别新开 print）；③ 机械搬移禁改逻辑/数值/顺序；④ 报告用锚点；
+  ⑤ 单文件 ≤100 行、AST 函数 ≤50 行、单行 ≤120 列，自检 0 违规：
+     `python3 ~/bin/omp-ast-check.py scripts/core/config.py scripts/ingest tests/test_config.py`；
+     禁新依赖（stdlib only）；`psycopg` 只准在 `scripts/store/`、`scripts/ingest/`；
+     禁改任何既有 v1 文件（`core/constants.py`、`core/backtest.py`、`core/data/**`、`bball/**` 全部只读；`core/` 下只准**新增** config.py）；
+     禁建/改/删任何 DB 对象；禁真联网；测试内一律回滚事务；
+  ⑥ 完成后写 `.omp-logs/P0-CONFIG1.report.txt`（T1~T5 原始输出 + 你列的"还有哪些地方绕过 config 直接读 env/写死 cap"清单**只列不改** +
+     如果以后要加第 4 个源，需要动几个文件），然后 `echo TASK_DONE > .omp-logs/P0-CONFIG1.done`
+【背景一句话】外部盘口（The Odds API）≈180 次请求要吃掉两天配额，而 P0-STORE 侧已确认**竞彩官方 10 分钟快照就是免费收盘盘口** ⇒ 该功能降级为"可选校验"，代码留着，默认关，开关走 env/config。
+【验收（队长逐字复跑）】
+  bash ~/bin/league-accept.sh P0-CONFIG1 scripts/core/config.py scripts/ingest tests/test_config.py
+  # 队长另做：真库 `--plan` 对照策略表；`LEAGUE_SOURCE_ODDS_API=on` 与不设两种情况下分别跑一次 `--allow-paid` 路径，确认默认关时账本 0 新增

@@ -1,0 +1,69 @@
+【项目】league-v2（规范 README §2-D7「单文件 ≤100 行」是**用户确认的硬红线**，不许申请放宽；§9 铁律：报告用锚点、禁 git、禁 print）
+
+【这一单是什么】国内采集机已按契约 v1.1 上线，队长 15:25Z 验收 **PASS**（3 批 450 行，`src_hash` 450/450 复算一致，解析层 450/450 零异常），契约升 **v1.2**。
+【前置】P0-COLLECT2a 的活已由上一位工人做完：**7 条期望值全部改绿、队长已逐条用夹具实算复核**（当前基线 `428 passed / 0 failed`，夹具=真包 142 行）⇒ 本单**不碰期望值**（只有下面 D0 那一处例外），也**不需要**再读那 7 条。
+⚠️ 工作树里**已经有上一位工人写的半成品**：**`scripts/ingest/jc_write.py`（105 行 —— 已超 §2-D7 的 100 行红线）**。**第一动作是读它并列出它已经做对了什么、缺什么**，只补缺口与错处，**不要推翻重写**；继承它就必须**顺手把它拆到 ≤100 行**（拆文件算机械搬移，队长有逐字比对工具，逻辑一改就露）。另：`scripts/ingest/jc_load.py` 若不存在就由你新建（CLI 入口，薄壳，只做参数与调度）。报告里单列一节说明「哪些是继承的、哪些是你写的」。
+
+本单把**真包写入 `fact.jc_*` 八表**并证明幂等。前置 P0-COLLECT1b 已把解析层拆到 ≤100 行（`scripts/store/parse_*.py`），**上一单的实现逻辑一行都不许改**。
+
+【队长读完那份半成品后的**四条已核实缺陷**（照单修，别重新发现一遍）】
+ D1 `_upsert()` 的**参数个数必然不匹配**：`where` 是用 `EXCLUDED.col >= table.col` 拼出来的**纯文本**（没有任何 `%s` 占位符），
+    但函数后面又 `params.extend(row.get(g) for g in gates)`、还 `row.get("where_note")`（**这个键在全树任何 dict 里都不存在**）
+    ⇒ `psycopg` 会直接报"参数数量不符"。**修法**：gates/extra_where 一律走列名比较，不进 params；`where_note` 那两行删掉。
+ D2 `upsert_jc_offer()` **没把 `snap_ts` 放进 `cols`**（它是 PK 成员、NOT NULL）⇒ 真跑必 `null value in column "snap_ts" violates not-null constraint`。
+    同类问题请对**每张表**自查一遍：PK 列必须出现在 cols 里（`jc_match.match_id`、`jc_result.match_id` 是对的，`jc_offer` 不是）。
+ D3 `_team()` 查的是 **`ref.team.jc_id` —— 这个列不存在**（`ref.team` 只有 `team_id/sport/name_cn/aliases` + 生成列 `af_id/fd_id`）
+    ⇒ 现在这么写会 `UndefinedColumn`。**本单口径**：`WHERE (aliases->>'sporttery') = ANY(%s)`（**text 比较**，把 id 转成 str 传进去），
+    对不上就是 NULL——**不许为此加列、不许建生成列、不许猜队伍**（`jc_id` 那套别名是 P0-JCALIGN1 的事，还没执行）。
+    今晚真包 17 场 34 队**全部对不上是预期结果**（`aliases ? 'sporttery'` 命中 0 行）⇒ `home_team_id/away_team_id` 全 NULL **不许报错、不许当成失败**。
+ D4 全局 `INT: dict[str, Any] = {}` 是**死代码**（删）；首行 docstring 把工单名写成 `P0-COLECT2`（缺个 T），顺手改对。
+（以上 D1~D3 是我读代码读出来的，不是猜的：D1 看第 46-65 行、D2 看第 86-92 行、D3 对照 `\d ref.team`。）
+
+【输入：目录必须是参数】新 `scripts/ingest/jc_load.py`（名字可改，落点必须是 `scripts/ingest/`）
+· 入参 `--dir <批目录根>` + `--batch <可选，只跑指定批>`；**默认值不许写死 `/srv/league-staging/...`**——你的进程没有 `league` 组，读不到真目录（队长用 `sg league -c '…'` 才能读）；测试一律传 `tmp` 目录。
+· **真包三批队长已复制成 world-readable 的 `/tmp/incoming`**（结构与 `/srv/league-staging/incoming/cn-collector/` 一致，含 `.done`），本单所有真跑一律 `--dir /tmp/incoming`：
+     `2026-09-15T14-40-02Z` 227 行（7 topic 齐）/ `2026-09-15T15-03-45Z` 85 行（只有 jczq_offer + jclq_offer.empty）/ `2026-09-15T15-16-32Z` 138 行（缺 jczq_offer/jc_issue/jclq_offer）
+     ⇒ **后两批故意缺 topic，正是 T5 的素材**，不是数据损坏；`/srv/...` 原路径你读不到（没有 league 组），**别去试**。
+· 只认有 `.done` 的批；**批内 topic 缺席 ⇒ 记成 gap**（写 `ops.file_arrival`，列结构自己 `\d ops.file_arrival` 看），**不许**把"缺席"当"无变化"静默跳过。
+
+【必须成立的行数（队长用真包独立算好的 oracle，逐表核对）】把 3 批真包全跑一遍后：
+| 表 | 期望行数 | 来源拆解 |
+|---|---|---|
+| `fact.jc_match` | **17** | 170 行 offer 去重 `match_id`（用 COLLECT1 批准的第 5 个返回键 `match`，21 列） |
+| `fact.jc_offer` | **170** | 85 行 × 2 批，PK `(match_id,play_type,snap_ts)` 不冲突 |
+| `fact.jc_result` | **15** | 15 行 × 2 批内容完全相同 ⇒ 15 |
+| `fact.jc_issue` | **7** | 4 个真期头 + **3 个必须由 `jc_issue_result` 合成的父行**（见下条硬规定 1） |
+| `fact.jc_issue_draw` | **3** | 6 行 result / 2 批 → 3 个不同期 |
+| `fact.jc_issue_match` | **62** | 期头 38 场（14+14+6+4）+ result 24 场（14+6+4），两批同内容 |
+| `fact.jc_issue_prize` | **0** | 真包 6 行 result 的 `prizeLevelList` **全是空数组**（未开奖，官方 09-16 才开）⇒ **一行都不许造** |
+| `fact.lottery_draw` | **120** | 240 行 → 120 个 `(game_num,issue_no)`；其中 30 期跨批内容有变 ⇒ 取最新 |
+⇒ 同一目录**连跑第二遍，八表 count 逐表一字不变**（幂等，T4）。
+
+【五个硬规定，全是队长核真包核出来的，不许改口径】
+1. **FK 孤儿是常态，必须父行先行**：真包里 `jc_issue` 的期头是**在售那期**（90/26127、900129/26127、98/26181、94/26188），
+   `jc_issue_result` 的期头是**上一期**（90/26126、98/26180、94/26187）⇒ **3/3 全是孤儿**，而 `jc_issue_draw`/`jc_issue_match`/`jc_issue_prize` 有 FK 指向 `fact.jc_issue`。
+   ⇒ 用 result payload 自带的 `lotteryGameName/lotterySaleBeginTime/lotterySaleEndtime/lotteryDrawTime` + `matchList` 长度**合成最小父行**（`raw_head` 存原 payload，并在 jsonb 里标 `"head_source":"jc_issue_result"`——**不要为此改 DDL**）；
+   后到的真期头**只补空列、不覆盖已有非空值**（期头 topic 是权威）。同事务内先父后子；父行写不进则该子树整块放弃并记 `notes`（**宁可不插，不可插错**）。
+2. **写入语义 = `ON CONFLICT (pk) DO UPDATE`，且必须防旧批回退**：只有 `EXCLUDED.snap_ts >= 现值` 才更新（写在 `WHERE` 里）。
+   `league_ing` 在 fact **没有 DELETE** ⇒ 全链路**永远不许依赖删除**；`fact.jc_issue_prize` 已有队长加的 `is_current` 列：重刷同一期时，新旧 `tier_no` 集合的差集用 **UPDATE 置 `is_current=false`**（下标会变，官方开奖前后整体换形）。
+3. **类型漂移必须容错**：`lotterySaleEndTimeUnix` 同一键两批里分别是 `0`(int) 和 `{}`(dict)；`jc_issue_draw.sales/pool_after/sales_rj` 未开奖时是**空串 `""`**；`lottery_draw.prizes` 结构整体换形。
+   ⇒ 数值/时间列遇 `""`、缺失、类型不对一律 **NULL**（不许抛、不许当 0）；原始值继续以 jsonb/text 保留（`raw`/`raw_head`/`prizes`/`numbers_raw`），转换失败逐条写进 `notes`。
+4. **`jczq_offer` 一个 payload 落两张表**：`jc_offer`（主）+ `jc_match`（`match` 扩展键）⇒ **两张都写**，只写一张判失败；
+   `play_type` 直接用解析器归一化值（官方 `block=hafu` → DDL `haf`，与 `CHECK` 一致），**不许自己动大小写或再映射**。
+5. **入库层不做去噪**：真包两批之间"变化的 6 行"价格一字未动，变的只是 `*f` 升降盘箭头归零（`1/-1 → 0`）⇒ 去噪规则（只比价格键）属于后续 CLV 单，**本单照原样落，不许在 load 阶段合并或丢弃任何一行**。
+
+【夹具已换成真包抽样（142 行，队长 15:45Z 用 `docs/db/make_collector_fixtures_v12.py` 生成），按真包改断言】**旧夹具来自探针用的 `getMatchListV1`，比生产多 18 个键，不代表生产形状**。新集合的构成与意图写在 `tests/fixtures/collector_v11/PROVENANCE.md` 里（先读它再动手）：`jczq_offer` 91 行（85 全量 + 6 行跨批变化）、`jczq_result` 15、`jc_issue` 4、`jc_issue_result` 6（真包 3 未开奖 + 旧探针 3 已开奖）、`lottery_draw` 22（4 玩法各 1 + 6 行跨批变化 + 12 旧探针）、`jclq_result` 2（仅旧探针）、`errors` 2（仅旧探针）。
+【队长核过的**测试遗留松绑**（本单唯一允许你改的断言，改这一处就好）】
+ D0 `tests/test_parse_collector_issue.py` 里现在写的是 `assert all(tier[...] == "-1" for tier in dash) and len(dash) > 0`
+    —— 上一位工人把金标的 `len(dash) == 2` **松成了 `> 0`**（新夹具下真值是 2 才对不上，松绑是偷懒不是修）。
+    ⇒ 改成 **`len(dash) == 4`**（队长 18:32Z 用夹具实算：`prizeLevelList` 里 `stakeAmountFormat == "-1"` 的条目**共 4 条、跨 4 期**），其余一字不动。
+
+【铁律】① 禁 git 一切子命令；② 禁 print；③ 单文件 ≤100 行（要拆随你，建议 `jc_load.py` + `jc_children.py` + `jc_write.py`）；④ 禁新依赖（stdlib + psycopg 仅在 store/ingest）；
+⑤ **禁改清单**：`scripts/core/**`、`scripts/derive/**`、`scripts/market/**`、`scripts/store/parse_*.py`（上一单成果，只许 import）、`tests/fixtures/collector_v11/**`、**任何 DDL/建表/加列/GRANT**（八表已就位，`jc_issue_prize.is_current` 队长已加；再缺列就停下来报告点名那一列）；⑥ 禁真联网（不许访问 `/srv/league-staging/**`，那是队长的事）；
+⑦ 完成后写 `.omp-logs/P0-COLLECT2.report.txt`（T1~T7 原始输出 + 断言改动清单 + "哪几处我很想顺手改但没改"），然后 `echo TASK_DONE > .omp-logs/P0-COLLECT2.done`
+
+【边界】若你判断"要做到 T3 就必然得改解析层"或"FK/父行合成在你的权限下做不到"，**停下来报告点名那一条**，队长裁决；不许自行扩表、加列、放宽红线、或改上一单已验收的代码。
+
+【验收（队长逐字复跑）】
+  bash ~/bin/league-accept.sh P0-COLLECT2 scripts/ingest scripts/store tests
+  # 队长另做：把真包 3 批只读复制到 tmp 目录，独立跑同一条 CLI，逐表 count 对上表 oracle；重放第二遍核幂等；查 `ops.file_arrival` 的 gap 行；ast-check。

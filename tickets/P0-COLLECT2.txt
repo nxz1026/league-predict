@@ -1,0 +1,83 @@
+【项目】league-v2（规范 README §2-D7「单文件 ≤100 行」是**用户确认的硬红线**，不许申请放宽；§9 铁律：报告用锚点、禁 git、禁 print）
+
+【这一单是什么】国内采集机已按契约 v1.1 上线，队长 15:25Z 验收 **PASS**（3 批 450 行，`src_hash` 450/450 复算一致，解析层 450/450 零异常），契约升 **v1.2**。
+本单把**真包写入 `fact.jc_*` 八表**并证明幂等。前置 P0-COLLECT1b 已把解析层拆到 ≤100 行（`scripts/store/parse_*.py`），**上一单的实现逻辑一行都不许改**。
+
+【输入：目录必须是参数】新 `scripts/ingest/jc_load.py`（名字可改，落点必须是 `scripts/ingest/`）
+· 入参 `--dir <批目录根>` + `--batch <可选，只跑指定批>`；**默认值不许写死 `/srv/league-staging/...`**——你的进程没有 `league` 组，读不到真目录（队长用 `sg league -c '…'` 才能读）；测试一律传 `tmp` 目录。
+· **真包三批队长已复制成 world-readable 的 `/tmp/incoming`**（结构与 `/srv/league-staging/incoming/cn-collector/` 一致，含 `.done`），本单所有真跑一律 `--dir /tmp/incoming`：
+     `2026-09-15T14-40-02Z` 227 行（7 topic 齐）/ `2026-09-15T15-03-45Z` 85 行（只有 jczq_offer + jclq_offer.empty）/ `2026-09-15T15-16-32Z` 138 行（缺 jczq_offer/jc_issue/jclq_offer）
+     ⇒ **后两批故意缺 topic，正是 T5 的素材**，不是数据损坏；`/srv/...` 原路径你读不到（没有 league 组），**别去试**。
+· 只认有 `.done` 的批；**批内 topic 缺席 ⇒ 记成 gap**（写 `ops.file_arrival`，列结构自己 `\d ops.file_arrival` 看），**不许**把"缺席"当"无变化"静默跳过。
+
+【必须成立的行数（队长用真包独立算好的 oracle，逐表核对）】把 3 批真包全跑一遍后：
+| 表 | 期望行数 | 来源拆解 |
+|---|---|---|
+| `fact.jc_match` | **17** | 170 行 offer 去重 `match_id`（用 COLLECT1 批准的第 5 个返回键 `match`，21 列） |
+| `fact.jc_offer` | **170** | 85 行 × 2 批，PK `(match_id,play_type,snap_ts)` 不冲突 |
+| `fact.jc_result` | **15** | 15 行 × 2 批内容完全相同 ⇒ 15 |
+| `fact.jc_issue` | **7** | 4 个真期头 + **3 个必须由 `jc_issue_result` 合成的父行**（见下条硬规定 1） |
+| `fact.jc_issue_draw` | **3** | 6 行 result / 2 批 → 3 个不同期 |
+| `fact.jc_issue_match` | **62** | 期头 38 场（14+14+6+4）+ result 24 场（14+6+4），两批同内容 |
+| `fact.jc_issue_prize` | **0** | 真包 6 行 result 的 `prizeLevelList` **全是空数组**（未开奖，官方 09-16 才开）⇒ **一行都不许造** |
+| `fact.lottery_draw` | **120** | 240 行 → 120 个 `(game_num,issue_no)`；其中 30 期跨批内容有变 ⇒ 取最新 |
+⇒ 同一目录**连跑第二遍，八表 count 逐表一字不变**（幂等，T4）。
+
+【五个硬规定，全是队长核真包核出来的，不许改口径】
+1. **FK 孤儿是常态，必须父行先行**：真包里 `jc_issue` 的期头是**在售那期**（90/26127、900129/26127、98/26181、94/26188），
+   `jc_issue_result` 的期头是**上一期**（90/26126、98/26180、94/26187）⇒ **3/3 全是孤儿**，而 `jc_issue_draw`/`jc_issue_match`/`jc_issue_prize` 有 FK 指向 `fact.jc_issue`。
+   ⇒ 用 result payload 自带的 `lotteryGameName/lotterySaleBeginTime/lotterySaleEndtime/lotteryDrawTime` + `matchList` 长度**合成最小父行**（`raw_head` 存原 payload，并在 jsonb 里标 `"head_source":"jc_issue_result"`——**不要为此改 DDL**）；
+   后到的真期头**只补空列、不覆盖已有非空值**（期头 topic 是权威）。同事务内先父后子；父行写不进则该子树整块放弃并记 `notes`（**宁可不插，不可插错**）。
+2. **写入语义 = `ON CONFLICT (pk) DO UPDATE`，且必须防旧批回退**：只有 `EXCLUDED.snap_ts >= 现值` 才更新（写在 `WHERE` 里）。
+   `league_ing` 在 fact **没有 DELETE** ⇒ 全链路**永远不许依赖删除**；`fact.jc_issue_prize` 已有队长加的 `is_current` 列：重刷同一期时，新旧 `tier_no` 集合的差集用 **UPDATE 置 `is_current=false`**（下标会变，官方开奖前后整体换形）。
+3. **类型漂移必须容错**：`lotterySaleEndTimeUnix` 同一键两批里分别是 `0`(int) 和 `{}`(dict)；`jc_issue_draw.sales/pool_after/sales_rj` 未开奖时是**空串 `""`**；`lottery_draw.prizes` 结构整体换形。
+   ⇒ 数值/时间列遇 `""`、缺失、类型不对一律 **NULL**（不许抛、不许当 0）；原始值继续以 jsonb/text 保留（`raw`/`raw_head`/`prizes`/`numbers_raw`），转换失败逐条写进 `notes`。
+4. **`jczq_offer` 一个 payload 落两张表**：`jc_offer`（主）+ `jc_match`（`match` 扩展键）⇒ **两张都写**，只写一张判失败；
+   `play_type` 直接用解析器归一化值（官方 `block=hafu` → DDL `haf`，与 `CHECK` 一致），**不许自己动大小写或再映射**。
+5. **入库层不做去噪**：真包两批之间"变化的 6 行"价格一字未动，变的只是 `*f` 升降盘箭头归零（`1/-1 → 0`）⇒ 去噪规则（只比价格键）属于后续 CLV 单，**本单照原样落，不许在 load 阶段合并或丢弃任何一行**。
+
+【夹具已换成真包抽样（142 行，队长 15:45Z 用 `docs/db/make_collector_fixtures_v12.py` 生成），按真包改断言】**旧夹具来自探针用的 `getMatchListV1`，比生产多 18 个键，不代表生产形状**。新集合的构成与意图写在 `tests/fixtures/collector_v11/PROVENANCE.md` 里（先读它再动手）：`jczq_offer` 91 行（85 全量 + 6 行跨批变化）、`jczq_result` 15、`jc_issue` 4、`jc_issue_result` 6（真包 3 未开奖 + 旧探针 3 已开奖）、`lottery_draw` 22（4 玩法各 1 + 6 行跨批变化 + 12 旧探针）、`jclq_result` 2（仅旧探针）、`errors` 2（仅旧探针）。
+· **队长已经把"必然会红"的 7 条断言逐条定位并算好真包值**（01:27Z 队长换完夹具跑出来的：`7 failed, 421 passed`）。
+   **只改这 7 处，改完必须 `428 passed / 0 failed`**（真包值一个都不许再改，也不要动 `scripts/`）：
+     1. `tests/test_parse_collector_offer.py::test_all_lines_pass_envelope_and_src_hash` — `seen == 77` → **142**（新夹具总行数）
+     2. `…test_jczq_offer_block_structure` — `len(offers)==40 and len(by_match)==8` → **91 / 17**
+     3. `…test_jczq_offer_goal_line_parsed_columns` — 首行 `pk.match_id` 2041483 → **2041485**（真包首场=周二006 阿布艾因vs利雅胜利）；
+        `SNAP` 常量的值 → **`2026-09-15T14:35:37Z`**（真包 snap_ts（该 topic 文件内同值））。真包 HHAD 让球线分布（`options.goalLine`/`goalLineValue`）：
+        **`+1/+1.00`×7、`-1/-1.00`×8、`-2/-2.00`×1、`+2/+2.00`×1、`-3/-3.00`×1** ⇒ 断言要按这个集合写，`HAD` 块这两个键是**空串** ⇒ 解析成 NULL 的口径不变。
+     4. `…test_jczq_result_cancel_and_empty_sp` — 真包**没有字面量「取消」（0 行）**；官方真实形态是 `sectionsNo999=''` + `matchResultStatus='1'` + `poolStatus='Close'`（实测 **2 行**）
+        ⇒ 判「取消/未开」一律改成这三字段组合，**不许再拿中文「取消」做字符串匹配**；报告里写清新口径与依据行号。
+     5. `tests/test_parse_collector_issue.py::test_jc_issue_head_and_issue_no_collision` — 期头 (90,26126)… → **(90,26127)、(900129,26127)、(98,26181)、(94,26188)**；
+        跨玩法重号的性质**仍然成立**（90 与 900129 同 26127）⇒ 断言换值不换语义。
+     6. `…test_lottery_draw_raw_numbers_and_dash_amount` — `len(parsed)==12` → **22**
+     7. `…test_negative_shapes_raise_and_keep_raw_values` — **StopIteration**：锚点 `sectionsNo999 == "5:1"` 真包没有 ⇒ 换 **"1:4"**（真包 `2041482` 周二003 卡塔尔亚vs韩国亚，半场 `0:3`、SP `18.00/7.20/1.07`、`winFlag='A'`、`poolStatus='Payout'`）
+   ⚠️ 这 7 处**全是期望值漂移，不是解析缺陷**（队长已独立验过：450 行真包过 `parse_line` **零异常**）⇒ 若你在改期望值时发现某条**必须改 `scripts/` 才能过**，立刻停下来报告点名，不许改源码迁就测试。
+   · **一个字节都不许改夹具**（禁改清单不变）；⚠️ 外壳**故意两态**：真包行 9 键（含 `fetched_at`）、旧探针行 8 键（无）共 19 行⇒ 解析层**不得要求 `fetched_at` 存在**（它不参与 `src_hash`／身份键／时序），"少一个可选键就报错"判缺陷；
+· 但**测试里那些按旧探针形状写的期望值可以改**——每改一条，报告里必须写"改了哪条断言 / 原值 / 真包值 / 为什么真包对"。
+   已知会变的至少：`jczq_offer` payload 由 44 键 → **26 键**（`isHide/isHot/poolList/vote/remark/groupName/lineNum/matchWeek/*TeamCode/*TeamAbbEnName/baseHomeTeamId/matchName/leagueCode/taxDateNo/backColor` 生产没有）；让球线**只在 `options.goalLine/goalLineValue`**（顶层无此键，真包 `HHAD` 样例是 `"+1"/"+1.00"`，同一行 `HAD` 块这两个键是空串）；`crs` 块 **66 键**、`ttg` **20 键**、`hafu` **23 键（比 had 多一个 `id`）** 不变，可继续当断言。
+
+【队长已做好的 DDL 预检（01:15Z，省得你试错）】解析层产出列与八表列**逐一比对过**，只有两处需要你显式处理：
+· `fact.jc_match.home_team_id / away_team_id` ← 解析层 `match` 里的 **`home_sporttery_id` / `away_sporttery_id`**（名字不同，映射写在 loader 里，**不许改 `parse_*.py`**）；
+  同表 `is_hide / is_hot` 两列**生产不返回**（v1.2 已禁止再补那 18 个键）⇒ 一律 NULL，别为了填它们去猜。
+· `fact.jc_issue_draw` 的 `game_name` 列队长刚 ALTER 上去（表 0 行）⇒ 直接写。
+· 其余表的差集只有 `src_hash / src_file / first_seen_at / last_seen_at` 这类元数据列 ⇒ **由 loader 负责填**：
+  `src_hash` 填**该行所属原始行的 src_hash**（子表行也一样，别自己重算），`src_file` 填相对批路径（如 `2026-09-15T14-40-02Z/jczq_offer/…jsonl`），时间列交给 DB 默认值。
+
+【必须成立】
+ T1 `source ~/.venvs/league/bin/activate && PYTHONPATH=scripts python -m pytest tests -q` → **全绿、零 FAILED 零 SKIPPED**（用例数只增不减；行数期望用夹具子集算，不许硬编 450 这类真包数）
+ T2 写库测试**一律单事务 + 收尾 ROLLBACK**（`league_ing` 在 ref/fact/raw 无 DELETE，留痕洗不掉）
+ T3 **一次真跑**：CLI 用 `--dir /tmp/incoming`（队长准备好的真包 3 批副本），把八表 count 打成一行（`core.log.logger`）——真跑允许留痕，这就是我们想要的数据。
+    ⚠️ **上表的 oracle 只对应真包 3 批，不是夹具**：夹具里那 3 行旧探针 `jc_issue_result` 带 `prizeLevelList`（会产 5 行 prize），真包 6 行全空（产 0 行）⇒ **不许拿夹具的真跑结果去对 oracle**，两码事，报告里分开写。
+ T4 幂等：同一目录连跑两次，八表 count **逐表相等**
+ T5 gap：造一个假批（复制夹具目录、删掉 `jc_issue/`、留 `.done`），跑完必须能在 `ops.file_arrival` 里看到"该批该 topic 缺席"，且**不许**因此改坏已有数据
+ T6 `python3 ~/bin/omp-ast-check.py <全部新文件>` → **0 违规**（每文件 ≤100 行、函数 ≤50 行、≤120 列、无禁依赖、无 print、`psycopg` 只许出现在 `scripts/store/`、`scripts/ingest/`）
+ T7 行数对账表：报告里给"表 / 期望（上表）/ 实得 / 差异原因"
+
+【铁律】① 禁 git 一切子命令；② 禁 print；③ 单文件 ≤100 行（要拆随你，建议 `jc_load.py` + `jc_children.py` + `jc_write.py`）；④ 禁新依赖（stdlib + psycopg 仅在 store/ingest）；
+⑤ **禁改清单**：`scripts/core/**`、`scripts/derive/**`、`scripts/market/**`、`scripts/store/parse_*.py`（上一单成果，只许 import）、`tests/fixtures/collector_v11/**`、**任何 DDL/建表/加列/GRANT**（八表已就位，`jc_issue_prize.is_current` 队长已加；再缺列就停下来报告点名那一列）；⑥ 禁真联网（不许访问 `/srv/league-staging/**`，那是队长的事）；
+⑦ 完成后写 `.omp-logs/P0-COLLECT2.report.txt`（T1~T7 原始输出 + 断言改动清单 + "哪几处我很想顺手改但没改"），然后 `echo TASK_DONE > .omp-logs/P0-COLLECT2.done`
+
+【边界】若你判断"要做到 T3 就必然得改解析层"或"FK/父行合成在你的权限下做不到"，**停下来报告点名那一条**，队长裁决；不许自行扩表、加列、放宽红线、或改上一单已验收的代码。
+
+【验收（队长逐字复跑）】
+  bash ~/bin/league-accept.sh P0-COLLECT2 scripts/ingest scripts/store tests
+  # 队长另做：把真包 3 批只读复制到 tmp 目录，独立跑同一条 CLI，逐表 count 对上表 oracle；重放第二遍核幂等；查 `ops.file_arrival` 的 gap 行；ast-check。

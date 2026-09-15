@@ -1,0 +1,49 @@
+【项目】league-v2（规范 README §2-D5/D7；设计 §6 标注口径；教训 §9-27「队长改 DDL 必须与代码单同一轮」——本单就是那一轮的代码侧）
+【队长已把 DDL 落地（**你不要动 DB，也别试图"回退"**）】`docs/db/infra_p0_6_team_identity.sql`（postgres 执行，幂等可重跑）：
+  · `ref.team` 新增两列 **存储生成列** `af_id` / `fd_id`（从 `aliases->>'api_football'|'football_data'` 生成，**不手填**）
+  · 新增 **partial unique**：`team_af_key (sport, af_id) WHERE af_id IS NOT NULL`、`team_fd_key (sport, fd_id) WHERE fd_id IS NOT NULL`
+  · 旧 `UNIQUE(sport, name_cn)` **保留**（展示名仍不许撞）
+  · 已合并 4 家被拆成两行的俱乐部（AF id 157 拜仁 / 163 门兴 / 176 波鸿 / 180 海登海姆），`ref.team` 164 → **160 行**；
+    原貌备份 `ref.team_pre_p0_6_backup`、合并映射 `ref.team_merge_map(winner_id, loser_id, src_key, src_id)`（都只有 postgres 能读）
+【为什么要改身份键（真跑 P0-MODEL1 才暴露，全量测试当时是绿的）】
+  身份键原本是 `name_cn = core.i18n.to_cn(源队名串)`，而 ① **API-Football 跨赛季会改队名拼写**（"Vfl Bochum"→"VfL Bochum"、"Bayern Munich"→"Bayern München"）
+  ② `to_cn` 按字符串查词典，换了串就可能翻不出来 ⇒ 同一家俱乐部（AF id 一模一样）被插成两行。
+  后果：按 (league, season) 拟合时"上一季没这支队"⇒ **德甲 2024 季 306 场只写出 132 场预测（跳过 57%）**。
+【现状＝本单的硬闸】索引一上，`tests -q` 当场 **1 failed, 389 passed**：
+  `tests/test_align.py::test_fd_block_merges_into_af_fixture_only` →
+  `UniqueViolation: duplicate key value violates unique constraint "team_af_key"  Key (sport, af_id)=(football, 990010003) already exists`
+  根因：`_af_body()` 造队时 **AF team id 是从 fixture 哨兵 id 推出来的**，于是"两个测试文件各自的哨兵场"共用上了同一个俱乐部 id，
+  而两处给的队名串不同（一处默认名、一处 `"Inter"`）⇒ 老代码走 `ON CONFLICT (sport, name_cn)` 当作"新俱乐部"插第二行。
+  **这不是索引错了，正是索引抓到了真 bug**（真数据里拜仁就是这么被拆成两行的）。修的方向是"按 id 认队"，**不是**把索引拆了。
+【任务】4 个文件（≤100 行/个）：
+  1) 【改】scripts/store/upsert_fixtures.py    认队顺序改成 **源 id 优先**：
+       `SELECT team_id FROM ref.team WHERE sport=%s AND af_id=%s`（FD 侧同构用 `fd_id`）→ 命中即**只并 aliases**（`aliases = ref.team.aliases || EXCLUDED.aliases` 语义，
+         **绝不改 `name_cn`**：展示名要稳定，跨季改名来回翻就是这次的病）；未命中才 INSERT，冲突再回落 `ON CONFLICT (sport, name_cn) DO UPDATE SET aliases=…||…`
+       · 同义点：AF 与 FD 各自带 id，一条 fixture 的主队可能已有 af_id 无 fd_id（或反之）⇒ 并进来即可，**不许产生新行**
+       · 函数超 50 行就拆（`_resolve_team(conn, sport, name, alias_key, alias_val) -> int` 这类），别压可读性
+  2) 【改】scripts/store/query.py    新增只读体检 `team_identity_audit(conn) -> dict`：
+       `{teams, with_af_id, with_fd_id, dup_af, dup_fd, orphan}`（dup_* 按 af_id/fd_id 分组 having count>1，**必须恒 0**；orphan = 未被 fact 引用的队数，当前 38，允许 >0）
+  3) 【改】tests/test_align.py       ① 哨兵 AF/FD team id 改成**全库唯一区段**（本文件用 `9910xxxxx`，与 `test_upsert_from_raw.py` 的 `9900xxxxx` 永不重叠，写注释说明为什么）；
+       ② 新增用例钉住本次的病：**同一 af_id、两个不同 name 串**先后进 raw ⇒ `ref.team` 只多 1 行、`name_cn` 保持第一次的值、`aliases` 两键齐全
+  4) 【改】tests/test_upsert_from_raw.py   只改哨兵 id 区段（若它也用了从 fixture id 推出来的 team id），其余断言不动
+【必须成立】
+  T1 `python -m pytest tests -q` → **390 passed 上下、零 FAILED、零 SKIPPED**（当前那 1 条必须转绿；用例总数不许减少）
+  T2 `team_af_key`/`team_fd_key` **两个索引必须仍在**（不许 DROP、不许改成 non-unique、不许往 `ref.team` 加绕过路径）；`ref.team` 行数只增不减
+  T3 按 id 认队后，"AF 跨季改名"不再产生新行，且展示名不被后来的串覆盖（T3.2 用例断言）
+  T4 `league_ing` 仍无 DELETE/TRUNCATE（它本来就没有）；本单**零 DDL**
+  T5 一切写库断言用**相对增量**（`ref.team` 现 160 行、`fact.fixture` 5341 行、`fact.fixture_result` 8822 行是存量，禁止 `== 字面量` 总数）
+【铁律】① 禁 git；② 禁 print（`core.log.logger`）；③ 机械搬移禁改逻辑/数值/顺序；④ 报告用锚点；
+  ⑤ 单文件 ≤100 行、AST 函数 ≤50 行、单行 ≤120 列，自检 0 违规：
+     `python3 ~/bin/omp-ast-check.py scripts/store tests/test_align.py tests/test_upsert_from_raw.py`；
+     禁新依赖；`psycopg` 只准在 `scripts/store/`、`scripts/ingest/`；
+     **本单例外授权**：可改 `tests/test_align.py`、`tests/test_upsert_from_raw.py` 两个既有测试文件（只许为"哨兵 id 区段 + 新增 T3 用例"服务）；
+     其余既有 tests、`scripts/core|derive|ingest|market|model/**`、`store/{pg,parse_api,upsert_official,align,upsert_results,query}.py` 中**除 query.py 新增函数外**禁改；
+     禁建/改/删任何 DB 对象（DDL 队长已做完）；写 `ref.*`/`fact.*` 一律在回滚事务里；
+  ⑥ 禁真联网；⑦ `~/bin/omp-ast-check.py`、`~/bin/league-accept.sh` 只读禁改（改工具＝拒收）
+  ⑧ 完成后写 `.omp-logs/P0-TEAMKEY1.report.txt`（T1~T5 原始输出 + 认队改动的改前/改后 SQL 对照 + 你复核"还有哪些地方按 name 认队"的清单**只列不改**），
+     然后 `echo TASK_DONE > .omp-logs/P0-TEAMKEY1.done`
+【基线】开工前先跑全量记数（队长 12:45Z 实测 `1 failed, 389 passed`；那 1 条红的就是本单要治的）。
+【边界】若你发现"按 id 认队"在某条真实路径上必然冲突（例如同一个 AF id 在两联赛出现、或 id 为字符串非数字），**停下来写进报告**，别把索引或断言放宽。
+【验收（队长逐字复跑）】
+  bash ~/bin/league-accept.sh P0-TEAMKEY1 scripts/store tests/test_align.py tests/test_upsert_from_raw.py
+  # 队长另做：sudo -u postgres psql 复验两个索引仍在 + 真跑一次 upsert_fixtures（幂等、ref.team 行数不减）→ 重跑 10 个 walk run，公布跳过率修复前后对照（132/306 → ?）

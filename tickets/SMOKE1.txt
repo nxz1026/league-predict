@@ -1,0 +1,11 @@
+【项目】league-v2 OMP 本机冒烟测试（不是业务工单）
+【任务】在"当前工作目录"内完成以下三件事，除此之外不要碰任何其他路径：
+  1) 创建 hello.txt，内容两行：第一行 OMP_OK，第二行为今天的日期（YYYY-MM-DD）。
+  2) 创建目录 .omp-logs，在其中写 SMOKE1.report.txt：包含「改动清单」（新建了哪些文件）+「验收输出」（把 hello.txt 的 cat 结果原样贴进去）。
+  3) 执行 echo TASK_DONE > .omp-logs/SMOKE1.done （这条命令必须真的跑）。
+【铁律】
+  ① 禁 git 任何子命令（status/diff/commit/push/checkout 都不许）
+  ② 禁改当前目录以外的任何文件
+  ③ 完成后必须先写 .omp-logs/SMOKE1.report.txt，再写 .omp-logs/SMOKE1.done
+  ④ 最后一行输出必须是 TASK_DONE
+【验收】（队长复跑）cat hello.txt; ls -l .omp-logs/

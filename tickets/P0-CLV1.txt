@@ -1,0 +1,48 @@
+【项目】league-v2（§2-D7 硬红线：单文件 ≤100 行、函数 ≤50 行、≤120 列；报告用锚点；禁 git/print/新依赖）
+
+【这一单是什么】把 **CLV（收盘价对赌价值）** 从"The Odds API 付费源"彻底改到**竞彩官方 10 分钟快照**（用户决定 D9：境外盘口降级为可选校验、默认关闭）。
+现状：`analysis.backtest_market.clv` 由 P0-BACKTEST1 建好但**恒为 NULL**（当时没有任何官方盘口时序）。现在 `fact.jc_offer` 有了真数据与明确口径，本单只做**可算性与框架**，不许为了出数而造数。
+
+【队长已用真包钉死的口径（照做，不要另起炉灶）】
+1. **收盘价定义**：同一 `(match_id, play_type)` 按 `snap_ts` 排序，**开赛前最后一条即收盘水**；
+   价格只在 `options` 里（`had/hhad` = `h/d/a`；`hhad` 另有 `goalLine`/`goalLineValue`；`ttg` = `s0..s7`；`crs` = 31 个 `sXXsYY` + `s1s[hda]`；`hafu` = 9 个 `hh/hd/…`）。
+2. **去噪**：真包实测两批之间"变化的 6 行"**价格一字未动，只有 `*f` 升降盘旗标从 `1/-1` 归零**。⇒ 判定"是否新的一个价"只许比**价格键 + `goalLine`**，`*f`/`updateDate`/`updateTime` 一律忽略（这是唯一口径，不许自己发明）。
+3. **历史回填**：`payload.oddsHistory` 每条自带 5 个历史变盘点（含 `updateDate/updateTime/poolCode`，`matchId/matchNum` **恒为 0 不可当键**）⇒ 快照断档时可回填最近 5 点，本单要把它用上并在报告里说明回填了几个点。
+4. **模型概率**：只吃 `model.*` 里 `derive/registry.PLAYS` 已注册的玩法（`had/hhad/crs/ttg/jqc/haf`…），**没有对应玩法概率就不算 CLV，不许退化估算**。
+
+· **队长 01:45Z 确认官方自带变价史**：`jczq_offer` payload 顶层 `oddsHistory`（≤5 项，含 `poolCode/h/d/a/goalLine/updateDate+updateTime`，`matchId` 恒 0 ⇒ 归属只能靠外层 payload 的 matchId）；列 `fact.jc_offer.odds_history jsonb` 队长已 ALTER，但**现解析层丢弃该键** ⇒ 捕获由 **P0-COLLECT3** 负责，**本单必须在 COLLECT3 之后**才谈得上「用历史档补齐」。
+
+【队长 18:35Z 用真包量出来的**数据现实**（决定本单能不能算，先读）】
+· 一批 85 个块里 **82 个块的 `oddsHistory` 含同 poolCode 的历史项**；**末项价格与现价完全相同的 = 0/82** ⇒ `oddsHistory` 是"变价史"（每项都是**被替换掉的旧价**），现价只在 `options` 里。
+· 末项距本次快照：中位 **540 分钟**、范围 **48~776 分钟** ⇒ 官方一次请求就白送 **每场每玩法最近 ~5 次变价、覆盖约一天**。
+· 我们这批快照是 22:35（北京），最早开球 00:00 ⇒ **快照比收盘早 1.4 小时**，所以"快照价 = 收盘价"**不成立**。
+⇒ **本单拆成两段，先做 A 段：**
+ **A 段（今天就能做，不依赖 10 分钟档）**：`analysis.jc_movement`——用 `odds_history` + 现价，逐场逐玩法算
+   `{n_changes, first_price, last_price, move_pct, moved_dirs, first_ts, last_ts, goal_line_changed}`；
+   要求**明确标注"这是变价史不是收盘价"**，且 `goal_line` 变了要单独计（让球线变化是硬信息，比水位变化重要）。
+ **B 段（等 ≥3 天 10 分钟档）**：真 CLV（`analysis.backtest_market.clv`），口径与去噪规则见下；
+   **若可算样本数 = 0，必须原样报告 0**，不许拿 A 段的变价数冒充 CLV。
+【要做的事】
+· 新 `scripts/model/clv.py`（>100 行就自己拆，如 `clv_price.py`）：`closing_price(conn, match_id, play_type) -> (价, snap_ts, 来源)`——来源 ∈ {`snapshot`,`odds_history`}；同一时刻多行取 `src_hash` 字典序最大（确定性）。
+· `analysis.backtest_market.clv` 改为**真值**：`clv = 我们模型下注方向的隐含概率 − 收盘水隐含概率`（去水后归一；**去水规则要写进 docstring 并有测试**）；无收盘价 ⇒ 保持 NULL 并在 `notes` 里记原因枚举（`no_offer`/`no_model_prob`/`match_not_in_jc`）。
+· `store/query.py` 加 `clv_report(conn, *, src_run=None, league_key=None)`：按玩法给 `n / 有收盘价占比 / 平均 clv / 胜率对 clv 的散点分箱`，**每个数字必须自带口径范围**（§9-37：先全量再分组，禁止拿分组均值当标题）。
+· 队长的真包目前只有 **17 场在售**、且联赛与我们 5 大联赛可能几乎不重叠 ⇒ **真实可算样本数可能就是 0**：这是允许且预期的结果，**必须原样报告**，测试一律用你自己在 tmp 事务里造的合成行（收尾 ROLLBACK）。
+
+【必须成立】
+ T1 `source ~/.venvs/league/bin/activate && PYTHONPATH=scripts python -m pytest tests -q` 全绿、用例数只增不减
+ T2 合成数据必须覆盖：① 只有快照（≥3 个时点）；② 只有 `oddsHistory`（快照缺失）；③ 两者都有 ⇒ 优先级 snapshot > odds_history；
+    ④ **只有 `*f` 变化、价格未变** ⇒ 判定为"同一个价"，收盘价不移动（这条是本单的立身之本）；⑤ 无盘口 ⇒ clv NULL + notes 原因
+ T3 真实库上跑一次 `clv_report`，把"可算样本数 / 各原因计数"原样贴进报告（**哪怕是 0 也不许遮掩、不许改口径凑数**）
+ T4 `python3 ~/bin/omp-ast-check.py <新文件>` 0 违规；无 print；`psycopg` 只在 `scripts/store/`、`scripts/ingest/`（模型层要读库一律走 `store/query.py` 传入的行）
+ T5 **不改**任何已验收模块的行为：`scripts/model/walk.py|sides.py|backtest.py`、`derive/**`、`market/**`、`scripts/store/parse_*.py`、`scripts/config.py`（只许 import）
+
+【铁律】① 禁 git；② 禁 print（用 `core.log.logger`）；③ 单文件 ≤100 行；④ 禁新依赖（stdlib only，无 numpy/scipy/pandas）；
+⑤ 禁真联网、禁访问 `/srv/league-staging/**`；⑥ 禁建/改/删任何 DB 对象（`analysis` 表结构已够，缺列停下报告）；
+⑦ 测试写库一律单事务 + 收尾 ROLLBACK（`league_app` 在 analysis 有 DELETE，但你要保持环境干净）；
+⑧ 完成后写 `.omp-logs/P0-CLV1.report.txt`（T1~T5 原始输出 + 一句"哪几处我很想顺手改但没改"），再 `echo TASK_DONE > .omp-logs/P0-CLV1.done`
+
+【边界】若你发现"官方 10 分钟快照不足以定义收盘价"（例如开售场在封盘前没有最后一条快照），**停下来报告并举证**（给出真包里的具体 `match_id/snap_ts` 序列），不要改成"用倒数第二条"这类自作主张。
+
+【验收（队长逐字复跑）】
+  bash ~/bin/league-accept.sh P0-CLV1 scripts/model scripts/store tests
+  # 队长另做：真实库跑 `clv_report` 核可算样本数与原因计数；用真包 6 行"只有 *f 变化"的样本单独验 T2-④；ast-check。

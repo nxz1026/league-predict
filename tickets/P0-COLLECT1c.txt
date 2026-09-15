@@ -1,0 +1,41 @@
+【项目】league-v2（§2-D7：本仓约定新/改文件 ≤100 行、函数 ≤50 行、单行 ≤120 列，是**用户确认的硬红线**，不许申请放宽）
+
+【这一单是什么】P0-COLLECT1b 的**收尾微单**。拆分本身队长已经独立复核通过（下面"队长已核实"三条），**只剩 3 处机械问题**，全部在你已经动过的测试文件里。本单**只许改这 3 处**，其余一字不动。
+
+【队长已核实（不用你再证明，也不许再去动）】
+· `jc-move-check`：18/18 个顶层函数在拆分后**逐字一致**、零新增顶层定义 ⇒ `scripts/store/parse_*.py` 是纯机械搬移，**已验收**；
+· 行为金标：77 行旧夹具过 `parse_line`，拆分前后输出**逐键完全一致（零漂移）**；
+· `omp-ast-check` 对 5 个 parse 文件 **0 违规**（78/41/50/33/79 行）。
+
+【要修的 3 处，逐个点名】
+1. **测试是红的**：`tests/test_collector_contract.py::test_clean_file_archives_to_done` 现在 **KeyError: 'ok'**（第 94 行 `report["ok"] is True`）。
+   原因：你在拆分时**新增了一个金标里没有的断言**，而 `ingest.collector_pull.run()` 返回的 report **根本没有 `ok` 这个键**。
+   ⇒ 修法二选一，**必须先读 `scripts/ingest/collector_pull.py` 确认返回体真实键名，不许猜**：
+     (a) 直接删掉 `and report["ok"] is True` 这半句（推荐：`tests/test_collector_v11.py::test_clean_file_repush_is_idempotent` 已经覆盖了金标的全部断言）；
+     (b) 或改成 run() 真实存在的键（写进报告，附你从哪个文件哪一行看到的）。
+   ⚠️ 除这半句外，`test_clean_file_archives_to_done` 与 `test_clean_file_repush_is_idempotent` 的**其余断言一条都不许动**（队长已逐条比对：金标 5 条有效语句在两半里都能找到，只多不许少）。
+2. **`tests/test_collector_contract.py` 105 行 > 100**：再搬一次家即可。
+   建议新文件 `tests/test_collector_arrival.py` 承接**"批到达"类**用例（`test_file_without_done_marker_is_ignored`、`test_dirty_file_rejects_bad_lines_and_archives_to_bad` 这类看 `.done`/归档去向的），
+   `test_collector_contract.py` 只留 §5 契约结构类（`test_stg_schema_matches_contract` + 共享 fixture/helper）。
+   ⇒ **拆完四个文件都要 ≤100 行**：`test_collector_contract.py`、`test_collector_v11.py`(93)、`test_collector_arrival.py`、以及 `test_parse_collector_offer.py`(85)/`_issue.py`(91) 不许再动。
+   共享的 `_envelope` / `_drop` / `_q` / `HOST` 这些 helper **只许有一份**（放在 `tests/collector_helpers.py` 或 contract 文件里由其它文件 import，**禁止复制粘贴成三份**）；import 方向单向、不许形成环。
+3. **`tests/test_collector_v11.py:93` 单行 121 列 > 120**：折行（只改换行，不改表达式）。
+
+【必须成立】
+ T1 `source ~/.venvs/league/bin/activate && PYTHONPATH=scripts python -m pytest tests -q` → **0 failed**，且总数 **≥428**（现在 427 过 1 败；拆文件不许丢用例，`--collect-only -q | tail -1` 的数不许降）
+ T2 `python3 ~/bin/omp-ast-check.py tests/test_collector_contract.py tests/test_collector_v11.py tests/test_collector_arrival.py tests/collector_helpers.py`（按你最终的文件名给全）→ **0 违规**
+ T3 `python3 -m pytest tests -q -k collector` 全绿，并把该输出贴进报告
+ T4 `fact.jc_*` 八表跑完仍**全 0 行**；PG 无测试留痕（`src_file` 含 test/pytest/tmp 的行 = 0）
+ T5 队长会逐字复跑 `jc-move-check`（金标 = `/tmp/presplit/parse_collector.py`）与"77 行金标 digest"，**要求结果不变** ⇒ 本单**一个 `scripts/` 下的字都不许改**
+
+【铁律】① 禁 git 一切子命令；② 禁 print（`core.log.logger`）；③ 单文件 ≤100 行 / 函数 ≤50 行 / ≤120 列；④ 禁新依赖（stdlib + 既有 pytest/psycopg 约定）；
+⑤ **禁改清单**：`scripts/**`（整棵树！本单只动 tests/）、`tests/fixtures/**`、`tests/conftest.py`、`tests/test_parse_collector_offer.py`、`tests/test_parse_collector_issue.py`、
+`scripts/core|derive|market/**`、任何 DB 对象、任何真联网、`/srv/league-staging/**`；
+⑥ 测试写库一律单事务 + 收尾 ROLLBACK（`league_ing` 在 ref/fact 无 DELETE，留痕洗不掉）；
+⑦ 完成后写 `.omp-logs/P0-COLLECT1c.report.txt`（T1~T4 原始输出 + 最终文件清单与每个文件行数 + 第 1 处你选了 (a) 还是 (b) 及依据），然后 `echo TASK_DONE > .omp-logs/P0-COLLECT1c.done`
+
+【边界】如果你发现"要 ≤100 行就必须把 helper 复制成多份"或者"`run()` 的返回体里确实没有任何能表达'这批成功'的键"，**停下来报告点名**，队长裁决；不许自行放宽行数、不许改 `scripts/` 来迁就测试。
+
+【验收（队长逐字复跑，路径只指到本单文件，不把 v1 遗留大文件算到本单头上）】
+  source ~/.venvs/league/bin/activate && PYTHONPATH=scripts bash ~/bin/league-accept.sh P0-COLLECT1c tests/test_collector_contract.py tests/test_collector_v11.py tests/test_collector_arrival.py tests/collector_helpers.py
+  # 队长另做：重跑 jc-move-check（金标不变）+ 77 行 digest 比对 + `-k collector` + fact 八表 count + PG 留痕查询。

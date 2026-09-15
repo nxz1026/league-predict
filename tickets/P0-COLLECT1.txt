@@ -1,0 +1,58 @@
+【项目】league-v2（契约见 docs/国内采集机实施文档-v1.md §5 **v1.1**；取证见 docs/探针核对报告-v1.1-20260915.md；教训 §9-33 返回值即证据、§9-36 真跑才算数）
+【前置状态（队长 14:35Z 实测，复跑应一致）】fact 层落点**已建好**（`docs/db/infra_p0_8_jc_tables.sql` 已执行：`fact.jc_match/jc_offer/jc_result/jc_issue/jc_issue_match/jc_issue_prize/jc_issue_draw/lottery_draw` 8 张表 + `ref.team.jc_id`/`team_jc_key`），
+  本单**不写 fact**（那是 P0-COLLECT2）；本单只做两件事：① stg 装载升 v1.1；② 官方 payload → 规范行的**纯解析函数**。
+【测试夹具（本单唯一数据源，全部来自真实探针响应，不许改一个字节）】`tests/fixtures/collector_v11/*.jsonl`（77 行 / 192K / 生成脚本 `docs/db/make_collector_fixtures.py` 只读）
+  · `jczq_offer.jsonl` 40 行 = 8 场 × 5 块（had/hhad/crs/ttg/hafu，每行一个 `payload.block`）
+  · `jczq_result.jsonl` 14 行（含 `sectionsNo999=="取消"` 2 行、`h==""` 空 SP 5 行）
+  · `jc_issue.jsonl` 4 行、`jc_issue_result.jsonl` 3 行、`lottery_draw.jsonl` 12 行、`jclq_result.jsonl` 2 行、`errors.jsonl` 2 行（真实 P0001 失败体）
+  · 每行都是契约外壳 `{kind,topic,snap_ts,endpoint,http_status,collector_host,payload,src_hash}`，`src_hash` 可用
+    `sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",",":")).encode())` 复算（77/77 一致，队长已验）
+【任务】4 个文件（每个 ≤100 行）：
+  1) 【改】scripts/ingest/collector_pull.py    装载校验升契约 v1.1：外壳八字段齐且类型对（`kind∈{line,error}`、`snap_ts` **必须以 `Z` 结尾且可 `datetime.fromisoformat`**、
+       `http_status` int、`payload` 必须是 dict）；**`src_hash` 复算不等 ⇒ 整行进 rejected（不许"信任远端算的 hash"）**；
+       `kind="error"` 行**同样落 stg**（它携带"接口挂了/参数错了"与"真没比赛"的区分信息，丢了就等于丢）；
+       文件名→topic 映射沿用既有那套（topic 以文件名为准，行内 topic 不符 ⇒ rejected）；`.done`/`.empty`/追加不覆盖语义**一律不动**。
+  2) 【新】scripts/store/parse_collector.py     纯函数层：**零 DB、零网络、零副作用**，每 topic 一个 `parse_x(payload) -> dict`，
+       返回 `{"table": "fact.jc_xxx", "pk": {…主键列…}, "row": {…规范列+官方原值…}, "notes": […]}`；
+       **解析不出就不返回半行**：可空解析列给 None，**结构坏（缺身份键/类型不对/列表长度与声明不符）直接 raise ValueError 点名是哪个键**。
+       原值列一律照抄（`取消`/`3＋`/`---`/`国  安`/`lotterySaleEndtime` 都**不许清洗、不许改名、不许换算**）；
+       数字/时间换算一律放进**新写的独立列**（如 `kickoff_bj` 由 `matchDate+matchTime` 拼、`ft_h` 由 `sectionsNo999` split 而来，原值同排保留）。
+       ⚠️ 队侧身份：只用 `homeTeamId/awayTeamId`（sporttery id）与 `gmMatchId`；**绝不允许用 `*TeamAllName` 中文名认队**（§9-34 血泪）。
+       ⚠️ `oddsHistory[]`（官方 `oddsList[]`）里 `matchId/matchNum` 恒为 `0` ⇒ 关联一律用外层 `matchId`。
+  3) 【改】tests/test_collector_contract.py     **【本单例外授权：可改此既有测试】**——它内嵌的还是 v1 骨架字段名（无 snap_ts/payload 包装），
+       改成契约 v1.1 外壳并**保留它原有的全部断言语义**（stg 七表列结构、坏行进 rejected 不入库、无 `.done` 不处理），
+       新增：`src_hash` 被篡改一行 ⇒ 该行进 rejected；`kind=error` 行 ⇒ stg 里有对应行。
+       ⚠️ 除"契约外壳形状"相关的断言外，其余断言**只准加强不准放宽**。
+  4) 【新】tests/test_parse_collector.py        逐条对着夹具断言（下列**期望值我已用真实数据核过，照抄即可，不许自圆其说**）：
+       ① 77 行外壳校验全过、`src_hash` 复算 0 失败；
+       ② jczq_offer：40 行聚成 **8 场**，每场 5 块；`crs` 块 **31 个选项键**（正则 `^s\d{2}s\d{2}$` 计 28 ＋ `^s1s[hda]$` 计 3），
+          块内总键数 66 ＝ 31×2（含 `…f` 旗标）＋ 4 元键（`goalLine/goalLineValue/updateDate/updateTime`）；
+       ③ `hhad` 至少各有一行 `goalLine=="-1"`（`goalLineValue=="-1.00"`）与 `"+1"`；`had` 的 `goalLine==""` ⇒ 解析列必须是 **None 不是 0**；
+       ④ jczq_result：14 行里 **2 行 `sectionsNo999=="取消"`** ⇒ 这两行 `ft_h is None` **且不 raise**；空 SP 5 行 `sp_home is None`；
+          有 `goalLine=="+4"` 这种**带正号**的原值 ⇒ 原值列必须仍是 `"+4"`；
+       ⑤ jc_issue：4 行期头 `(90,26126,14) (900129,26126,14) (98,26180,6) (94,26187,4)` ⇒ 断言 `n_matches==len(matchList)`，
+          并**显式断言 `90` 与 `900129` 的期号字符串相等**（幂等键必须 `(game_num,issue_no)` 两列的证据）；
+       ⑥ jc_issue_result：3 行 `game_key ∈ {sfc,jqc,bqc}`；`jqc` 期首场 `result=="3＋,1"`（**全角加号，不许被转成 `3+,1`**）；
+          `bqc` 形如 `"3,3"`；`sfc` 行必须含 `*Rj` 孪生键（`totalSaleAmountRj` 等）⇒ 断言"任九不单独成期"；
+       ⑦ lottery_draw：12 行、号串 `lotteryDrawResult` **原样含空格**（如 `"10 14 30 33 34 09 12"`）不许拆/排/去重；
+          存在 `stakeAmount=="---"` 且 `stakeAmountFormat=="-1"` 的奖级 ⇒ 金额列类型必须是 **str**，`"---"` 不许变 None 也不许变 0；
+       ⑧ errors：2 行 `kind=error` 的 payload 含 `errorCode=="P0001"` ⇒ 解析层**不产 fact 行**（返回 None 或空），但装载层那行必须已入 stg；
+       ⑨ 负向：把任一行的 `matchId` 抹掉 ⇒ `ValueError` 且报错含 "matchId"；把 `sectionsNo999` 改成 `"3:3:3"` ⇒ 该字段解析列为 None 且**原值保留**。
+【必须成立】
+  T1 `python -m pytest tests -q` 零 FAILED 零 SKIPPED（基线 **416 passed**（P0-CONFIG1 之后），用例数只增不减）
+  T2 全链路只碰 stg：跑完测试后 `select count(*) from fact.jc_match`（及另 7 张）必须**仍为 0**（本单不许写 fact；残留扫描由验收器做）
+  T3 解析层零 DB：`parse_collector.py` 里 `import psycopg` / `from store import pg` 出现即拒收
+  T4 幂等：同一批 JSONL 连灌两次 stg ⇒ 行数与一次灌完相同（既有去重按 `src_hash` 的机制沿用；若沿用 `.done` 则说明清楚）
+【铁律】① 禁 git；② 禁 print（`core.log.logger`）；③ 机械搬移禁改逻辑/数值/顺序；④ 报告用锚点；
+  ⑤ 单文件 ≤100 行、AST 函数 ≤50 行、单行 ≤120 列，自检 0 违规：
+     `python3 ~/bin/omp-ast-check.py scripts/ingest/collector_pull.py scripts/store/parse_collector.py tests/test_parse_collector.py tests/test_collector_contract.py`；
+     禁新依赖（stdlib only，**不许 import numpy/pandas**）；禁建/改/删任何 DB 对象（表结构已就绪，测试内回滚）；
+     禁改 `tests/fixtures/collector_v11/**`（真数据，改一个字节就等于篡改证据）、禁改 `scripts/core/**`（v1 冻结）、禁真联网；
+     ⚠️ 真库连接用 `store.pg.connect("ing")`，**写路径必须 `conn.autocommit=True` 或断言 transaction_status==IDLE**（§9-28 的 SAVEPOINT 陷阱）；
+     测试内写 stg 一律单事务 + 收尾 ROLLBACK（league_ing 在 ref/fact/raw **无 DELETE**，留痕洗不掉）。
+  ⑥ 完成后写 `.omp-logs/P0-COLLECT1.report.txt`（T1~T4 原始输出 + 逐条列出"契约 §5 哪一句你没法用夹具证实" +
+     复核清单：`哪些地方我在解析时'顺手'清洗了官方值`（**只列不改**）），然后 `echo TASK_DONE > .omp-logs/P0-COLLECT1.done`
+【边界】若发现夹具里出现**契约 §5 未定义**的形态（新键、类型与 §5 写的不符），**停下来写报告点名那个键**，不要自行扩契约、也不要"合理兼容"掉。
+【验收（队长逐字复跑）】
+  bash ~/bin/league-accept.sh P0-COLLECT1 scripts/ingest/collector_pull.py scripts/store/parse_collector.py tests/test_collector_contract.py tests/test_parse_collector.py
+  # 队长另做：不依赖你的测试，自己拿夹具再跑一遍 ②③④⑤⑥⑦ 的期望值（我给的数就是复算基准）；再核 fact.jc_* 仍全空

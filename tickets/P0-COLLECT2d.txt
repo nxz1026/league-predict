@@ -1,0 +1,46 @@
+【项目】league-v2（§2-D7 ≤100 行/文件 硬红线；§9：报告用锚点、禁 git、禁 print）
+【范围已缩小——本单只写 3 张表】`fact.jc_match` / `fact.jc_offer` / `fact.jc_result`（竞彩盘口与赛果）。
+传统足彩那 5 张（`jc_issue*` / `lottery_draw`）**不在本单**，另开 P0-COLLECT2e ⇒ 你**不要**为它们写任何代码，也不要因为"没做完"而报告失败。
+
+【🅐 第一动作（违反即判失败）】先改代码再读代码：
+ 1. **第 1 分钟**：改 `scripts/ingest/jc_write.py:58` 的 **D5**（见下）——这是一行的事，先做掉；
+ 2. **第 2 分钟**：在 `scripts/ingest/jc_load.py` 里把已存在的 argparse 骨架**接上真流程**（读 `<批>/<topic>.jsonl|.empty` → `parse_line` → 三张表的 upsert）；
+ 3. 之后**每写完一个函数就跑一次** `PYTHONPATH=scripts python scripts/ingest/jc_load.py --dir /tmp/incoming --batch 2026-09-15T14-40-02Z`，报错就地修。
+ ⚠️ 前两单各有 40 分钟**一个文件都没改**，全废。队长会看日志时间戳：**开单 8 分钟内没有 write/edit 工具调用 = 直接拒收**。
+
+【🅑 只准读这些】`scripts/ingest/jc_write.py` 全文（101 行）· `scripts/store/parse_collector.py` 第 1-40 行 ·
+ `scripts/ingest/collector_pull.py` 第 40-99 行（照抄 CLI/ingest_log/logger 风格）· `docs/db/infra_p0_8_jc_tables.sql`（查列名）·
+ `tests/test_parse_collector_issue.py` 第 59-70 行（只为 D0）。**其余一律不许读**（尤其 `scripts/core|derive|market|web/**`、其它 `parse_*.py`）。
+
+【必修缺陷（队长逐条核实过，点名到行；D5 是**唯一还没被发现**的运行时炸弹）】
+ D5 **`jc_write.py:58` 用了 `sql.Literal(clause)`** ⇒ psycopg3 把字符串**当值加引号**（队长实测 `sql.Literal(' WHERE 1=1').as_string(None)` → `"' WHERE 1=1'"`），
+    拼出的 SQL 是 `... DO UPDATE SET x = EXCLUDED.x ' WHERE ...'` ⇒ **每条 insert 必语法错误**。改法：`sql.SQL(clause)`（clause 为空时用 `sql.SQL("")`）。
+ D6 `jc_write.py` 现在 **101 行 > 100**，且 **第 39 行 125 列 > 120** ⇒ 本单必须双双达标（拆文件算机械搬移：新文件如 `jc_write_match.py`，
+    但**函数体逐字不许改**，队长有逐字比对工具）。
+ D7 `jc_write.py:63-81` `upsert_jc_match()`：`gates=["last_seen_at"]` 但 **`last_seen_at` 不在 `cols`** ⇒ `EXCLUDED.last_seen_at` 无值可比。
+    防回退门控应当比 **`snap_ts`（或 `kickoff_bj`）** 这种真实进 cols 的列；请按表选对门控列，并在报告里写明"每张表用什么列防旧批回退、为什么"。
+ D0（测试，只改这一处）`tests/test_parse_collector_issue.py:69` 的 `len(dash) > 0` → **`len(dash) == 4`**（队长实算真值 4）。
+
+【要写入的三张表 + oracle（真包 3 批全跑完的期望行数，队长独立算好）】
+| 表 | 行数 | 说明 |
+|---|---|---|
+| `fact.jc_match` | **17** | 170 行 offer 去重 `match_id`；解析层返回的第 5 个键 `match`（21 列）；`home/away_team_id` ← `match.home/away_sporttery_id` 经 `_team()` 映射，**今晚全 NULL 是预期** |
+| `fact.jc_offer` | **170** | 85 行 × 2 批，PK `(match_id, play_type, snap_ts)`；`play_type` 用解析层归一值（官方 `hafu`→`haf`），不许再映射 |
+| `fact.jc_result` | **15** | 15 行 × 2 批内容一字不差 ⇒ 幂等后仍是 15 |
+【三张表的硬规定】① `ON CONFLICT (pk) DO UPDATE`（`league_ing` 在 fact **无 DELETE**，永不依赖删除）；② 类型漂移一律 NULL（`""`/缺键/类型不对都不许抛，原始值留在 jsonb/text）；
+ ③ **一个 `jczq_offer` payload 必须同时落 `jc_offer` 与 `jc_match` 两张表**，只落一张＝失败；④ 入库层**不去噪**（跨批只变 `*f` 箭头的 6 行也照原样落）；
+ ⑤ 批内缺 topic ⇒ 记 gap 到 `ops.file_arrival`（`\d` 看列，别猜）；只认带 `.done` 的批。
+【必须成立】
+ T1 `PYTHONPATH=scripts python scripts/ingest/jc_load.py --dir /tmp/incoming`（不带 `--batch`＝三批全跑）**跑通**，三表 count = **17 / 170 / 15**
+ T2 同命令**第二遍**：三表 count 一字不变（两遍输出都要进报告）
+ T3 报告里必须有**一条真跑成功写入的证据**（`rowcount`/`ingest_log`/`ops.file_arrival` 任一原始输出）——只有 pytest 绿不算，D5 类炸弹就是靠这个露馅的
+ T4 `PYTHONPATH=scripts python -m pytest tests -q` → **428 passed / 0 failed**（D0 改完总数不许降）
+ T5 `python3 ~/bin/omp-ast-check.py scripts/ingest/jc_load.py scripts/ingest/jc_write.py <新文件> tests/test_parse_collector_issue.py` → **0 违规**
+【铁律】① 禁 git；② 禁 print（`core.log.logger`）；③ ≤100 行/函数 ≤50 行/≤120 列；④ stdlib + psycopg（仅 ingest/store）；
+ ⑤ 禁改：`scripts/store/parse_*.py`、`scripts/ingest/collector_pull.py`、`tests/fixtures/**`、任何 DDL/建表/加列/GRANT、`/srv/league-staging/**`、真联网；
+ 测试写库一律单事务 + ROLLBACK（T1/T2 真跑是唯一允许的留痕）；
+ ⑥ 报告 `.omp-logs/P0-COLLECT2d.report.txt` + `echo TASK_DONE > .omp-logs/P0-COLLECT2d.done`
+【边界】若发现"不改变形层/不加列就写不进某张表"，**停下来点名报告**，不许自行放宽；尤其不许为了 count 好看而少写行、跳表、或造数据。
+【验收（队长逐字复跑）】
+  bash ~/bin/v2b-check.sh    # 会跑三遍并逐表 count（传统足彩那 5 张本单期望 0，队长自己区分）
+  bash ~/bin/league-accept.sh P0-COLLECT2d scripts/ingest/jc_load.py scripts/ingest/jc_write.py tests/test_parse_collector_issue.py

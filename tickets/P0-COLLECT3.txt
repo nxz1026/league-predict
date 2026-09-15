@@ -1,0 +1,31 @@
+【项目】league-v2（§2-D7 ≤100 行/文件 硬红线；§9 铁律：报告用锚点、禁 git、禁 print）
+【前置】P0-COLLECT2 已把真包写入 `fact.jc_offer`。**本单只补一个被解析层丢掉的官方键**，别的一律不碰。
+
+【队长 01:45Z 发现的事实（照做，不用重新论证）】
+· 生产 `jczq_offer` 的 payload 顶层有 **`oddsHistory`：list，长度 ≤5**，每项形如
+  `{"a":"2.880","d":"3.750","h":"1.940","poolCode":"HHAD","poolId":2197369,"goalLine":"+1","goalLineValue":"+1.00","goalLineF":"","odds":"","matchId":0,"matchNum":0,"updateDate":"2026-09-15","updateTime":"21:47:35"}`
+· **`matchId` 恒为 0、`matchNum` 恒为 0** ⇒ 这些历史项**不能**当独立行、也**不能**按它归属；归属唯一正确方式 = **外层 payload 的 `matchId` + 本行 `play_type`**，整包原样存。
+· 一个 payload 只带**一个 block 的 `options`（现价）**，但它的 `oddsHistory` 里**混着多个 `poolCode`**（实测同一 list 里同时有 HHAD 与 HAD 项）
+  ⇒ **严禁按 `poolCode==本行 block` 过滤**（那是错删数据）；要过滤是后续 CLV 单在**读侧**做的事。
+· 时间要合成：`updateDate + ' ' + updateTime` 是**北京时间的裸串**（无时区），存 jsonb 时**原样保留两字段**，另可加一个 `"update_ts_bj"`（ISO，`+08:00`）但**不许用它覆盖原字段**。
+· `fact.jc_offer.odds_history jsonb` 列**队长已 ALTER 好**（表当时 0 行，零风险；DDL 文档 `docs/db/infra_p0_8_jc_tables.sql` 已同步）⇒ **不要再提任何 DDL**。
+
+【任务】
+ 1) 【改】`scripts/store/parse_jczq.py`：`parse_jczq_offer` 的产出 row 里**增加一个键 `odds_history`** = `payload["oddsHistory"]` 原样（缺失/非 list ⇒ `None`，**不许抛**）。
+    ⚠️ 该文件现在 50 行、函数 ≤50 行红线：若加完超限，**允许**把新加的这段抽成一个 ≤10 行的私有小函数放进**同一个文件**；若同一文件装不下，停下来报告点名，不许顺手搬别的逻辑。
+ 2) 【改】`scripts/ingest/jc_load.py`：把 `odds_history` 写进 `fact.jc_offer`（其它列的写入语义、幂等、`snap_ts` 防回退**一律不动**）。
+ 3) 【改】对应测试：新增**一条**用例（不许删任何既有用例）断言 ① 5 项全部保留、顺序不变；② 混合 `poolCode` 没被过滤；③ `matchId=0` 原样在；④ 无该键的行 `odds_history IS NULL` 而不是 `[]`。
+【必须成立】
+ T1 全量 `python -m pytest tests -q` 零 FAILED（当前基线 428，本单后 ≥429）
+ T2 **真跑回放**：`--dir /tmp/incoming` 跑两遍，第二遍 `fact.jc_offer` 行数**一字不变**；且
+    `select count(*) filter (where odds_history is not null), count(*) from fact.jc_offer` → **170 / 170**（真包 85 行 × 2 批都有 `oddsHistory`）
+ T3 抽 3 行（含一场 HHAD、一场 HAD）把 `odds_history` 打出来，与 `tests/fixtures/collector_v11/jczq_offer.jsonl` 原文**逐项对齐**（队长会独立复算）
+ T4 `fact.jc_match / jc_result / jc_issue*` 行数**不因本单变化**（只准 `jc_offer` 的列被填）
+【铁律】① 禁 git；② 禁 print；③ ≤100 行/≤50 行/≤120 列，`python3 ~/bin/omp-ast-check.py scripts/store/parse_jczq.py scripts/ingest/jc_load.py` 0 违规；
+ ④ stdlib only；⑤ 禁改：`tests/fixtures/**`、任何 DDL/GRANT、`scripts/core|derive|market/**`、其它 `parse_*.py`、`collector_pull.py`；真联网；`/srv/**`；
+ 测试写库一律单事务 + ROLLBACK（T2 的真跑是唯一允许的留痕，且必须可重放幂等）；
+ ⑥ 报告 `.omp-logs/P0-COLLECT3.report.txt`（T1~T4 原始输出 + "我为何没按 poolCode 过滤"一句）+ `echo TASK_DONE > .omp-logs/P0-COLLECT3.done`
+【边界】如果你发现"要保留 5 项就必须改 `canonical_src_hash`/外壳校验"（不应该发生），立刻停下点名——那说明我们对契约理解错了，宁可不做。
+【验收（队长逐字复跑）】
+  bash ~/bin/league-accept.sh P0-COLLECT3 scripts/store/parse_jczq.py scripts/ingest/jc_load.py tests
+  # 队长另做：自己从 `/tmp/incoming` 原文抽 5 条 payload 的 oddsHistory 与 DB 里的 jsonb **逐项比对**（长度、顺序、每个字段值），并核 `jc_offer` 行数与 COLLECT2 oracle 一致。

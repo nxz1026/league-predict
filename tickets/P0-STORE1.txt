@@ -1,0 +1,43 @@
+【项目】league-v2（规范 ~/league-v2/README.md §2-D7；设计 ~/league-v2/docs/框架设计-全玩法覆盖-v2-20260915.md §2；DB 交付说明 ~/league-v2/docs/infra/README-infra.md）
+【背景】P0-env 与 P0-infra 队长已做完：venv=~/.venvs/league（已装 psycopg[binary] 3.3.5、pytest 9.1.1）、分支已在 v2、PG 库 league 已建，**本单只许用 ref/stg/ops 三层 14 张表**（fact/model/analysis 尚未建，国内机契约未冻结——不许建表、不许 ALTER、不许 TRUNCATE 生产数据）。
+【任务】实现"国内机 JSONL → stg 装载 → ops 留痕"这条最小链路 + 配额账本。共 6 个新文件（**一个都不许多**）：
+  1) scripts/store/pg.py              ≤70 行  连接工厂：按角色名取 DSN，给出只读/写入两种上下文管理器
+  2) scripts/store/upsert_official.py ≤95 行  单个 JSONL 文件 → 指定 stg 表：schema 校验先行 → 逐行算 src_hash → INSERT … ON CONFLICT (src_hash) DO NOTHING
+  3) scripts/ingest/collector_pull.py ≤80 行  扫 incoming/ 中带 .done 的文件 → 调 upsert_official → 写 ops.ingest_log + ops.file_arrival → 文件移到 done/（有拒绝行则同时移原件到 bad/）
+  4) scripts/ingest/quota.py          ≤60 行  ops.quota_ledger 的 remaining()/charge()，charge 超 cap 必须抛异常
+  5) tests/test_store_idempotency.py  ≤100 行
+  6) tests/test_collector_contract.py ≤100 行
+  包目录 scripts/store/、scripts/ingest/ 各配一个空 __init__.py（不算进 6 个文件预算，但**除这 6 个 + 2 个 __init__.py 外不许新增/修改任何文件**）。
+
+【已核实的 DB 事实（照此写，不要猜，也不要再去建对象）】
+  · stg 七张表结构完全相同：`(line jsonb NOT NULL, src_hash text PRIMARY KEY, loaded_at timestamptz NOT NULL DEFAULT now(), src_file text NOT NULL)`，UNLOGGED，在表空间 ts_stg：
+      jczq_offer / jczq_result / jc_issue / jc_issue_result / jclq_offer / jclq_result / lottery_draw
+  · ops.ingest_log(id bigserial, topic text, src_file text, rows_in int, rows_ups int, rejected jsonb, ok boolean, at timestamptz)
+  · ops.file_arrival(topic text, src_file text, arrived_at timestamptz, bytes bigint, rows int, done_marker boolean, PRIMARY KEY(topic, src_file))
+  · ops.quota_ledger(day date, source text, used int, cap int, PRIMARY KEY(day, source))
+  · ref 四张表本单不碰。
+【权限模型（league_ing 角色，越界会 permission denied，别写这类 SQL）】
+  · stg：**只有 SELECT / INSERT / TRUNCATE，没有 UPDATE、没有 DELETE**，也没有建表权 → 装载只能"追加 + 冲突忽略"，清理只能整表 TRUNCATE（生产路径不要用 TRUNCATE）。
+  · ops：SELECT / INSERT / UPDATE（UPDATE 是给 quota_ledger 的 ON CONFLICT DO UPDATE 用的），无 DELETE。
+  · 口令**绝对不许出现在代码/日志/工单/报告里**。连接信息从环境变量取：`DSN_ING`、`DSN_APP`、`DSN_RO`（值在 ~/league-v2/repo/.env，`scripts/core/constants.py` 已自动 load，直接 os.environ 读即可）。
+【目录约定】生产路径 incoming=/srv/league-staging/incoming done=/srv/league-staging/done bad=/srv/league-staging/bad（incoming 对 ubuntu 只读，done/bad 组可写）。
+  **collector_pull.py 必须把这三个目录做成函数参数/CLI 参数并给默认值**，测试一律传 tmp 目录，**禁止在测试里读写 /srv/league-staging 真实目录**（本会话进程没进 league 组，真跑会 permission denied）。
+
+【测试要求】
+  · test_store_idempotency：同一文件装两遍 → 第二次 rows_ups=0 且 `SELECT count(*)` 不变（用唯一 src_hash 前缀如 `pytest_` + uuid）；**所有落库写入必须留在一个事务里并在结束时 ROLLBACK**（league_ing 没有 DELETE，留了痕洗不掉）；连不上 league 库时 `pytest.skip("no db")` 并打印原因，不许 fail。
+  · test_collector_contract：拿 stg 表列结构做契约校验（information_schema.columns 查真实列，与本文件里的期望常量比对，不一致即 fail）；再校验：非 JSON 行 / 非 object 行 / 缺必需字段的行 → 全部进 rejected 且**不入库**；缺 .done 的文件必须被忽略不处理。
+  · 两文件都要能被 `python -m pytest tests/test_store_idempotency.py tests/test_collector_contract.py -q` 直接跑通。
+
+【铁律】
+  ① 禁 git 一切子命令（commit/push/checkout/restore/stash/reset 一律不碰；推送由队长人工做）
+  ② 禁新增 print()/pdb/breakpoint/DEBUG 残留；日志统一用 scripts/core 既有 log 模块（先读它的实际 API 再用）
+  ③ 机械搬移禁改逻辑/数值/顺序
+  ④ 用锚点定位描述改动点，别在报告里贴大段代码
+  ⑤ 新文件 ≤100 行、单函数 AST ≤50 行；**只有 scripts/store/ 和 scripts/ingest/ 允许 import psycopg**；`scripts/core/**`、`web/**`、`static/**`、既有 tests 一律只读禁改；唯一允许的新依赖是已装好的 psycopg[binary]，禁 pandas/sklearn/sqlalchemy
+  ⑥ 完成后写 ~/league-v2/repo/.omp-logs/P0-STORE1.report.txt（改动清单：每个文件一行"路径 + 行数 + 一句话职责"，加验收命令的**原始输出**），然后 `echo TASK_DONE > .omp-logs/P0-STORE1.done`
+【验收（队长逐字复跑，你自报不算数）】
+  source ~/.venvs/league/bin/activate && cd ~/league-v2/repo && python -m pytest tests -q    # 期望 215+新增 全绿、零 FAILED
+  python -m pytest tests --ignore=tests/web -q                                                # 期望 141+新增
+  grep -rn "print(" scripts/store scripts/ingest || true                                      # 期望空
+  awk 'END{print FILENAME, NR}' scripts/store/*.py scripts/ingest/*.py                        # 期望每个 ≤100
+【边界】若你判断某个文件必然超 100 行，**停下来**在 report 里写清楚卡点并照样 echo TASK_DONE，由队长拆单；不许自行扩文件、自行改设计、自行建表。

@@ -1,0 +1,42 @@
+【项目】league-v2（规范 ~/league-v2/README.md §2-D7；设计 ~/league-v2/docs/框架设计-全玩法覆盖-v2-20260915.md §2 derive 段 + §4 P0-B）
+【背景】L1 store/ingest 层已交付（P0-STORE1/1b）。本单做 **L3a derive 纯函数**：从比分概率矩阵派生竞彩各玩法概率。**本单完全不碰数据库、不碰网络**（无 psycopg、无 requests），派生层是纯算术 + 黄金用例，必须能在任何机器上零依赖跑通。
+【输入契约（已核实，照此写）】
+  · 比分矩阵 = `list[list[float]]`，`grid[h][a]` = 主进 h 球、客进 a 球的概率，形状 `(max_goals+1)²`，**默认 max_goals=8（= core.constants.MAX_GOALS_MC）**。
+  · 矩阵由 `grid.py` 从内核拿：内核已有 `core.model.poisson._dc_pmf_grid(lambda_h, lambda_a, rho, max_goals) -> list[list[float]]`（私有函数，**只 import、绝禁修改内核**）。
+  · **内核 `dixon_coles_match_probs()` 不可用作派生输入**：它 round 到 4 位、且 `score_probs` 截断 top-12 —— 边际会掉。
+【任务】7 个新文件（含 1 个空 `__init__.py`，**一个都不许多**）：
+  1) scripts/derive/__init__.py        0 行  包标记（空）
+  2) scripts/derive/grid.py            ≤45 行  `dc_grid(lambda_h, lambda_a, rho=0.2, max_goals=8) -> list[list[float]]`：包内核 `_dc_pmf_grid` + **归一化到和恰为 1**；另给 `renormalize(grid)`；负/零/NaN 概率、非方阵、空矩阵一律抛异常（不静默）
+  3) scripts/derive/totals.py          ≤45 行  `buckets(grid) -> dict[str,float]`：总进球 8 档，键 `"0","1","2","3","4","5","6","7+"`（`7+` = h+a≥7 的**全部**格子，竞彩官方 ttg 就是这 8 档）
+  4) scripts/derive/scores31.py        ≤55 行  `buckets(grid) -> dict[str,float]`：官方 **31 个比分选项**，键用官方记法 `"1:0"…`，加三个"其它"桶 `"胜其它"/"平其它"/"负其它"`
+  5) scripts/derive/goals4.py          ≤35 行  `team_buckets(grid) -> tuple[dict[str,float], dict[str,float]]`：主/客各自进球 8 档（`"0"…"6","7+"`），两侧各自和=1（供传统足彩"4场进球"与后续相关性用）
+  6) tests/test_derive_buckets.py      ≤100 行
+  7) tests/test_derive_grid.py         ≤100 行
+  （`handicap.py` 与 `registry.py` 属下一单 P0-DERIVE2，本单**不许**创建，也不许在别处塞注册表。）
+
+【比分 31 选项的精确口径（竞彩官方，格子必须**不重不漏**覆盖全部 (max_goals+1)² 格）】
+  · 胜 13：`1:0 2:0 2:1 3:0 3:1 3:2 4:0 4:1 4:2 5:0 5:1 5:2` + `胜其它`（h>a 且不在此 12 项内，含 6:0 之类高比分）
+  · 平 5： `0:0 1:1 2:2 3:3` + `平其它`（h==a 且 ≥4）
+  · 负 13：`0:1 0:2 1:2 0:3 1:3 2:3 0:4 1:4 2:4 0:5 1:5 2:5` + `负其它`（a>h 且不在此 12 项内）
+  · 自检：31 个键的概率之和 == 1.0，且 81 格每格恰好被一个桶吃掉（黄金用例必须逐格反查覆盖性）
+【队长独立算好的黄金数值（拿来当断言，别自己另算一套）】
+  · `rho=0` 时 `_dc_pmf_grid(1.5,0.8,0,8)` 与独立泊松外积 `poisson_pmf(h,1.5)*poisson_pmf(a,0.8)` **逐格完全相等（实测最大偏差 0.0）** → 这是不依赖 DC 实现的独立 oracle，必须写成用例。
+  · `(lambda_h,lambda_a,rho,max_goals)=(1.5,0.8,0.0,8)`：9×9 **原始和 = 0.999972083662318（≠1，所以归一化是硬要求）**；归一化后
+      - 总进球 8 档 = `[0.100262, 0.230602, 0.265192, 0.203314, 0.116905, 0.053777, 0.020614, 0.009334]`（6 位小数，`sum == 1`）
+      - 胜/平/负三向 = `0.538153 / 0.261861 / 0.199986`
+  · 断言一律用 `pytest.approx(abs=1e-6)`，键集合用 `set(...) == {...}` 全等（不许只断言长度）。
+  · 另需一组**手算 3×3 归一矩阵**用例：自己构造、手算每个桶的期望值并**在测试注释里写清算式**（比分桶、8 档桶各至少 1 组），用来抓"实现照抄了实现者的错"这类双向错误。
+【铁律】
+  ① 禁 git 一切子命令；② 禁 print()/pdb/breakpoint/set_trace（本层是纯函数，不需要日志；要日志也只准用 `from core.log import logger`）；
+  ③ 机械搬移禁改逻辑/数值/顺序；④ 报告用锚点（函数名+行为）别贴大段代码；
+  ⑤ 新文件 ≤ 上面写的预算、单函数 AST ≤50 行、**单行 ≤120 列**（用 `python3 ~/bin/omp-ast-check.py scripts/derive tests/test_derive_*.py` 自检到 0 违规）；
+     **derive 层禁 import psycopg / requests / numpy / 任何新依赖**（本机没装 numpy，只有 stdlib + psycopg；内核本身就是纯 stdlib，照此保持一致）；
+     `scripts/core/**`、`web/**`、`static/**`、既有 tests、上一单交付的 store/ingest **一律禁改**；
+     **禁建任何 DB 对象、禁 ALTER、禁 TRUNCATE**（fact 层未建，本单用不上）。
+  ⑥ sys.path 口径跟既有写法：测试内 `sys.path.insert(0, <repo>/scripts)` 再 `from derive import totals`（内核模块内部用的是 `from core...`，不要改成 `scripts.core`）；
+  ⑦ `~/bin/omp-ast-check.py`、`~/bin/league-accept.sh` 是队长验收工具，**只读禁改**（改工具＝拒收）
+  ⑧ 完成后写 ~/league-v2/repo/.omp-logs/P0-DERIVE1.report.txt（改动清单：路径+行数+一句话；**黄金数值断言的原始输出**；3×3 手算矩阵的算式），然后 `echo TASK_DONE > .omp-logs/P0-DERIVE1.done`
+【边界】若某个文件按上述口径必然超预算（尤其 scores31.py 的 31 键表），**停下来**在报告里写卡点 + 拆法建议，照样 echo TASK_DONE 由队长决定；不许自行扩文件、不许把 8 档改成 7 档之类"简化"。
+【验收（队长逐字复跑）】
+  bash ~/bin/league-accept.sh P0-DERIVE1 scripts/derive tests/test_derive_buckets.py tests/test_derive_grid.py
+  # 期望：全量 223+新增 全绿零 FAILED；快档 149+新增；机检 0 违规；web/services/ai.py 无 _broken 残留；PG 14 表零留痕（本单不该产生任何行）
