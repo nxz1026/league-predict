@@ -1,0 +1,106 @@
+【项目】league-v2（§2-D7 ≤100 行/文件 硬红线；§9：报告用锚点、禁 git、禁 print）
+【这一单只做"数据层 + 拆文件"，界面下一单做】DASH1 拆成 a/b 两单（慢模型吃小单，§9-52）。本单交付两个文件，**SQL 已给你写死在 C 节，照抄即可**：
+ 1) 新建 `scripts/store/jc_view.py`（**≤100 行**，store 层允许 psycopg）
+ 2) 新建 `web/lifecycle.py` + 改 `web/api.py`（把 `_start_cron` / `lifespan` **逐字搬过去**，让 `web/api.py` 从 102 行降到 ≤100）
+【🅣 只准读这 3 个文件】`scripts/store/pg.py`（看 `read_conn` 签名）· `web/api.py`(102 行) · `scripts/store/backtest.py`（**只看它怎么取连接，别抄它的算法**）。
+ 第 1 分钟就 write/edit；**8 分钟内无写动作＝拒收**。
+
+【A. `scripts/store/jc_view.py` 的公开面（签名不许改，DASH1b 的 router 要按这个调）】
+```
+def fixtures_on(day: str | None) -> list[dict[str, Any]]: ...
+def issues(limit: int = 20) -> list[dict[str, Any]]: ...
+def backtest_summary() -> list[dict[str, Any]]: ...
+```
+ 三个函数都必须：`with pg.read_conn("ro") as conn:` + `with conn.cursor() as cur:`，**只读**；返回 `list[dict]`；
+ **任何异常都不许往外抛**（`except Exception` ⇒ `logger.exception` + 返回 `[]`）；**不许 print**。
+ 非法输入：`day` 不是 `YYYY-MM-DD` ⇒ **直接返回 `[]`**（用 `datetime.date.fromisoformat` 校验，**不许**把用户输入拼进 SQL）；
+ `limit` 由调用方保证 ≤200，本层只做 `limit = max(1, min(int(limit), 200))`。
+【B. 铁律】SQL 里的表/列**只能用 C 节给的那些**（队长 23:41Z 从 `information_schema` 逐张核对过）；
+ 连接一律 `read_conn("ro")`（`league_ro` 对 `ref/fact/model/analysis` **只有 SELECT**）；不许 `import psycopg` 之外的适配层（`Json` 之类本单用不到）。
+【C. 三条 SQL（**照抄，只允许改空白/换行**；列宽 ≤120 ⇒ 需要折行就折）】
+ · `fixtures_on`：`day` 给了就用 `and m.business_date = %(day)s`（**命名参数**），没给就用 `and m.business_date = (select max(business_date) from fact.jc_match)`
+```
+select m.match_id, m.match_num, m.league_cn, m.home_cn, m.away_cn, m.match_status,
+        to_char(m.kickoff_bj at time zone 'Asia/Shanghai', 'MM-DD HH24:MI') as kickoff_bj,
+        o.play_type, o.snap_ts, o.goal_line, o.options
+   from fact.jc_match m
+   left join lateral (
+         select distinct on (q.match_id, q.play_type) q.play_type, q.snap_ts, q.goal_line, q.options
+           from fact.jc_offer q
+          where q.match_id = m.match_id
+          order by q.match_id, q.play_type, q.snap_ts desc
+   ) o on true
+  where 1 = 1 {DAY}
+  order by m.kickoff_bj nulls last, m.match_id, o.play_type
+```
+ （**一场 5 行**（had/hhad/crs/ttg/haf 各一），盘口取每个玩法**最新一版**；`options` 是 jsonb ⇒ 返回给前端的必须是**已解析的 dict/None**，
+   `league_ro` 读 jsonb 默认就回 dict，**不许**自己 `json.loads` 一个已经是 dict 的东西。）
+ · `issues`（**真列名如下，别猜**）：
+```
+select i.game_num, i.issue_no, i.game_name, i.sale_begin, i.sale_end, i.draw_at, i.n_matches,
+        (i.raw_head ->> 'head_source') as head_source,
+        d.draw_result, d.pool_after, d.sales, d.pool_after_rj, d.sales_rj, d.is_delay
+   from fact.jc_issue i
+   left join fact.jc_issue_draw d on d.game_num = i.game_num and d.issue_no = i.issue_no
+  order by i.draw_at desc nulls last, i.game_num, i.issue_no
+  limit %(limit)s
+```
+ · `backtest_summary`（**`analysis.backtest_market` 是"逐选项明细"175200 行，不是聚合表**；列只有
+   `fixture_id, play_type, option_code, p_pred, outcome, clv, src_run` ⇒ 聚合必须在本层做，**且必须做到"与已发布基线对得上"**）：
+```
+select play_type, count(*) as n_fp,
+       round(avg(bs)::numeric, 4) as brier,
+       round(avg(us)::numeric, 4) as brier_uniform,
+       round(avg(hit::int)::numeric, 4) as acc,
+       sum(if_clv) as clv_filled
+  from (select play_type, fixture_id,
+               sum(power(p_pred - outcome, 2)) as bs,
+               sum(power((1.0 / cnt) - outcome, 2)) as us,
+               bool_or(outcome = 1 and p_pred = mx) as hit,
+               count(clv) > 0 as if_clv
+          from (select b.*, count(*) over (partition by b.fixture_id, b.play_type) as cnt,
+                       max(b.p_pred) over (partition by b.fixture_id, b.play_type) as mx
+                  from analysis.backtest_market b) x
+         group by play_type, fixture_id) y
+ group by play_type
+ order by play_type
+```
+ ⚠️ **口径是"先按 (场,玩法) 把各选项的平方误差加总，再对场取平均"（多分类 Brier）**，
+   队长 23:47Z 实测这版 SQL 的结果**与已发布基线逐字相同**（见 T4），所以页面可以直接标"基线口径"；
+   `acc` = 概率最大的选项正好是开奖项的比例（argmax 命中率）。
+   **不许**改成"对选项行取平均"——那样 had 会显示 0.2090，与基线差 3 倍，等于页面自己打自己的脸。
+（**页面必须能自证口径**：`backtest_summary()` 的返回值之外，router 下一单会把上面这段 SQL 原文一起返回。）
+【D. `web/api.py` 的机械拆分（**逐字搬运，一个字都不许改**）】
+ 把 `_start_cron(app)` 函数与 `create_app()` 内部那个 `@asynccontextmanager async def lifespan(...)` **整体**搬到新文件 `web/lifecycle.py`，
+ `web/api.py` 改成 `from web.lifecycle import lifespan` + `app = FastAPI(title=..., version=..., lifespan=lifespan)`。
+ ⚠️ `lifespan` 现在是**定义在 `create_app` 里的闭包**（`web/api.py:47-58`）⇒ 搬到模块级时**只允许**把它变成顶层函数，
+   **函数体一个字不许动**；搬完 `web/api.py` 必须 **≤100 行**、`web/lifecycle.py` ≤100 行。
+ 队长会用 `python3 ~/bin/jc-move-check.py /tmp/web_api.presplit.py web/api.py web/lifecycle.py` 逐字比对（基线已存好）。
+【必须成立】
+ T1 `python3 ~/bin/omp-ast-check.py scripts/store/jc_view.py web/lifecycle.py web/api.py` → **0 违规**（三文件全 ≤100 行、无 >120 列、无 print、**`web/**` 不得出现 psycopg**）
+ T2 `python3 ~/bin/jc-move-check.py /tmp/web_api.presplit.py web/api.py web/lifecycle.py` → 搬移函数**逐字一致**
+ T3 `python -c "import web.api"` 无异常（服务能装配起来）
+ T4 **真连库跑三个函数**（当前库已装载 5 批：`fact.jc_match=17 / jc_offer=250 / jc_result=15 / backtest_market=175200 / jc_issue=0`）：
+    写一个 `/tmp/dash_probe.py`（**放 /tmp，不许进 repo**）依次调用并打印，必须看到
+    · `fixtures_on(None)` → **85 行**（17 场 × 5 玩法，`snap_ts` 全为 `2026-09-15T23:03:02Z` 那一版）
+    · `fixtures_on("2026-09-15")` → 非空；`fixtures_on("garbage")` → **`[]` 且不抛**
+    · `issues(20)` → **`[]`**（传统足彩还没入 2e 范围，**空就是正确答案，不许为了非空去塞数据**）
+    · `backtest_summary()` → **正好 4 行**，且每个数与下表**逐字相同**（队长 23:47Z 直接对 `analysis.backtest_market` 跑出来的真值）：
+      | play_type | n_fp | brier | brier_uniform | acc |
+      |---|---|---|---|---|
+      | crs | 3504 | 0.9405 | 0.9677 | 0.1019 |
+      | had | 3504 | 0.6270 | 0.6667 | 0.4772 |
+      | jqc | 3504 | 1.4536 | 1.6250 | 0.3425 |
+      | ttg | 3504 | 0.8350 | 0.8750 | 0.2012 |
+      （`clv_filled` 四行都必须是 **0**——CLV 还没算，页面要如实显示 0，**不许**造数）
+      ⇒ 这就是"页面与已发布基线对得上"的证据；**任何一格不一样就停下贴原文**（jqc 的 1.4536 是"两个侧各 4 项加总"= 发布口径 0.7268 的 2 倍，属已知差异，别去"修"它）
+    ⚠️ T4 的 `brier` 数量级必须与已发布基线同档（had≈0.627、crs≈0.94、ttg≈0.835）⇒ **差一个数量级就是 SQL 写错了**，照实贴数并停下
+ T5 `python3 ~/bin/jc-fk-audit.py fact model analysis` → **全部可满足、exit=0**（队长新工具，确认本单没碰坏约束）
+ T6 `source ~/.venvs/league/bin/activate && PYTHONPATH=scripts python -m pytest tests -q` → **428 passed / 0 failed**
+【铁律】① 禁 git；② 禁 print（用 `core.log.logger`）；③ ≤100 行/文件、函数 ≤50 行、列 ≤120；④ 只准新建/修改 **A/D 两条列出的 3 个文件**
+ （`scripts/store/jc_view.py`、`web/lifecycle.py`、`web/api.py`），`web/routers/**`、`web/services/**`、`static/**`、`scripts/core/**`、`tests/**` **一律禁改**；
+ ⑤ **本单不做 router、不做页面**（下一单 DASH1b 做，别顺手加）；⑥ 报告 `.omp-logs/P0-DASH1a.report.txt`（T1~T6 原始输出）
+ + 只有全绿才 `echo TASK_DONE > .omp-logs/P0-DASH1a.done`
+【边界】T4 跑不出上面的数：贴**打印原文** + 停下点名是哪个函数哪一行；**绝对禁止**改 SQL 的口径去凑数、或改 `backtest.py`/`web/routers/**` 来绕。
+【验收（队长逐字复跑，我自己再调一遍三个函数）】
+  LEAGUE_FROZEN_RE="scripts/core/" bash ~/bin/league-accept.sh P0-DASH1a scripts/store/jc_view.py web/lifecycle.py web/api.py
