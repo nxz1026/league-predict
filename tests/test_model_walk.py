@@ -36,7 +36,7 @@ def _counts(conn) -> tuple:
 
 
 def test_market_shape_counts_and_whitelist(conn):
-    """四玩法齐、每 (场, 玩法) Σp==1、选项数 3/31/8/8、hhad 与 haf 一条不落、params 口径正确。"""
+    """四玩法齐、每 (场, 玩法[, 侧]) Σp==1、选项数 3/31/8/8、hhad 与 haf 一条不落、params 口径正确。"""
     res = walk.run(conn, *CASE)
     run, n = res["run_id"], res["n_fixtures"]
     per_play = dict(conn.execute("select play_type, count(*) from model.pred_market where run_id = %s"
@@ -44,8 +44,10 @@ def test_market_shape_counts_and_whitelist(conn):
     assert per_play == {play: n * k for play, k in COUNTS.items()}
     assert conn.execute("select count(*) from model.pred_market where run_id = %s"
                         " and play_type in ('hhad', 'haf')", (run,)).fetchone()[0] == 0
-    unnormalized = conn.execute("select count(*) from (select fixture_id, play_type from model.pred_market"
-                                " where run_id = %s group by 1, 2 having abs(sum(p) - 1) > 1e-9) x", (run,))
+    unnormalized = conn.execute(  # jqc 一行一个侧别（h:/a:）⇒ 归一化按侧分组；其余玩法整组归一
+        "select count(*) from (select fixture_id, play_type, case when play_type = 'jqc'"
+        " then left(option_code, 1) else '' end as side from model.pred_market where run_id = %s"
+        " group by 1, 2, 3 having abs(sum(p) - 1) > 1e-9) x", (run,))
     assert unnormalized.fetchone()[0] == 0
     matrices = conn.execute("select count(*) from model.pred_fixture where run_id = %s"
                             " and jsonb_array_length(matrix) = 9 and features ? 'atk_home'", (run,)).fetchone()[0]
@@ -69,15 +71,17 @@ def test_rerun_is_a_new_run_not_an_overwrite(conn):
         assert rows == distinct == first["n_fixtures"]  # 一场一行、不重复
 
 
-def test_unseen_promoted_teams_are_skipped_not_guessed(conn):
-    """当季新升班马不在训练季 ⇒ 该场跳过并计数（不给新队编强度）：epl 2024 当场验。"""
+def test_unseen_promoted_teams_fall_back_not_skipped(conn):
+    """当季新升班马不在训练季 ⇒ 该场照写并标 features.fallback（本单改口径：不再跳过）：epl 2024 当场验。"""
     targets = conn.execute(walk.TARGET_SQL, ("epl", 2024)).fetchall()
     trained = {name for row in conn.execute(walk.TRAIN_SQL, ("epl", 2023)) for name in row[:2]}
-    unseen = [(fid, home, away) for fid, home, away in targets
-              if home not in trained or away not in trained]
+    unseen = [fid for fid, home, away in targets if home not in trained or away not in trained]
     res = walk.run(conn, "epl", 2024)
-    assert unseen and res["skipped"] == len(unseen)
-    assert res["n_fixtures"] == len(targets) - len(unseen)
+    assert unseen and res["skipped"] == 0 and res["n_fixtures"] == len(targets)
+    assert res["n_fallback"] == len(unseen)
+    marked = conn.execute("select count(*) from model.pred_fixture where run_id = %s and features->'fallback'"
+                          " <> '{\"home\": \"fit\", \"away\": \"fit\"}'::jsonb", (res["run_id"],)).fetchone()[0]
+    assert marked == len(unseen)
 
 
 def test_leak_guard_and_season_pairs(conn):

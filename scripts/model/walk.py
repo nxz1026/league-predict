@@ -3,19 +3,19 @@
 取数口径 = _SCOPE 的谓词逐字照工单：status='ft' AND round <> 'Relegation Round' 且结果取 source='api_football'
 行（排除 3 场升降级附加赛 aet/pen：90 分钟口径不一致，会污染 λ）。训练季 = 同联赛严格更早的最大赛季（run()
 硬守卫）；2022 只当训练集、永不作预测目标。model.* 只有 app 角色可写（league_ing 连 SELECT 都 42501）。
-本单缺口（不许 0.0 占位）：hhad 要竞彩官方让球线（盘口到货后才有）；haf 未注册（registry 直接 KeyError）；
-jqc 落主队 8 档（PK 无侧别列 ⇒ 客队边际不落库，需要时用 pred_fixture.matrix 重算，无失真）；当季新升班马
-不在训练季 ⇒ 该场跳过并计数（不给新队编强度）。
+未见队（当季升班马）走 model.sides.lambdas 的联盟平均先验：atk=def=1.0、γ 不变、features.fallback 明确标记
+⇒ 不再因"怕不准"跳过大把真实场次；已知偏差（升班马弱于平均 ⇒ 主场 λ 系统性高估）见 n_fallback 分层。
+jqc 落两侧 4 档 h:0|h:1|h:2|h:3+ / a:…（sides.jqc_sides）；缺口（不许 0.0 占位）：hhad 缺官方让球线、haf 未注册。
 """
 import argparse
 import json
-import subprocess
 
 from core.constants import DC_RHO, MAX_GOALS_MC
 from core.log import logger
-from derive.grid import dc_grid
+from derive.grid import admissible_rho, dc_grid
 from derive.registry import derive_play
-from model.fit import fit_attack_defense, match_lambdas
+from model.fit import fit_attack_defense
+from model.sides import PRIOR, commit_sha, jqc_sides, lambdas
 from store import pg
 
 PLAYS = ("had", "crs", "ttg", "jqc")  # 本单只写这四种；hhad 缺官方让球线、haf 未注册
@@ -50,31 +50,33 @@ def run(conn, league_key: str, season: int, train_season: int | None = None) -> 
     train = [(h, a, float(gh), float(ga)) for h, a, gh, ga in conn.execute(TRAIN_SQL, (league_key, train_season))]
     fit = fit_attack_defense(train)
     targets = conn.execute(TARGET_SQL, (league_key, season)).fetchall()
-    predicted = [(f, (h, a), match_lambdas(fit, h, a)) for f, h, a in targets if h in fit.atk and a in fit.atk]
-    skipped = len(targets) - len(predicted)
+    named = [(f, h, a) for f, h, a in targets if h and a]  # skipped 只留给"连队名都没有"的行
+    predicted = [(f, (h, a), lambdas(fit, h, a)) for f, h, a in named]
+    skipped = len(targets) - len(named)
+    n_fallback = sum(1 for _, _, (_, _, sh, sa) in predicted if sh != "fit" or sa != "fit")
+    rho_clamped = sum(1 for _, _, (lh, la, _, _) in predicted if admissible_rho(lh, la, DC_RHO) < DC_RHO)
     params = {"train_season": train_season, "plays": list(PLAYS), "gamma": fit.gamma, "rho": DC_RHO,
-              "max_goals": MAX_GOALS_MC, "skipped_unknown": skipped}
-    note = f"{league_key} {season} 预测（训练季 {train_season}）；跳过 {skipped} 场：当季球队不在训练季"
-    try:
-        commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True,
-                                check=True).stdout.strip() or None
-    except (OSError, subprocess.CalledProcessError):
-        commit = None
-    run_id = conn.execute(RUN_SQL, (commit, json.dumps(params), len(predicted), note)).fetchone()[0]
+              "rho_clamped": rho_clamped, "max_goals": MAX_GOALS_MC, "skipped_unknown": skipped,
+              "n_fallback": n_fallback}
+    note = f"{league_key} {season} 预测（训练季 {train_season}）；跳过 {skipped} 场（无队名）；兜底 {n_fallback} 场未见队"
+    run_id = conn.execute(RUN_SQL, (commit_sha(), json.dumps(params), len(predicted), note)).fetchone()[0]
     market = []
-    for fixture_id, (home, away), (lambda_home, lambda_away) in predicted:
+    for fixture_id, (home, away), (lambda_home, lambda_away, src_h, src_a) in predicted:
         grid = dc_grid(lambda_home, lambda_away, rho=DC_RHO, max_goals=MAX_GOALS_MC)
-        features = {"atk_home": fit.atk[home], "def_away": fit.def_[away], "gamma": fit.gamma}
+        features = {"atk_home": fit.atk.get(home, PRIOR), "def_away": fit.def_.get(away, PRIOR),
+                    "gamma": fit.gamma, "rho_eff": admissible_rho(lambda_home, lambda_away, DC_RHO),
+                    "fallback": {"home": src_h, "away": src_a}}
         conn.execute(FIX_SQL, (run_id, fixture_id, lambda_home, lambda_away, json.dumps(grid),
                                json.dumps(features)))
         for play in PLAYS:
-            probs = derive_play(play, grid)
-            probs = probs[0] if play == "jqc" else probs  # jqc=(主队档, 客队档)：只落主队侧（见 docstring）
+            probs = jqc_sides(grid) if play == "jqc" else derive_play(play, grid)
             market += [(run_id, fixture_id, play, code, p) for code, p in probs.items()]
     conn.cursor().executemany(MARKET_SQL, market)
-    logger.info(f"[walk] {league_key} {season} run_id={run_id} γ={fit.gamma:.6f} 写入 {len(predicted)} 跳过 {skipped}")
+    logger.info(f"[walk] {league_key} {season} run_id={run_id} γ={fit.gamma:.6f} 写入 {len(predicted)}"
+                f" 跳过 {skipped} 兜底 {n_fallback} ρ收缩 {rho_clamped}")
     return {"run_id": run_id, "n_fixtures": len(predicted), "n_market": len(market), "skipped": skipped,
-            "gamma": fit.gamma, "train_season": train_season}
+            "n_fallback": n_fallback, "rho_clamped": rho_clamped, "gamma": fit.gamma,
+            "train_season": train_season}
 
 
 def main(argv: list[str] | None = None) -> int:
