@@ -15,20 +15,30 @@ league-predict 系统国内采集机：取中国体育彩票官方 JSON → 落 
 python collector.py --probe            # 探针模式（复探用）
 python collector.py --collect <topic>  # 采集指定 topic 落 JSONL
 python collector.py --collect-all      # 采集全部 7 topic
-python collector.py --push             # 打包 out/ → scp+sudo 推 oracle + .done
+python collector.py --push             # 旧路径：打包 out/ → scp+sudo 推 oracle + 空 .done（兼容）
+python collector.py --push-batch <topic>...   # v1.2 批量推送（B1 全 7 topic + B2 .done 最后 + G(A) 清单）
 ```
 
-## 契约 v1.1（2026-09-15 冻结，单一真源 doc/国内采集机实施文档-v1.md §5）
+批量脚本：`scripts/collect_batch.bat offer|night`（4 daily 档 09:30/15:30/21:30/23:30 + 10 分钟档 offer 均调它）。
 
-- 通用行外壳：`{"kind","topic","snap_ts","fetched_at","endpoint","http_status","collector_host","payload","src_hash"}`
+## 契约 v1.2（远端 2026-09-15 升级：新增 fetched_at 键 + 7 topic 完整推送 + .done 清单）
+
+- 通用行外壳：`{"kind","topic","snap_ts","fetched_at","endpoint","http_status","collector_host","payload","src_hash"}`（v1.2 新增 `fetched_at` = 响应解析完成时刻，UTC 带 Z）
+- `fetched_at` 不进入 `src_hash`、不做身份键，不与 `snap_ts` 混用
 - `snap_ts` = 请求发出时刻（UTC 带 Z），同批同值；官方更新时间留 payload 原样
 - `kind="error"`：`errorCode != "0"` 或 `success != true` 时必须产行（失败响应无 value 键）
 - payload 官方键名原样，不许改名/清洗/判奖（如 `lotterySaleEndtime` 少 a、`stakeAmount` 千分位、`result:"3＋,1"` 全角加号、`sectionsNo999:"取消"`）
 - `src_hash` = `sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",",":")))`
 - 身份键：offer/result = `matchId`；issue/lottery = `(lotteryGameNum, lotteryDrawNum)`
 - `jczq_offer`/`jclq_offer`：一行 = 一场 × 一个玩法（had/hhad/crs/ttg/hafu），`options` 整块 + `oddsHistory` 原样
-- `jclq_offer` v1.1 不冻结：空 → `.empty`；首次非空 → `unverified-shape` 标记 + 单独回传探针包
-- 采集节奏：offer 每 10 分钟快照 + 09:30/15:30/21:30/01:30；result 23:05；issue 20:10；issue_result 22:40；lottery 23:30
+- `jclq_offer`/`jclq_result` 已冻结（v1.2 解除 "unverified-shape" 标记）：篮球 = NBA/CBA（老板 06:35 决定），`jclq_result` 窗口 = 近 7 日（`{today_minus_7}`~`{today}`）；`jclq_offer` 行粒度 = 一场 × 一个玩法（同 §5.1 足球），玩法 `mnl/hdc/hilo/wnm`
+- 采集节奏（v1.2）：
+  - **offer 10 分钟档**：`jczq_offer`+`jclq_offer` 每 10 分钟快照（`collector_offer_10m`），批次含 7 topic 齐全（B1）
+  - **4 daily 档**：09:30/15:30/21:30 = offer 快照 + 全 7 topic；23:30 = 开奖结果（result/issue/lottery）+ 全 7 topic
+  - 每批 = **全部 7 topic 必齐全**（.jsonl 或 .empty，缺一个 = 批次缺陷，B1）
+- **B2 原子推送**：tar 解到 `.staging/` → 逐文件 `mv` 到 topic 目录 → 最后 `install` `.done`（`.done` 是批次最后一步）
+- **G(A) `.done` 清单**：`.done` 文件内含 manifest，每行 `<topic>/<file>\t<rowcount>\t<sha256-of-row-bytes>`；`.empty` 行数为 0、聚合列空。远端以清单为准（不再用文件名窗口匹配）
+- **`__002` 分片**：10 分钟档同分钟重跑/重试可能追加 `__002`，清单是唯一正确映射（旧文件名窗口匹配已死）
 
 ## 探针结论（2026-09-15，13 端点全 200）
 

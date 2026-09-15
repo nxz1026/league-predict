@@ -41,7 +41,7 @@
     },
     "jclq_result": {
       "candidates": [
-        "https://webapi.sporttery.cn/gateway/uniform/basketball/getUniformMatchResultV2.qry?matchBeginDate={today}&matchEndDate={today}&leagueId=&pageSize=30&pageNo=1&isFix=0"
+        "https://webapi.sporttery.cn/gateway/uniform/basketball/getUniformMatchResultV2.qry?matchBeginDate={today_minus_7}&matchEndDate={today}&leagueId=&pageSize=30&pageNo=1&isFix=0"
       ]
     },
     "lottery_draw": {

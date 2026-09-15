@@ -47,7 +47,7 @@ HEAD_BYTES = int(CONFIG["probe_head_bytes"])
 HOST = CONFIG["collector_host"]
 SSH_ALIAS = CONFIG["push"]["ssh_alias"]
 REMOTE_ROOT = CONFIG["push"]["remote_root"]
-CONTRACT = "v1.1"
+CONTRACT = "v1.2"
 
 # 玩法块 → 官方 poolCode（§5.1 实测）
 _POOL_CODE = {"had": "HAD", "hhad": "HHAD", "crs": "CRS", "ttg": "TTG", "hafu": "HAFU"}
@@ -314,9 +314,12 @@ def collect(topic: str) -> int:
     snap_ts = now_utc()
     today = datetime.now(CN_TZ).strftime("%Y-%m-%d")
     yesterday = (datetime.now(CN_TZ) - timedelta(days=1)).strftime("%Y-%m-%d")
+    today_minus_3 = (datetime.now(CN_TZ) - timedelta(days=3)).strftime("%Y-%m-%d")
+    today_minus_7 = (datetime.now(CN_TZ) - timedelta(days=7)).strftime("%Y-%m-%d")
     rows = []
     for url in spec["candidates"]:
-        url = url.replace("{today}", today).replace("{yesterday}", yesterday)
+        url = (url.replace("{today}", today).replace("{yesterday}", yesterday)
+               .replace("{today_minus_3}", today_minus_3).replace("{today_minus_7}", today_minus_7))
         rec = fetch(url)
         rows.extend(_PARSERS[topic](url, rec, snap_ts))
     path = write_batch(topic, rows)
@@ -328,6 +331,13 @@ def collect(topic: str) -> int:
 def collect_all() -> int:
     rc = 0
     for topic in CONFIG["topics"]:
+        rc |= collect(topic)
+    return rc
+
+def collect_batch(topics: list) -> int:
+    """§6 B1：一批 = 全部 topic 齐全。每个指定 topic 各落一个文件（.jsonl 或 .empty），缺一个都不行。"""
+    rc = 0
+    for topic in topics:
         rc |= collect(topic)
     return rc
 
@@ -383,57 +393,122 @@ def probe() -> int:
     pack = out_dir / "probe_pack.tar.gz"
     with tarfile.open(pack, "w:gz") as tf:
         tf.add(out_dir / "probe_results.json", arcname="probe_results.json")
-        for f in sorted(raw_dir.iterdir()):
-            tf.add(f, arcname=f"raw/{f.name}")
-    print(f"\nprobe 完成：{len(results)} 端点，{sum(1 for r in results if r['blocked'])} BLOCKED")
-    print(f"探针包：{pack}（{pack.stat().st_size} 字节）")
-    return 0 if not any(r["blocked"] for r in results) else 1
+def _manifest(out_dir: Path, topics: list) -> str:
+    """§G(A)：.done 文件内写清单。每行 <相对路径>\t<行数>\t<逐行哈希聚合>。
 
-
-def push() -> int:
-    """推送 out/ 到远端 incoming/<host>/，完成后 touch .done。
-
-    本机无 rsync 且远端 incoming 属 league 组（ubuntu 无写权限）：
-    scp 到 /tmp → sudo mv + 解包 + chown → sudo touch .done。
+    只列本批 topics 目录下最新一个文件（__NNN 最大）。远端以清单为准。
+    空文件（.empty）行数为 0、聚合列空。
     """
+    lines = []
+    for topic in topics:
+        tdir = out_dir / topic
+        if not tdir.exists():
+            lines.append(f"{topic}/\t0\t")
+            continue
+        files = [f for f in tdir.iterdir() if f.is_file()]
+        if not files:
+            lines.append(f"{topic}/\t0\t")
+            continue
+        # 取本批最新文件（__NNN 最大；同一 topic 一批只产一个文件，无 __002 分片）
+        latest = max(files, key=lambda f: f.name)
+        rel = latest.relative_to(out_dir).as_posix()
+        if latest.suffix == ".empty":
+            lines.append(f"{rel}\t0\t")
+        else:
+            h = hashlib.sha256()
+            n = 0
+            with open(latest, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    n += 1
+                    h.update(line.encode("utf-8"))
+            lines.append(f"{rel}\t{n}\t{h.hexdigest()}")
+    return "\n".join(lines) + "\n"
+
+
+def push_batch(topics: list) -> int:
+    """B1+B2+G(A)：采集全部指定 topic → 原子写 .tmp → rename → 最后写 .done 清单 → 推远端。
+
+    流程：collect 各 topic 落 out/（.jsonl/.empty）→ 打包只含本批 7 topic 文件（禁探针包）→
+    远端 tar 解到 .staging/（B2 原子性）→ 逐文件 rename 到 topic 目录 → 最后写 .done（含清单）→ chown。
+    """
+    rc = collect_batch(topics)
     out_dir = ROOT / "out"
     if not out_dir.exists():
-        print("[push] out/ 不存在，无内容可推")
+        print("[push_batch] out/ 不存在")
         return 1
+    batch_ts = now_utc().rstrip("Z").replace(":", "-")
+    # 打包：只含本批 topic 文件（探针包/旧批次不混入 incoming/）
     pack = ROOT / "out.tar.gz"
     with tarfile.open(pack, "w:gz") as tf:
-        for f in sorted(out_dir.rglob("*")):
-            if f.is_file():
-                tf.add(f, arcname=f.relative_to(out_dir).as_posix())
+        for topic in topics:
+            tdir = out_dir / topic
+            if tdir.exists():
+                for f in sorted(tdir.iterdir()):
+                    if f.is_file():
+                        tf.add(f, arcname=f"{topic}/{f.name}")
+    # 本地先写 .done 清单文件（B2：远端 install .done 是最后一步）
+    done = f"{batch_ts}Z.done"
+    manifest = _manifest(out_dir, topics)
+    done_local = ROOT / "out.done.tmp"
+    done_local.write_text(manifest, encoding="utf-8")
+    staging = f".staging_{batch_ts}"
+    remote_cmd = (
+        f"sudo -n mkdir -p {REMOTE_ROOT}/{HOST} && "
+        f"rm -rf {REMOTE_ROOT}/{HOST}/{staging} && "
+        f"mkdir -p {REMOTE_ROOT}/{HOST}/{staging} && "
+        f"sudo -n tar xzf {REMOTE_ROOT}/{HOST}/out.tar.gz -C {REMOTE_ROOT}/{HOST}/{staging} && "
+        f"sudo -n rm {REMOTE_ROOT}/{HOST}/out.tar.gz && "
+        f"for t in {' '.join(topics)}; do "
+        f"  sudo -n mkdir -p {REMOTE_ROOT}/{HOST}/$t; "
+        f"  for f in {REMOTE_ROOT}/{HOST}/{staging}/$t/*; do "
+        f"    [ -f \"$f\" ] && sudo -n mv \"$f\" {REMOTE_ROOT}/{HOST}/$t/; "
+        f"  done; "
+        f"done; "
+        f"sudo -n rm -rf {REMOTE_ROOT}/{HOST}/{staging} && "
+        f"sudo -n chown -R league:league {REMOTE_ROOT}/{HOST}")
+    # scp 包 + .done 到远端 /tmp
     r = subprocess.run(["scp", "-o", "BatchMode=yes", str(pack),
                         f"{SSH_ALIAS}:/tmp/out.tar.gz"],
                        capture_output=True, text=True, timeout=120)
     if r.returncode != 0:
-        print(f"[push] scp 失败 rc={r.returncode}: {r.stderr.strip()}")
+        print(f"[push_batch] scp 包失败 rc={r.returncode}: {r.stderr.strip()}")
         return 1
-    done = f"{now_utc().replace(':', '-')}.done"
-    remote_cmd = (f"sudo -n mkdir -p {REMOTE_ROOT}/{HOST} && "
-                  f"sudo -n mv /tmp/out.tar.gz {REMOTE_ROOT}/{HOST}/ && "
-                  f"cd {REMOTE_ROOT}/{HOST} && sudo -n tar xzf out.tar.gz && "
-                  f"sudo -n rm out.tar.gz && "
-                  f"sudo -n chown -R league:league {REMOTE_ROOT}/{HOST} && "
-                  f"sudo -n touch {REMOTE_ROOT}/{HOST}/{done} && "
-                  f"sudo -n chown league:league {REMOTE_ROOT}/{HOST}/{done}")
+    r_done = subprocess.run(["scp", "-o", "BatchMode=yes", str(done_local),
+                             f"{SSH_ALIAS}:/tmp/{done}"],
+                            capture_output=True, text=True, timeout=60)
+    done_local.unlink(missing_ok=True)
+    if r_done.returncode != 0:
+        print(f"[push_batch] scp .done 失败 rc={r_done.returncode}: {r_done.stderr.strip()}")
+        return 1
     r2 = subprocess.run(["ssh", "-o", "BatchMode=yes", SSH_ALIAS, remote_cmd],
                         capture_output=True, text=True, timeout=120)
     if r2.returncode != 0:
-        print(f"[push] 远端落盘失败 rc={r2.returncode}: {r2.stderr.strip()}")
+        print(f"[push_batch] 远端落盘失败 rc={r2.returncode}: {r2.stderr.strip()}")
         return 1
-    print(f"[push] 完成：{REMOTE_ROOT}/{HOST}/ + {done}")
-    return 0
+    # B2：.done 是最后一步（数据全部 rename 后才 install 清单）
+    r3 = subprocess.run(["ssh", "-o", "BatchMode=yes", SSH_ALIAS,
+                        f"sudo -n install -m 0644 -o league -g league /tmp/{done} "
+                        f"{REMOTE_ROOT}/{HOST}/{done} && sudo -n rm /tmp/{done}"],
+                       capture_output=True, text=True, timeout=60)
+    if r3.returncode != 0:
+        print(f"[push_batch] install .done 失败 rc={r3.returncode}: {r3.stderr.strip()}")
+        return 1
+    print(f"[push_batch] 完成：{topics} + {done}")
+    return rc
+
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="国内采集机（契约 v1.1）")
+    ap = argparse.ArgumentParser(description="国内采集机（契约 v1.2）")
     ap.add_argument("--probe", action="store_true", help="探针模式（复探用）")
     ap.add_argument("--collect", metavar="TOPIC", help="采集指定 topic 落 JSONL")
     ap.add_argument("--collect-all", action="store_true", help="采集全部 7 topic")
-    ap.add_argument("--push", action="store_true", help="推送 out/ 到远端 + .done")
+    ap.add_argument("--push", action="store_true", help="推送 out/ 到远端 + .done（兼容旧路径）")
+    ap.add_argument("--push-batch", nargs="+", metavar="TOPIC",
+                    help="B1+B2+G(A)：采集指定 topic 批 + 原子推远端 + .done 清单")
     args = ap.parse_args()
     if args.probe:
         return probe()
@@ -443,6 +518,8 @@ def main() -> int:
         return collect_all()
     if args.push:
         return push()
+    if args.push_batch:
+        return push_batch(args.push_batch)
     ap.print_help()
     return 1
 
