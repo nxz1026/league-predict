@@ -2,7 +2,28 @@
 
 联赛预测引擎。多数据源融合 + 信号模型 + ELO + Dixon-Coles 双变量泊松 + 蒙特卡洛模拟。
 
-零外部依赖，纯 Python stdlib。统一运行在 FastAPI Cloud（见「运行与部署」）。GitHub Actions 已于 2026-09-11 下线。
+推理内核零外部依赖（纯 stdlib）。**v2 起 `scripts/store/`、`scripts/ingest/` 另需 `psycopg[binary]`（唯一新增依赖，只用于落库/取数，不进预测链路）**。统一运行在 FastAPI Cloud（见「运行与部署」）。GitHub Actions 已于 2026-09-11 下线。
+
+## v2 进行中：全玩法覆盖（分支 `v2`，2026-09-15 起）
+
+目标：从"五大联赛预测引擎"升级为覆盖**竞彩足球全部玩法 + 传统足彩 + 篮彩**的引擎（数字彩只做开奖对照，不预测）。
+
+```
+新增分层（v1 的 core/model/web 一律冻结，只 import 不改）
+  scripts/derive/   纯函数派生层：Dixon-Coles 9×9 矩阵 → 各玩法概率（had/hhad/crs/ttg/jqc；haf 未注册即 KeyError）
+  scripts/store/    落库层：官方赛果 upsert、raw→fact 解析（parse_api / align / upsert_*）、只读查询接口
+  scripts/ingest/   取数层：国内采集机 JSONL 拉取（逐文件事务 + 归档）、API 回填（配额账本 + 限速 + 幂等落块）
+  scripts/market/   （下一单）去水与 CLV/Brier 校准指标
+DB：PostgreSQL 18 单实例多 schema  ref / stg / ops / raw / fact（+ model / analysis 待建），三角色最小权限
+     详见 docs/db/infra_p0_*.sql 与 docs/infra/README-infra.md（若未入库则在队长工作区）
+测试基线：python -m pytest tests -q → 305 passed（v1 起点 215；新增均为 store/ingest/derive 的常驻用例）
+```
+
+两条已推翻转 v1 文档的实测结论（都带取证）：
+1. **API-Football 免费档支持 `?league=&season=` 批量返回**（`scripts/core/data/fetch.py` 里的旧注释"免费计划不支持 season 过滤"已被实测推翻）
+   ⇒ 五联赛×三赛季一次回填 **15 次请求**即完成：**5341 场完赛，`score.halftime` 缺失 0 场** ⇒ 半全场玩法的数据前提成立。
+   另注意免费档除 100 次/天外还有 **10 次/分钟**（连发第 11 条起 429），两源统一 7s 限速。
+2. **football-data 免费档 `season=2022` 直接 403**（只给近两季）⇒ 2022 赛季只有 API-Football 单源，多源交叉核对只能在 2023/2024 生效。
 
 ## 架构
 
@@ -203,6 +224,11 @@ scripts/
 - **缓存**: 文件级 TTL 缓存, 过期清理, URL 键生成
 - **并行获取**: API-Football + ESPN fallback 并行请求
 - **API 校验**: 响应结构验证 + 速率限制追踪
+
+## v2 (2026-09-15) 变更日志
+- 新增 `scripts/derive/`（网格与五玩法派生，纯 stdlib）、`scripts/store/`、`scripts/ingest/`（落库与取数）、7 个常驻测试文件
+- 新增 DB 底座：`league` 库 + `ref/stg/ops/raw/fact` 五 schema + `league_ing/app/ro` 三角色最小权限 + `ts_snap/ts_stg` 表空间
+- 修正文档：`fetch.py` 关于"免费档不支持 season 过滤"的注释已失效（内核冻结未改，本 README 与 v2 段为准）
 
 ## v4.3 变更日志
 
