@@ -18,7 +18,7 @@
     },
     "jczq_result": {
       "candidates": [
-        "https://webapi.sporttery.cn/gateway/uniform/football/getUniformMatchResultV1.qry?matchBeginDate={yesterday}&matchEndDate={yesterday}&leagueId=&pageSize=30&pageNo=1&isFix=0&matchPage=1&pcOrWap=1"
+        "https://webapi.sporttery.cn/gateway/uniform/football/getUniformMatchResultV1.qry?matchBeginDate={today}&matchEndDate={today}&leagueId=&pageSize=30&pageNo=1&isFix=0&matchPage=1&pcOrWap=1"
       ]
     },
     "jc_issue": {
@@ -41,7 +41,7 @@
     },
     "jclq_result": {
       "candidates": [
-        "https://webapi.sporttery.cn/gateway/uniform/basketball/getUniformMatchResultV2.qry?matchBeginDate={yesterday}&matchEndDate={yesterday}&leagueId=&pageSize=30&pageNo=1&isFix=0"
+        "https://webapi.sporttery.cn/gateway/uniform/basketball/getUniformMatchResultV2.qry?matchBeginDate={today}&matchEndDate={today}&leagueId=&pageSize=30&pageNo=1&isFix=0"
       ]
     },
     "lottery_draw": {
