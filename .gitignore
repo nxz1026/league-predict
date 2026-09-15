@@ -1,0 +1,12 @@
+# 数据产物（不入库）
+out/
+probe/raw/
+probe/probe_results.json
+probe/probe_pack.tar.gz
+collector.status.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
