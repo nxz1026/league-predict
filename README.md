@@ -12,10 +12,23 @@ league-predict 系统国内采集机：取中国体育彩票官方 JSON → 落 
 ## 用法
 
 ```bash
-python collector.py --probe            # 探针：逐个 GET 候选端点 → probe/probe_pack.tar.gz
-python collector.py --collect <topic>  # 采集落 JSONL（契约冻结后启用）
+python collector.py --probe            # 探针模式（复探用）
+python collector.py --collect <topic>  # 采集指定 topic 落 JSONL
+python collector.py --collect-all      # 采集全部 7 topic
 python collector.py --push             # 打包 out/ → scp+sudo 推 oracle + .done
 ```
+
+## 契约 v1.1（2026-09-15 冻结，单一真源 doc/国内采集机实施文档-v1.md §5）
+
+- 通用行外壳：`{"kind","topic","snap_ts","fetched_at","endpoint","http_status","collector_host","payload","src_hash"}`
+- `snap_ts` = 请求发出时刻（UTC 带 Z），同批同值；官方更新时间留 payload 原样
+- `kind="error"`：`errorCode != "0"` 或 `success != true` 时必须产行（失败响应无 value 键）
+- payload 官方键名原样，不许改名/清洗/判奖（如 `lotterySaleEndtime` 少 a、`stakeAmount` 千分位、`result:"3＋,1"` 全角加号、`sectionsNo999:"取消"`）
+- `src_hash` = `sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",",":")))`
+- 身份键：offer/result = `matchId`；issue/lottery = `(lotteryGameNum, lotteryDrawNum)`
+- `jczq_offer`/`jclq_offer`：一行 = 一场 × 一个玩法（had/hhad/crs/ttg/hafu），`options` 整块 + `oddsHistory` 原样
+- `jclq_offer` v1.1 不冻结：空 → `.empty`；首次非空 → `unverified-shape` 标记 + 单独回传探针包
+- 采集节奏：offer 每 10 分钟快照 + 09:30/15:30/21:30/01:30；result 23:05；issue 20:10；issue_result 22:40；lottery 23:30
 
 ## 探针结论（2026-09-15，13 端点全 200）
 
