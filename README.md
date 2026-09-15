@@ -14,8 +14,25 @@ league-predict 系统国内采集机：取中国体育彩票官方 JSON → 落 
 ```bash
 python collector.py --probe            # 探针：逐个 GET 候选端点 → probe/probe_pack.tar.gz
 python collector.py --collect <topic>  # 采集落 JSONL（契约冻结后启用）
-python collector.py --push             # rsync 推送 out/ 到 oracle + .done
+python collector.py --push             # 打包 out/ → scp+sudo 推 oracle + .done
 ```
+
+## 探针结论（2026-09-15，13 端点全 200）
+
+| topic | 真实接口 | 备注 |
+|---|---|---|
+| jczq_offer | `uniform/football/getMatchCalculatorV1.qry?channel=c` | 文档的 getMatchListV1.qry 返 HTTP 567 反爬 |
+| jczq_result | `uniform/football/getUniformMatchResultV1.qry?...&matchPage=1&pcOrWap=1` | 文档的 getMatchResultV1.qry 恒空 |
+| jc_issue | `lottery/getFootBallConcernV1.qry?param=<gameKey>,0` | gameKey=90/900129/98/94 |
+| jc_issue_result | `lottery/getFootBallDrawInfoV2.qry?isVerify=1&param=94,0;90,0;98,0` | 含奖级/销量/滚存 |
+| jclq_offer | `uniform/basketball/getMatchCalculatorV1.qry?channel=c` | 彩种已停售，value 提示停止销售 |
+| jclq_result | `uniform/basketball/getUniformMatchResultV2.qry` | V2，历史开奖可查 |
+| lottery_draw | `lottery/getHistoryPageListV1.qry?gameNo=<no>&provinceId=0&isVerify=1&termLimits=30` | gameNo=85/35/350133/04（文档 3501/3502 无数据） |
+
+## 推送通道
+
+本机无 rsync；远端 `incoming/` 属 `league:league`（ubuntu 在 league 组但无写权限）。
+实际：`scp` 打包文件到 `/tmp` → `ssh oracle "sudo -n mv + tar xzf + chown league:league + touch .done"`（ubuntu 免密 sudo）。
 
 ## 实施顺序（文档 §3 强制）
 
