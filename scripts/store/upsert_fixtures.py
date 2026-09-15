@@ -1,7 +1,8 @@
 """raw 落地块 → ref.team + fact.fixture：**只有 AF 建 fixture 行**，FD 只把 id 合进 source_ids（P0-FACT1 曾把 3504
 条 FD 场次各插一行 ⇒ 同一批比赛两份副本、回测样本翻倍，已清洗；fact/ref 无 DELETE ⇒ 宁可不插不可插错）。FD 行过
 align 对齐（(league_key, 开球时刻) 精确等值 + 队名规范化）命中才 UPDATE source_ids，未命中只计数（明细由
-upsert_results 落 ops.ingest_log.rejected）；只认 200，403 绝不当数据。事务归调用方。"""
+upsert_results 落 ops.ingest_log.rejected）；只认 200，403 绝不当数据。**认队按源 id 不按名字**（规则与 SQL 见
+store.team_identity）：AF 跨季改拼写不再裂行、name_cn 只做展示名。事务归调用方。"""
 from __future__ import annotations
 
 from typing import Any
@@ -9,14 +10,12 @@ from typing import Any
 from psycopg import Connection, sql
 from psycopg.types.json import Jsonb
 
-from core.i18n import to_cn
 from core.log import logger
 from store import align
 from store.parse_api import af_fixtures, fd_fixtures
+from store.team_identity import merge_fd_teams, resolve_team
 
 BLOCK_TABLES = ("af_raw", "fd_raw")  # raw 两块：AF 是权威锚，FD 只做 id 合并
-TEAM_SQL = ("INSERT INTO ref.team (sport, name_cn, aliases) VALUES (%s, %s, %s) ON CONFLICT (sport, name_cn)"
-            " DO UPDATE SET aliases = ref.team.aliases || EXCLUDED.aliases RETURNING team_id")
 FIXTURE_SQL = (
     "INSERT INTO fact.fixture (fixture_id, league_key, season, round, kickoff_at, home_team_id, away_team_id,"
     " status, venue, source_ids) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
@@ -56,45 +55,45 @@ def af_anchors(conn: Connection, params_hashes: list[str] | None = None):
     return fd_map, kept, dropped, align.af_index(kept), align.af_names(kept)
 
 
-def _team_id(cur, name: str | None, team_id: int | None) -> int | None:
-    """队伍按 UNIQUE(sport,name_cn) upsert；name_cn = to_cn(原名)（未命中即原名，本模块不造中文名）。"""
-    if not name or team_id is None:  # 缺 id/名字 ⇒ 不建队伍、不猜中文名
-        return None
-    cur.execute(TEAM_SQL, ("football", to_cn(name), Jsonb({"api_football": team_id})))
-    return cur.fetchone()[0]
-
-
 def _store(cur, row: dict) -> None:
-    """一行 AF：两队 upsert → fact.fixture upsert（source_ids 只写 AF 自己的 id）。"""
+    """一行 AF：两队认队（af_id 优先）→ fact.fixture upsert（source_ids 只写 AF 自己的 id）。"""
     home, away = row["af_team_id"] or (None, None)
     cur.execute(FIXTURE_SQL, (row["fixture_id"], row["league_key"], row["season"], row["round"], row["kickoff_at"],
-                              _team_id(cur, row["home_name"], home), _team_id(cur, row["away_name"], away),
+                              resolve_team(cur, row["home_name"], home), resolve_team(cur, row["away_name"], away),
                               row["status"], row["venue"], Jsonb({"api_football": row["fixture_id"]})))
 
 
-def _merge_fd(cur, row: dict, index: dict, names: dict) -> bool:
-    """FD 行：对齐命中才把 football_data id 并进该 AF fixture 的 source_ids；返回是否真合并。"""
+def _merge_fd(cur, row: dict, index: dict, names: dict) -> tuple[bool, int]:
+    """FD 行：命中就把 football_data id 并进该 AF fixture 的 source_ids 与其两队 aliases；返回 (是否真合并,
+    有几个 FD 队 id 被**别的行**占着没能并入 —— 跨键重复行（同俱乐部两行）的信号）。"""
     fixture_id, reason = align.match_fd(row, index, names)
     if reason not in align.OK_REASONS:  # ok_synonym（走专名同义表）也算命中
-        return False
+        return False, 0
     cur.execute(FD_ID_SQL, (row["fixture_id"], int(fixture_id)))
-    return bool(cur.rowcount)
+    if not cur.rowcount:
+        return False, 0
+    return True, merge_fd_teams(cur, int(fixture_id), row["fd_team_id"])
 
 
 def run(conn: Connection, params_hashes: list[str] | None = None) -> dict[str, Any]:
     """raw 的 200 块 → AF 落 ref.team/fact.fixture、FD 合并 source_ids；返回逐项统计 dict。"""
     fd_map, kept, dropped, index, names = af_anchors(conn, params_hashes)
-    stats: dict[str, Any] = {"rows": len(kept) + len(dropped), "fixtures": 0, "fd_merged": 0, "fd_unmatched": 0}
+    stats: dict[str, Any] = {"rows": len(kept) + len(dropped), "fd_merged": 0, "fd_unmatched": 0, "fd_id_taken": 0}
     with conn.cursor() as cur:
         for row in kept:
             _store(cur, row)
         for body in read_blocks(conn, "fd_raw", params_hashes):
             for row in fd_fixtures(body, fd_map):
                 stats["rows"] += 1
-                stats["fd_merged" if _merge_fd(cur, row, index, names) else "fd_unmatched"] += 1
+                merged, taken = _merge_fd(cur, row, index, names)
+                stats["fd_merged" if merged else "fd_unmatched"] += 1
+                stats["fd_id_taken"] += taken
     unknown = sorted(map(str, {row["league_key"] for row in dropped}))
     if dropped:
         logger.warning(f"[fact.fixture] 跳过 {len(dropped)} 行：league_key 不在 ref.league 或 season 缺失 {unknown}")
+    if stats["fd_id_taken"]:
+        logger.warning(f"[ref.team] {stats['fd_id_taken']} 个 FD 队 id 已被**别的行**占着 ⇒ 未并入：同一家俱乐部在"
+                       " ref.team 有两个行（一行只有 af_id、一行只有 fd_id），属 DDL 侧去重，代码不猜")
     logger.info(f"[fact.fixture] AF 解析 {len(kept) + len(dropped)} 行 → 写入 {len(kept)} 行；FD 对齐合并"
                 f" {stats['fd_merged']} 场、未对齐 {stats['fd_unmatched']} 场（不建 fixture 行）")
     return {**stats, "fixtures": len(kept), "skipped": len(dropped), "unknown_leagues": unknown}

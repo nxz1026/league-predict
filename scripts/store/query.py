@@ -1,7 +1,6 @@
-"""fact/ref 只读接口（下游 app/ro 角色用；本层只发 SELECT，不做任何写）。
-
-用途：回填自检（league_season_count）、票面/模型取数（fixtures_between、fixture_with_result）、
-翻译补全待办（unmatched_teams）。conn 由调用方给（store.pg.connect("app"/"ro")）。
+"""fact/ref 只读接口（下游 app/ro 角色用；本层只发 SELECT，不做任何写）。用途：回填自检（league_season_count）、
+票面/模型取数（fixtures_between、fixture_with_result）、翻译补全待办（unmatched_teams）、认队体检
+（team_identity_audit）；conn 由调用方给（store.pg.connect("app"/"ro")）。
 """
 
 from __future__ import annotations
@@ -11,10 +10,11 @@ from typing import Any
 from psycopg import Connection
 from psycopg.rows import dict_row
 
+from store.team_identity import AUDIT_SQL
+
 FIXTURE_COLS = ("fixture_id, league_key, season, round, kickoff_at, home_team_id, away_team_id, status, venue")
 RESULT_COLS = "source, ft_h, ft_a, ht_h, ht_a, elapsed_ht, status, confirmed_at"
-# 中文判定：name_cn 里一个 CJK 字符都没有 ⇒ 仍是原名（to_cn 未命中），供后续翻译补全
-UNTRANSLATED = "[一-鿿]"
+UNTRANSLATED = "[一-鿿]"  # name_cn 里一个 CJK 都没有 ⇒ 仍是原名（to_cn 未命中），供后续翻译补全
 
 
 def _rows(conn: Connection, query: str, params: tuple = ()) -> list[dict[str, Any]]:
@@ -28,8 +28,7 @@ def fixtures_between(conn: Connection, start, end, league_key: str | None = None
     query = f"SELECT {FIXTURE_COLS} FROM fact.fixture WHERE kickoff_at >= %s AND kickoff_at < %s"
     params: list[Any] = [start, end]
     if league_key:
-        query += " AND league_key = %s"
-        params.append(league_key)
+        query, params = query + " AND league_key = %s", [*params, league_key]
     return _rows(conn, query + " ORDER BY kickoff_at, fixture_id", tuple(params))
 
 
@@ -93,3 +92,9 @@ def unmatched_fd(conn: Connection, limit: int = 20, *, src_file: str | None = No
                " WITH ORDINALITY AS e(entry, ord) WHERE e.entry->>'fd_id' = ANY(%s::text[])")
     return [row["entry"] for row in _rows(conn, entries + " ORDER BY e.ord LIMIT %s",
                                           (*params, [str(fid) for fid in fd_ids], limit))]
+
+
+def team_identity_audit(conn: Connection) -> dict[str, Any]:
+    """认队体检（只读）：dup_af/dup_fd 是按 (sport, 源 id) 分组的裂行数，**必须恒 0**（team_af_key/team_fd_key
+    两个 partial unique 兜底）；orphan=未被任何 fact.fixture 引用的队，可 >0。SQL 恒量在 store.team_identity。"""
+    return _rows(conn, AUDIT_SQL)[0]

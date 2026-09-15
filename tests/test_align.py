@@ -84,16 +84,16 @@ def test_tokens_and_match_fd_rules():  # 剥类型词/去变音符；同义表�
 
 def test_fd_block_merges_into_af_fixture_only(conn):
     """A1/A2/A6 + ok_synonym：FD 只把 id 并进 AF fixture（不插场）；两源专名不同的行靠同义表也照样上岸。"""
-    fid, fd_id, syn_fd, tag = 990010001, 550010001, 550010002, uuid.uuid4().hex
+    fid, fd_id, syn_fd, tag = 991010001, 991020001, 991020011, uuid.uuid4().hex  # 区段分配见 test_team_identity 头
     hashes = [_put(conn, "af_raw", _af_body(fid, tag, (2, 0), (1, 0))),
-              _put(conn, "af_raw", _af_body(fid + 1, tag, (1, 1), (0, 1), home="Inter")),
+              _put(conn, "af_raw", _af_body(fid + 10, tag, (1, 1), (0, 1), home="Inter")),  # 间隔 10：两队 id 不撞
               _put(conn, "fd_raw", _fd_body(fd_id, tag, (2, 0), (1, 0))),
               _put(conn, "fd_raw", _fd_body(syn_fd, tag, (1, 1), (0, 1), home="FC Internazionale Milano"))]
     before, written = _q(conn, COUNT_SQL)[0], upsert_fixtures.run(conn, hashes)
     results, after = upsert_results.run(conn, hashes), _q(conn, COUNT_SQL)[0]
     assert (after[0] - before[0], written["fixtures"], written["fd_merged"], written["fd_unmatched"]) == (2, 2, 2, 0)
     assert (after[1] - before[1], results["rows"], results["unmatched"]) == (4, 4, 0)  # A2：两源各一行赛果
-    assert _q(conn, "SELECT source_ids -> 'football_data' FROM fact.fixture WHERE fixture_id = %s", fid + 1) \
+    assert _q(conn, "SELECT source_ids -> 'football_data' FROM fact.fixture WHERE fixture_id = %s", fid + 10) \
         == [(syn_fd,)]  # ok_synonym 也是命中：football_data id 真并进来了
     upsert_fixtures.run(conn, hashes)  # A6 幂等：同一份 raw 连跑两遍，fixture/result 计数完全一致
     upsert_results.run(conn, hashes)
