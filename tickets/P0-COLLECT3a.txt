@@ -1,3 +1,13 @@
+⚠️⚠️ **本单 2026-09-17 12:18 由队长判定：不做（superseded by 3b 系列）**，保留作决策记录。
+ 理由（三条，都是今天量出来的）：
+  ① **同一份数据两个家**：`infra_p0_11` 建 `fact.jc_odds_history` 时我已把 `fact.jc_offer.odds_history` 注释成
+     "**永久 NULL / 弃用**"（因为它每快照重复存整段历史 ⇒ 26 个快照 × 一场 = 同一份历史被抄 26 遍，且**没有 PK 可去重**）；
+  ② **v1.4 端点已经给了全历史**（`getOddsHistoryV1?matchId=`：一场 5–8 版、含封盘前每一版，实测 `(match,play,update_ts)` **零重复**）
+     ⇒ 从 offer 包里再抽一遍 `oddsHistory` 只是**同一个事实的第二种写法**，只会制造对账负担（§9 的"一个事实一个家"）；
+  ③ 我方快照实测**开售前 9 小时只有 6/31 条水位线动过**（§17②）⇒ 想看清走势**必须**靠版本化历史表，而不是快照里的内嵌副本。
+ 如果将来要"某一快照当时看到的历史尾部"这种审计需求，正确做法是给 `fact.jc_odds_history` 加 `seen_at`（快照时刻）一列，
+ **不是**把 jsonb 塞回 `jc_offer`。—— 以下为原单正文。
+
 【编号说明（队长 2026-09-17 09:30）】本单改名 **3a**：数据源 = 生产 `jczq_offer` 包里**内嵌的 `oddsHistory`**（≤5 项、`matchId` 恒 0、多 `poolCode` 混在一起），
  落 `fact.jc_offer.odds_history` jsonb，**零外部依赖、现在就能做**。
  另一单 **3b**（见 `docs/project/契约v1.4-盘口全历史.md`）数据源 = 官方**独立历史端点** `getOddsHistoryV1.qry`（一次请求拿回某场 5–8 版全量），落**新表** `fact.jc_odds_history`。
