@@ -30,3 +30,20 @@
 [collect] jc_issue_result: 3 行 → E:\2026Workplace\Code\collector-cn\out\jc_issue_result\2026-09-16T02-48Z__001.jsonl
 [collect] lottery_draw: 120 行 → E:\2026Workplace\Code\collector-cn\out\lottery_draw\2026-09-16T02-48Z__001.jsonl
 [push_batch] 完成：['jczq_offer', 'jclq_offer', 'jczq_result', 'jclq_result', 'jc_issue', 'jc_issue_result', 'lottery_draw'] + 2026-09-16T02-48-13Z.done
+[collect] jczq_offer: 40 行 → E:\2026Workplace\Code\collector-cn\out\jczq_offer\2026-09-16T02-53Z__001.jsonl
+[collect] jclq_offer: 0 行 → E:\2026Workplace\Code\collector-cn\out\jclq_offer\2026-09-16T02-53Z__001.empty
+[collect] jczq_result: 9 行 → E:\2026Workplace\Code\collector-cn\out\jczq_result\2026-09-16T02-53Z__001.jsonl
+[collect] jclq_result: 23 行 → E:\2026Workplace\Code\collector-cn\out\jclq_result\2026-09-16T02-53Z__001.jsonl
+[collect] jc_issue: 4 行 → E:\2026Workplace\Code\collector-cn\out\jc_issue\2026-09-16T02-53Z__001.jsonl
+[collect] jc_issue_result: 3 行 → E:\2026Workplace\Code\collector-cn\out\jc_issue_result\2026-09-16T02-53Z__001.jsonl
+[collect] lottery_draw: 120 行 → E:\2026Workplace\Code\collector-cn\out\lottery_draw\2026-09-16T02-53Z__001.jsonl
+[push_batch] 完成：['jczq_offer', 'jclq_offer', 'jczq_result', 'jclq_result', 'jc_issue', 'jc_issue_result', 'lottery_draw'] + 2026-09-16T02-53-19Z.done
+[collect] jczq_offer: 135 行 → E:\2026Workplace\Code\collector-cn\out\jczq_offer\2026-09-16T03-03Z__001.jsonl
+[jclq_offer] 首次抓到非空：已标记 unverified-shape 并回传探针包
+[collect] jclq_offer: 35 行 → E:\2026Workplace\Code\collector-cn\out\jclq_offer\2026-09-16T03-03Z__001.jsonl
+[collect] jczq_result: 9 行 → E:\2026Workplace\Code\collector-cn\out\jczq_result\2026-09-16T03-03Z__001.jsonl
+[collect] jclq_result: 23 行 → E:\2026Workplace\Code\collector-cn\out\jclq_result\2026-09-16T03-03Z__001.jsonl
+[collect] jc_issue: 4 行 → E:\2026Workplace\Code\collector-cn\out\jc_issue\2026-09-16T03-03Z__001.jsonl
+[collect] jc_issue_result: 3 行 → E:\2026Workplace\Code\collector-cn\out\jc_issue_result\2026-09-16T03-03Z__001.jsonl
+[collect] lottery_draw: 120 行 → E:\2026Workplace\Code\collector-cn\out\lottery_draw\2026-09-16T03-03Z__001.jsonl
+[push_batch] 完成：['jczq_offer', 'jclq_offer', 'jczq_result', 'jclq_result', 'jc_issue', 'jc_issue_result', 'lottery_draw'] + 2026-09-16T03-03-25Z.done

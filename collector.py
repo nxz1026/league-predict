@@ -30,6 +30,7 @@ import tarfile
 import time
 import urllib.error
 import urllib.request
+import io
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -525,7 +526,27 @@ def main() -> int:
     ap.add_argument("--push", action="store_true", help="推送 out/ 到远端 + .done（兼容旧路径）")
     ap.add_argument("--push-batch", nargs="+", metavar="TOPIC",
                     help="B1+B2+G(A)：采集指定 topic 批 + 原子推远端 + .done 清单")
+    ap.add_argument("--mode-log", metavar="MODE", default="",
+                    help="静默模式：stdout/stderr 同时追加写 logs/collector_<MODE>.log（计划任务无窗口时诊断用）")
     args = ap.parse_args()
+    # 静默日志 tee：stdout/stderr 同时追加写 logs/collector_<mode>.log（CreateNoWindow 模式诊断全在这）
+    if args.mode_log:
+        _lh = ROOT / "logs" / f"collector_{args.mode_log}.log"
+        _lh.parent.mkdir(parents=True, exist_ok=True)
+        _fh = open(_lh, "a", encoding="utf-8")
+
+        class _Tee:
+            def __init__(self, f):
+                self.f = f
+            def write(self, s):
+                self.f.write(s)
+                self.f.flush()
+            def flush(self):
+                self.f.flush()
+
+        _tee = _Tee(_fh)
+        sys.stdout = _tee
+        sys.stderr = _tee
     if args.probe:
         return probe()
     if args.collect:

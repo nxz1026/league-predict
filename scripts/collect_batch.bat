@@ -1,5 +1,5 @@
 @echo off
-rem collector batch v1.3 no-console (scheduled task via wscript collector_silent.vbs)
+rem v1.3: 计划任务直接走 collector_silent.ps1（CreateNoWindow，无黑框）；本 bat 保留作手动调试入口
 cd /d E:\2026Workplace\Code\collector-cn
 if not exist logs mkdir logs
 set PY=C:\Python314\python.exe
