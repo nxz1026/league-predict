@@ -1,0 +1,8 @@
+【备忘 · 尚未派工】P0-COLLECT2eC —— 解析层补 `fact.jc_issue_match` / `fact.jc_issue_prize` 的行
+【为什么存在】§9-96：现网 `store/parse_jcissue.py` 对 `jc_issue_result` **只吐父行**，matchList 只落在文字 notes 里
+ （`parse_jcissue.py:27`），所以目标里"62 场 match / prize"从来无从产生；填这两张表**必须改解析器**（纯函数层，零 DB）。
+【派工前队长必须先做的三件事】
+ 1. 真包量一遍 matchList 的**实际键集**（多少场、哪些字段、有没有空场/退场占位），定 `jc_issue_match` 的规范列映射；
+ 2. `jc_issue_prize` 的源键在 `sfc/jqc/bqc` 三棵详情树的哪一层（**奖级结构**未量）⇒ 先确认 DDL 列与真包能对上，对不上就先改 DDL（DDL 是队长的活）；
+ 3. 解析器是"已验收只读"⇒ 本单要显式**解除只读**并配**回归夹具**：改完必须证明三表既有输出**一字不差**（§9-82：判据带 `(目录, --batch)` 二元组）。
+【依赖】2e-A2（写手，通用 UPSERT）必须先验收 ⇒ 否则解析器新吐的行没有落库通路。

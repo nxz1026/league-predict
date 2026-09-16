@@ -758,3 +758,24 @@ setsid bash ~/omp-resilient3.sh SMOKE1 /home/ubuntu/omp-smoke 300 1 ~/tickets/SM
        且因根修已进主干 + cron 每 10 分钟在跑 ⇒ **不会再虚涨**（过渡期"每次看 gaps 先判伪"的口径 §9-89 **可以退役**了）；
      · **报警通道**（`~/bin/jc-ingest-run.sh`）现每趟打印这四计数 + 两条阈值告警；`mismatch/ambiguous>0` 会**指名"别自动装载这批"**（半传/内容被改的实时哨兵）；
      · 工单侧教训：`P0-COLLECT2q4` 从"做不到"（§9-94）到落地，全靠**我把 P1~P5 逐字写死** + 工人一字不差执行 ⇒ 再次验证 §9-84 曲线：**照抄级小单 1 轮过**。
+96. **传统足彩的真边界：五表里**只有三表能写**，两张子表是**解析层的空洞**（2026-09-17 16:52–17:02 我用真包逐 topic 量出来）
+     · 三个 topic 的解析器返回**形状完全一致**的"写指令"：`{"table","pk","row","notes"}` ⇒ 写手该是**一个通用 UPSERT**，不是三套逻辑
+       （这也解释了为什么工人拿到"给三张表各写一个 upsert"的单会**读 40 分钟不敢下笔**：我给的题目结构本身就把它往复杂里带）；
+     · 真包实测产出：`jc_issue → fact.jc_issue` **4 条** · `jc_issue_result → fact.jc_issue_draw` **3 条** · `lottery_draw → fact.lottery_draw` **120 条**；
+       **`fact.jc_issue_match` / `fact.jc_issue_prize` 一行都不产** —— `parse_jcissue.py:27` 把 matchList 只写成**文字 note**
+       （原文：`"matchList 14 场… → fact.jc_issue_match，P0-COLLECT2 落"`）⇒ 目标里那个 oracle **"62 场 match"从来没被任何代码产出过**，
+       要填子表必须**先改解析器**（另开 `P0-COLLECT2eC`，见 `~/tickets/`），**绝不允许**在写手里顺手解析 payload（那会把解析职责漏进装载层）；
+     · 三表主键**都是 `(game_num, issue_no)` 两列**（期号跨玩法重号）⇒ 只用 `issue_no` 会互相覆盖；
+     · 列对齐核对法（可复用）：解析列 ⊆ DDL 列 且 DDL 只差同一套审计尾列 `src_hash/src_file/first_seen_at/last_seen_at` ⇒ **9/13/10 对 13-4/17-4/14-4** ✔；
+     · 类型事实：`sale_begin/sale_end/draw_at/paid_begin/paid_end`=**timestamp(无时区)**、`draw_date`=date、
+       `draw_num_list/raw_head/numbers/prizes`=**jsonb**；真包里解析器已返回 `datetime×18 / date×120 / dict×124 / list×124`
+       ⇒ **psycopg3 会自动适配，禁手写 `Json()` 包裹、禁 `str()` 强转**（写手保持"绑参数"即可）；
+     · 空串事实：只落在 `jc_issue_draw` 的三个 **text** 列（`delay_remark/pool_after_rj/sales_rj`，一批 7 个）⇒ 不炸类型，但**统一 `"" → None`**。
+97. **队长错 #19（同族第四次）：又派了一张"判据本身做不到"的单**（17:02，**这次是派工前自查抓到的**）
+     · `P0-COLLECT2eA2` 我写了 `U4 jc-cols-check.py → 全 ✔`，但那个工具只认 **① `_upsert("字面表名", …)` ② `{表: (列…)}` dict** 两种形态，
+       通用动态拼列会被它 `exit 2` 判 **"这不是通过，是没扫到"**（这条守卫还是我自己早先给工具加的）⇒ 要求与实现方式互斥；
+     · **修法比"取消这条"更好**：把白名单从"表名集合"升级成 **`COLUMNS = {表: (允许列…)}` 字面 dict** ⇒ 静态核对**真扫到 3 张表**，
+       同时多一道"解析器列漂移即 `ValueError`"的纵深防御 ⇒ **一个约束补两个洞**；
+     · **派生纪律（写判据时自查）**：凡判据引用**我的工具**，先想"**按我给的实现形态，这工具扫得到吗**"，
+       不确定就**先拿一个符合规格的临时文件喂工具**（我这次用 `/tmp/dyn.py` 喂了一次，立刻 `exit 2` 现形）——
+       成本 1 条命令，收益是省掉一整轮工人空转。
