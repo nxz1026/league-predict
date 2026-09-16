@@ -779,3 +779,15 @@ setsid bash ~/omp-resilient3.sh SMOKE1 /home/ubuntu/omp-smoke 300 1 ~/tickets/SM
      · **派生纪律（写判据时自查）**：凡判据引用**我的工具**，先想"**按我给的实现形态，这工具扫得到吗**"，
        不确定就**先拿一个符合规格的临时文件喂工具**（我这次用 `/tmp/dyn.py` 喂了一次，立刻 `exit 2` 现形）——
        成本 1 条命令，收益是省掉一整轮工人空转。
+98. **篮彩的真前置不是"写手"而是"解析器还没写"**（2026-09-17 17:05 现场取证，纠正我此前的队列顺序）
+     · `store/parse_misc.py:28` 里 `parse_jclq_offer` **是故意抛异常的**：
+       `ValueError: jclq_offer 契约 v1.1 未冻结（§5.5）：等开售窗口复探后升 v1.2 再解析`；
+     · **但它今天在产线上是休眠的**（我差点误报成"每批都在炸"）：`jc_topic.py:28` 只对 `WRITE=("jczq_offer","jczq_result")` 调 `parse_line`，
+       其余 topic 一律 `:45 logger.info("skip %s n=%d (2e 范围)")` ⇒ **skip 发生在 parse 之前**（"宁可不插，不可插错"的护栏真的挡住了）；
+       我是在探针脚本里**绕过 topic 分派直接调 `parse_line`** 才第一次看见这颗雷 —— **教训：探针对象要探"产线是否真走到"，不能只探"函数会不会炸"**；
+     · 铁证（`ops.ingest_log` 近 1 天按 topic 汇总，**先贴真实列清单再下结论**，列 = `id,topic,src_file,rows_in,rows_ups,rejected,ok,at`）：
+       `jclq_offer: 行=2529 ok=2529 失败=0 ups合计=0` · `jclq_result: …ups=0` · `jc_issue/jc_issue_result/lottery_draw: …ups=0`（**都是"记到 arrived 但没写"**，与"未接线"完全一致）
+       对照 `jczq_offer: ups合计=169828`、`jczq_result: ups=2529`（**已接线在写**）⇒ 我此前"今天 gaps 虚涨是篮彩引起"的判断没错，但"篮彩装载失败"是**不存在**的；
+     · **⇒ 队列顺序更正**：`STORE2`（篮彩写手）**被解析层挡死**，前置是 **`P0-COLLECT2lqP`：实现 `parse_jclq_offer`/`parse_jclq_result` 并冻结契约 v1.2**；
+       好消息是**形状我已经量好了**（§9-93：26 键扁平、盘口在 `oddsHistory` 的 `h/a`、`odds` 是空串不是数组、`snap_ts` 用 `updateDate+' '+updateTime` 字符串），
+       坏消息是**这批真包里有 `leagueId=26 美职女篮` 这种封闭清单外的联赛** ⇒ 解析层一开，闸门（`core/jc_gate.py`）必须同时参与（对照入库、永不进模型）。

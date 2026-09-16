@@ -1,0 +1,10 @@
+【备忘 · 尚未派工，排在 2eA2/2e-B 之后】P0-COLLECT2lqP —— 冻结篮彩契约 v1.2 并实现两个解析器
+【为什么必须先做】§9-98：`store/parse_misc.py:28` 的 `parse_jclq_offer` 现在**故意 raise**（"契约 v1.1 未冻结"）
+ ⇒ 篮彩**没有解析层就没有装载层**，`STORE2` 写手单会被这张挡死。今天它休眠只因为 `jc_topic.WRITE` 不含篮彩（skip 在 parse 之前）。
+【队长派工前必须补齐的三件事（缺一不许派）】
+ 1. **§9-93 只量了 `jclq_offer`，`jclq_result`（赛果）一行都还没量** ⇒ 先从真包量出键集与四玩法块（mnl/hdc/hilo/wnm）实际形状；
+ 2. `fact.jbq_*` 三表的 DDL 列我已重建验证过（`docs/db/infra_p0_10_jbq_tables.sql`），**但 `jbq_offer.snap_ts` 是 text**
+    ⇒ 要逐列确认"解析器输出 → DDL 列"的映射表（照传统足彩 §9-96 的做法：**解析列 ⊆ DDL 列 且只差审计尾列**才算对齐）；
+ 3. **闸门联动**：真包里已出现 `leagueId=26 美职女篮`（封闭清单只允许 NBA/CBA）
+    ⇒ 解析器只负责"忠实规范化"，**范围判定留在 `core/jc_gate.py`**（对照入库、永不进模型），派工时要写死这条职责边界。
+【验收必须包含】同一批真包"改前 skip / 改后能解析"的对照、以及**零回归**：`jczq_*` 三个已接线 topic 的 ups 数一字不差。
