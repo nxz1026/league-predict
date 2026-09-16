@@ -7,6 +7,10 @@
 - **竞彩数据通路已打通**：真包 → `fact.jc_match/jc_offer/jc_result` **第一次进库并幂等复跑**
   · 旧包 3 批 = `17 场 / 170 盘口行 / 15 赛果`（`gap 8 条`）· 5 批混包 = `17 / 250 / 15`、`fact.jc_offer` = `250/17/4`
   · 机检全绿：`omp-ast-check` 0 违规、`jc-cols-check` 三表 ✔、`jc-fk-audit` 16 条外键全可满足、pytest **428 passed**
+- **★ 看板已可用（08:37）**：`http://127.0.0.1:8077/static/jc.html`（我已替你起好服务；账号 `admin` / 口令见 `web/config.py` 的开发占位值，
+  仅 127.0.0.1 有效）。三块面板：场次×盘口（40 行 = 最新营业日 8 场 × 5 玩法，`?day=2026-09-15` → 45 行）、
+  基线指标（**4 行逐字对平已发布基线**：had 0.6270/acc 0.4772、crs 0.9405、ttg 0.8350、jqc 1.4536=两侧合算、`clv_filled` 全 0）、
+  传统足彩期次（**空是正确**——2e 未装）。看板栈 commit **`11282d9`** 已 push；详细说明见晨间报告 §13。
 - commit：**`9abb32b`**（装载层三文件 + 项目文档/DDL/工单纳入版本控制）→ **`7e5e13c`**（工单与晨报），均已 push `origin/v2`
 - 国内机 v1.2 回传**独立复算 PASS**：新到 2 批、`.done` 已变**清单**、380/380 行 `src_hash` 一致 ⇒ 契约侧正式推进到 **v1.3（清单）**
 - 篮彩：`jclq_result` **23 行真包**到手，`fact.jbq_match/jbq_offer/jbq_result` 三表已建（`docs/db/infra_p0_10_jbq_tables.sql`）
