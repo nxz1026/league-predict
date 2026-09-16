@@ -1,0 +1,63 @@
+# P0-TEAMMIX1 — 西甲 AF 侧「同一家俱乐部两行」的防重与补键
+
+## 背景（19:20–20:30 实测，全部来自本库，无猜测）
+球队对照 A 已执行（`docs/db/seed_jc_team_pool_v2.sql`，用户批复「执行」）：
+`ref.team 122→128`、`sporttery 键=21`、西甲 9/9 对齐、新队 `team_id 120506~120511`。
+但新插的 6 支 `af_id` 全 NULL。核查 `scripts/store/team_identity.py` 的 `resolve_team`
+（AF 拉赛果时的认队入口）后确认：**af_id 不是单独端点，是拉 AF 赛果时惰性补的**；
+`TEAM_SQL` 带 `ON CONFLICT (sport,name_cn) DO UPDATE SET aliases = aliases || EXCLUDED.aliases`，
+所以只要 `to_cn(AF队名) == 我写的中文名`，AF 一拉进来就会自动并到已有行上。
+
+## 问题：6 支里只有 4 支能自动合并，2 支必出重名行
+`to_cn` 在 `scripts/core/i18n.py:101`。实测（`PYTHONPATH=scripts` 直接跑）：
+
+| 我的中文名 | AF 侧名串 | to_cn 结果 | 结论 |
+|---|---|---|---|
+| 阿拉维斯 | `Alavés`（带音符） | 阿拉维斯 | ✔ 能合并；但 `Alaves`（无音符）→ `Alaves` ✘ |
+| 莱万特 | `Levante` | 莱万特 | ✔ |
+| 拉科鲁尼亚 | `Deportivo` | 拉科鲁尼亚 | ✔；但 `Deportivo La Coruna` → 原名 ✘ |
+| 桑坦德竞技 | `Racing Santander` | 桑坦德竞技 | ✔；但 `Santander` → 原名 ✘ |
+| **马拉加** | `Malaga` / `Malaga CF` / `Malaga Club` | **全部无映射** | ✘ 必插名为 `Malaga` 的新行 |
+| **马德里竞技** | `Real Madrid` | **皇家马德里** | ✘ 同名俱乐部两行（展示名口径不同） |
+
+其余无映射的西甲串（顺带，同一问题）：`Alaves` / `Deportivo La Coruna` / `RC Deportivo` /
+`Santander` / `Real Valladolid` / `Espanol` / `Cadiz CF` / `UD Las Palmas` / `Girona FC`。
+
+## ⚠️ 冻结区约束（先读这条，别撞 league-accept.sh）
+`~/bin/league-accept.sh:46` 判 `git status` 里出现 `scripts/core/|web/|static/` 即 FAIL。
+`to_cn` 在 `scripts/core/i18n.py` ⇒ **本单不许改 core**。两条路任选其一，二选一写清在报告里：
+
+**方案 1（推荐，零 core 改动）**：不动 `to_cn`，走 DB 侧——AF 拉完西甲后查重名行，
+用现成的 `ref.team_merge_map(winner_id, loser_id, src_key, src_id, merged_at)` 记录并合并
+（库里已有 4 行先例，`src_key='api_football'`）。合并方向：`winner` = 持 `sporttery` 键那一行
+（`jc_id` 是竞彩对齐的唯一凭据，不能丢），`loser` = AF 新插的无键行；把 loser 的
+`api_football` 键并进 winner 的 aliases，loser 行写进 merge_map 后**不删**（`league_ing` 无 DELETE 权限，
+D9 惯例：永不依赖删除，靠 merge_map 标记）。
+
+**方案 2**：派工时加 `LEAGUE_FROZEN_RE="web/|static/"`（`league-accept.sh:2` 的覆盖点，原本给 DASH 用），
+在 `core/i18n.py` 词典里补上表里那些缺的串。**不推荐**：core 是冻结区，改它等于放宽全局约束。
+
+## 范围（只做这两件，其余别碰）
+1. 一份只读核查脚本 + 报告：把上面那张表的 6+9 条 `to_cn` 结果跑出来贴实值（不许抄我的表）。
+2. 方案 1 的合并 SQL（`docs/db/待审-*.sql`，**不许自动执行**，等人工点头）：
+   - 只对「已有 sporttery 键、af_id 为 NULL」的队 × 「新插的同一家俱乐部行」做合并；
+   - 逐行幂等（`and not (aliases ? 'api_football')`）；
+   - 先 BEGIN 事务内验过再 COMMIT；
+   - 文件头写清：这份 SQL 只有 AF 真的拉过西甲之后才有命中（现在跑是 no-op，允许）。
+
+## 不许做
+- 不许改 `scripts/core/`（冻结区）。
+- 不许调 AF 接口（D9：配额源默认关，需 `LEAGUE_SOURCE_api_football=on` + `--allow-paid`）。
+- 不许给 `ref.team` 加列 / 改 `af_id` 生成列定义。
+- 不许删任何 `ref.team` 行（`league_ing` 无 DELETE）。
+- 不许碰 `scripts/ingest/`、`docs/db/seed_jc_team_pool_v2.sql`（已执行已验收）。
+
+## 红线
+≤100 行/文件 · ≤50 行/函数 · ≤120 列 · 0 print · 0 违规（`~/bin/omp-ast-check.py`）。
+`scripts/core/` 整段不许出现在 `git status` 里。
+
+## 验收
+1. `to_cn` 结果表贴实值（6 支新队 + 9 条顺带串），并注明哪几条 AF 侧串**没有**映射。
+2. 合并 SQL 事务内验过再回滚的实值回执，贴「命中 0 行 / no-op」是允许的（AF 尚未拉西甲）。
+3. 全量 `pytest` 数贴出来（当前基线 457 passed / 0 failed）。
+4. `git status --porcelain` 贴出来，证明 `scripts/core/` 没被动。
