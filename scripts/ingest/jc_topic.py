@@ -2,7 +2,7 @@
 from pathlib import Path
 
 from core.log import logger
-from ingest import jc_write
+from ingest import jc_odds_write, jc_write
 from ingest.jc_read import read_lines
 from psycopg.types.json import Json
 from store.parse_collector import parse_line
@@ -37,6 +37,10 @@ def load_topic(cur, root: Path, marker: Path, topic: str, path: Path | None, sta
                 ups += jc_write.upsert_jc_offer(cur, p["row"], snap, src)
             else:
                 ups += jc_write.upsert_jc_result(cur, p["row"], snap, src, None, None)
+    elif topic == "jc_odds_history":
+        for env in lines:
+            env["src_file"] = rel
+            ups += jc_odds_write.upsert_from_env(cur, env)
     else:
         logger.info("skip %s n=%d (2e 范围)", topic, n)
     gap, done = state == "missing", state != "missing" and state != "orphan"

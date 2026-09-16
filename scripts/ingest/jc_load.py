@@ -4,7 +4,7 @@ from contextlib import closing
 from pathlib import Path
 
 from core.log import logger
-from ingest.jc_read import files_for_batch, iter_markers
+from ingest.jc_read import OPTIONAL, files_for_batch, iter_markers
 from ingest.jc_topic import load_topic
 from store import pg
 
@@ -18,8 +18,8 @@ def load_batch(conn, root: Path, marker: Path) -> dict:
     topics, errors = [], []
     try:
         with conn.cursor() as cur:
-            for topic, cands in files_for_batch(root, marker, TOPICS).items():
-                for path, state in cands or [(None, "missing")]:
+            for topic, cands in files_for_batch(root, marker, TOPICS + OPTIONAL).items():
+                for path, state in cands or ([] if topic in OPTIONAL else [(None, "missing")]):
                     topics.append(load_topic(cur, root, marker, topic, path, state))
         conn.commit()
     except Exception as e:
@@ -40,8 +40,8 @@ def main(argv: list[str] | None = None) -> int:
             logger.info("batch %s ups=%d errors=%s", r["marker"],
                         sum(t["ups"] for t in r["topics"]), r["errors"])
         seen = {p for m in iter_markers(root, args.batch)
-                for cs in files_for_batch(root, m, TOPICS).values() for p, _ in cs or [] if p}
-        orph = [p for t in TOPICS for p in sorted((root / t).glob("*.jsonl")) if p not in seen]
+                for cs in files_for_batch(root, m, TOPICS + OPTIONAL).values() for p, _ in cs or [] if p}
+        orph = [p for t in TOPICS + OPTIONAL for p in sorted((root / t).glob("*.jsonl")) if p not in seen]
         try:
             with conn.cursor() as cur:
                 for p in orph: load_topic(cur, root, Path("orphan"), p.parent.name, p, "orphan")

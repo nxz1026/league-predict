@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from core.log import logger
+OPTIONAL = ("jc_odds_history",)
 
 
 def _stamp(name: str) -> datetime:
@@ -70,8 +71,8 @@ def _from_manifest(root: Path, man: dict[str, list[tuple[str, int]]],
             resolved.setdefault(hit[0], []).append((f"{hit[0]}/{rel}", decl))
     for topic in topics:
         entries = man.get(topic, []) + resolved.get(topic, [])
-        out[topic] = [(None, "missing")] if not entries else [
-            _check_entry(topic, root / rel, decl) for rel, decl in entries]
+        out[topic] = [] if not entries and topic in OPTIONAL else ([(None, "missing")]
+            if not entries else [_check_entry(topic, root / rel, decl) for rel, decl in entries])
     return out
 
 
