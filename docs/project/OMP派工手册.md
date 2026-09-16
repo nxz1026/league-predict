@@ -698,5 +698,8 @@ setsid bash ~/omp-resilient3.sh SMOKE1 /home/ubuntu/omp-smoke 300 1 ~/tickets/SM
        `W=$(pgrep -f "omp-resilient4.sh <TAG>")` → **先 `kill -TERM $W`**（先止住它自己重试）
        → 再 `TP=$(pgrep -P $W | tail -1)`（本轮 `setsid timeout` 的 pid，它就是组长）→ `kill -TERM -"$TP"`（**带负号杀整组，精确到本轮**）；
        → 最后 `pgrep -f "local/bin/[o]mp"` **只用来确认**"是否还有别的工单在跑"，**绝不拿它当 kill 的目标清单**。
+     · ✅ **已落成工具 `~/bin/stop-omp.sh <TAG>`**（15:36）：先记组长→再杀 wrapper→最后 `kill -TERM -<组>`；
+       合成用例验证过"**只杀本 TAG**"（停 FAKE 之后并行两单的会话毫发无损、`剩余omp=8`），
+       过程中还抓出两个自己的 bug：① `pgrep` 模式漏了 `omp-resilien[t]4` 的 `t` ⇒ 匹配不到；② "先杀 wrapper 再 `pgrep -P`" 会因孤儿子进程被 init 收养而抓不到组 ⇒ 顺序必须是**先记组**。
      · 另一条时间教训：`TZ=Asia/Shanghai date` 与 `date -u` 在同一轮里混着看，我会把 15:30 读成 15:34 进而误判"工人 5 分钟没动手"⇒
        **判断节奏前先用同一种时区把"现在几点"钉一次**。
