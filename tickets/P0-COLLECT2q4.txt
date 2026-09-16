@@ -14,9 +14,12 @@
  B2 `_resolve`（或它现在的等价物）里，**优先级**改成：
    ① 第一列**带** `topic/` 前缀 ⇒ 一切照旧（**这是正常路径，不许动它的行为**）；
    ② 丢前缀且该行**第三列有非空哈希** ⇒ 在**候选 topic 目录**里找 `body_hash(文件) == 声明哈希` 的那个 topic ⇒ **精确归属**；
-      **命中 0 个 ⇒ 不装载、不猜**，把 `f"manifest-hash-mismatch {rel}"` 塞进 `errors` 并 `logger.warning`（**这就是半传/内容被改的告警**）；
-      **命中 ≥2 个 ⇒ 同样不猜**，塞 `f"manifest-hash-ambiguous {rel}"` 进 `errors`；
-   ③ 丢前缀且第三列为空/`undefined`（老包、`.empty` 行）⇒ **退回今天的"按行数"逻辑**，一行语义都不许多改（**不许有回归**）。
+      **命中 0 个 ⇒ 不装载、不猜**，`logger.warning("manifest-hash-mismatch rel=%s 声明=%s", rel, decl_hash)` 后 `return None`；
+      **命中 ≥2 个 ⇒ 同样不猜**：`logger.warning("manifest-hash-ambiguous rel=%s 声明=%s 命中=%d", ...)` 后 `return None`；
+      ⚠️（队长 15:56 自纠）**上一版"塞进 errors"的要求作废**：`errors` 列表在 `jc_load.load_batch()` 里、而本单禁改那个文件 ⇒
+      一律改成**上面这两条固定关键字的 `logger.warning`**（`return None` 就走既有"消歧失败"路径 ⇒ 行为与今天完全一致）；
+      报警 grep 由队长的 `~/bin/jc-ingest-run.sh` 负责，**你不动工具**。
+      ③ 丢前缀且第三列为空/`undefined`（老包、`.empty` 行）⇒ **退回今天的"按行数"逻辑**，一行语义都不许多改（**不许有回归**）。
  B3 **候选 topic 集合**必须来自现有 `TOPICS`/`OPTIONAL` 常量，**不许写死目录名列表**（他们以后加 topic 要自动生效）。
  B4 ❕**禁止**按"清单行序"（1=jczq_offer…7=lottery_draw）来归属——那个顺序我只是记录进了 §9-85 当旁证，**对方随时可能改顺序**，依赖它就是埋雷。
  B5 函数体 ≤50 行 ⇒ 需要就再拆一个小函数；**不许**为了省行数把三档优先级塞成一行表达式。
@@ -30,8 +33,8 @@
     跑之前先记 `select count(*) from fact.jc_offer` 与 `gaps`（`ops.file_arrival` 里 `#MISSING`）⇒ **跑完 gaps 必须与跑前同一个数**，
     `fact.jc_offer` 必须**只增不减**；`errors=[]`（**真包 7/7 哈希都命中 ⇒ 不该出现 mismatch**；一旦出现，说明我把定义写错了，**立刻停下贴证据给我**）。
  T3 **老包不回归**：拿一份**丢前缀且第三列是 `undefined`/空**的历史包（`/srv/league-staging/incoming/cn-collector` 里 01-13 之前的老批次，或 `/tmp/incoming` + `--batch 2026-09-15T15-16-32Z`）
-    ⇒ 走 ③，`ups=15`（`§9-82`：夹具判据必须带批次二元组）且 `errors=[]`。
+    ⇒ 走 ③，`ups=15`（`§9-82`：判据是 `(目录, --batch)` 二元组 ⇒ `--dir /tmp/incoming --batch 2026-09-15T15-16-32Z`）且 `errors=[]`。
  T4 红线与全量：`python3 ~/bin/omp-ast-check.py scripts/ingest/jc_manifest.py` → **0 违规**；`wc -l` 该文件 ≤100；
     `PYTHONPATH=.:scripts python -m pytest tests -q` → **0 failed**（passed 数与开工前 T0 基线一致或更多，两个数都贴出来）。
 
-【D. 交付】报告 `.omp-logs/P0-COLLECT2q4.report.txt`，按 `== T1 ==`…`== T4 ==` 分段贴原始输出；全绿再 `echo TASK_DONE > .omp-logs/P0-COLLECT2q4.done`。
+【D. 交付】报告 `.omp-logs/P0-COLLECT2q4b.report.txt`，按 `== T1 ==`…`== T4 ==` 分段贴原始输出；全绿再 `echo TASK_DONE > .omp-logs/P0-COLLECT2q4b.done`。
