@@ -544,3 +544,13 @@ setsid bash ~/omp-resilient3.sh SMOKE1 /home/ubuntu/omp-smoke 300 1 ~/tickets/SM
      · 为什么现在不给 `is_close` 真值：CLV 要的"收盘价"= **官方停止销售前最后一版**；没有状态字段就只能靠"别的数据"推
        （`fact.jc_offer` 的快照序列在**该场开售窗口结束**后不再出现该 `matchId`；或 `jczq_result` 出现该场 ⇒ 已完场）⇒ 这是**跨表派生**，
        属于 `analysis.jc_close_price` 单独一张工单的活（队列里排在 3b 接线之后），**绝不允许在解析器/写手里顺手写死**（那是"插错"，红线：宁可不插，不可插错）。
+71. **队长错账 #11：我在 `2q3b` 的 T3 写了"幂等 ⇒ 第二次必须 `orphan 装载 n=0`"——这条判据本身是错的**
+     （2026-09-17 12:04 我自己跑 `jc-ingest-run.sh` 两次都是 **`n=14`** 才发现）。
+     原因：**孤儿的定义就是"永远不会有 marker 的文件"** ⇒ `seen` 是按 marker 现算的，孤儿**每次都照样不在 `seen` 里**
+     ⇒ 每次装载都重新捞这 14 个文件。**这不是 bug**：走的是 `on conflict do update` 的 upsert ⇒
+     库里**不新增行**（`ops.file_arrival` PK=`(topic,src_file)`，14 条反复刷新 `rows/bytes/done_marker`），
+     `fact.*` 同理按业务主键 upsert ⇒ **代价只是每天 144 趟多读 14 个小文件**（实测整个装载 25–30 s，完全可接受）。
+     ⇒ **正确判据（以后写死）**：幂等 = **"第二趟 `fact.jc_offer/jc_match/jc_result` 与 `ops.file_arrival` 总行数与第一趟完全相同"**，
+     而**不是** "`n` 变 0"。想 `n→0` 只能靠"查 arrival 里已装过的孤儿 src_file 再跳过"（**+3 行**），
+     但 `jc_load.py` 现在 **99 行装不下** ⇒ 归到 `P0-JCSPLIT` 搬家之后再议；在那之前**每次 n=14 是正常态，别当报警**。
+     自我检讨一句：这条和 §9-69 是同一类错——**我把"我以为的行为"写成了判据**，而没有先在** HEAD 代码**上跑一遍再说"必须是多少"。
