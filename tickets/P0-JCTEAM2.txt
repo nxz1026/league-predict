@@ -1,0 +1,56 @@
+# P0-JCTEAM2 — 球队解析路径正规化（队长热修 P0-JCTEAM1 的收尾）
+
+> 背景：`c448ad5` 队长热修了两颗雷（coder 基础设施 11:20:30 断流 + 数据每 10 分钟被销毁，
+> 不能等）。工单要收尾，不是重做。
+
+## 现状（真盘核验，2026-09-16）
+- `jc_topic.py` 已调用 `jc_write._team(cur, home_sporttery_id, away_sporttery_id)`，
+  `jc_match` 的 `home/away_team_id` 每轮入库自动解析：36 场 → 10 场对齐（西甲 9/9），重跑幂等。
+- `_team` 的参数 bug 已修：`cur.execute(sql, ([...] ,))`（原先漏外层括号 ⇒ 列表被拆成 N 个标量参数，
+  SQL 只有 1 个 `ANY(%s)` 占位符 ⇒ 双边有 id 的比赛全崩）。
+
+## 待收尾（4 件）
+
+1. **`_team` 改成公开 API**
+   `scripts/ingest/jc_write.py:33` 的 `_team` 带下划线前缀（模块私有约定），
+   但 `jc_topic.py` 跨模块调用它。改名为 `resolve_jc_teams` 并去掉前缀；
+   `jc_topic.py` 同步改调用点。行为不变，纯命名。
+
+2. **删掉 `upsert_jc_result` 的死参数**
+   `jc_write.py:91` `upsert_jc_result(cur, row, snap, source, home, away)` 收了 `home`/`away`
+   但**从未使用**（`cols` 无 `team_id`，`data` 不含它）⇒ 调用方 `jc_topic.py:40` 传的 `None, None`
+   是纯噪声。删掉这两个参数与调用点的实参。
+   ⚠️ 不要顺手给 `fact.jc_result` 加 `team_id` 列——那是 DDL 变更，另开工单，本单不碰库结构。
+
+3. **补测试**（当前 `tests/` 里没有任何用例覆盖 team_id 填充）
+   新增 `tests/test_jc_team_resolve.py`，覆盖：
+   - `resolve_jc_teams`：单边有 id / 双边有 id / 双边都无 id / 库内无对应 alias（→ None）
+   - **参数形状回归**：`ANY(%s)` 必须收一个含列表的元组，不是列表本身
+     （用 `pytest.raises(psycopg.ProgrammingError)` 或 mock 断言参数是 `([...],)` 形状）
+   - **cron 冲刷回归**（本单最重要）：先 insert 一条 `jc_match`（`home_team_id=NULL`），
+     再跑 `upsert_jc_match` 带解析结果，断言 `home_team_id` **不为 NULL**；
+     然后**再跑一次相同数据**（模拟下一轮 cron），断言仍然不为 NULL。
+     这条测试就是拦 `jc_topic.py` 回归到 `None, None` 的闸门。
+   - 库写测试照现有模式：`tests/conftest.py` 的测试库夹具，测完清理自己插的行。
+
+4. **`_team` 的 `SELECT ... WHERE (aliases->>'sporttery') = ANY(%s)` 加索引**（若缺失）
+   查 `ref.team` 上有没有 `aliases->>'sporttery'` 的表达式索引：
+   ```sql
+   select indexname, indexdef from pg_indexes
+    where schemaname='ref' and tablename='team' and indexdef ilike '%sporttery%';
+   ```
+   没有就 `create index if not exists idx_team_sporttery on ref.team ((aliases->>'sporttery'));`
+   （`ref.team` 现在 128 行，量小不会痛，但 cron 每 10 分钟跑、每次每个 topic 都查，迟早要）
+   ⚠️ 这条是 DDL，**先 `if not exists`**，并且把索引名写进 `docs/db/` 留痕。
+
+## 验收
+- `PYTHONPATH=scripts ~/.venvs/league/bin/python -m pytest tests -q` 全绿（当前基线 **457 passed**）
+- `bash ~/bin/jc-ingest-run.sh` 后 `select count(*) filter (where home_team_id is not null and away_team_id is not null) from fact.jc_match` **≥ 10**（当前 10）
+- 跑两遍，数字不变（幂等）
+- `grep -rn "_team" scripts/` 无跨模块调用残留
+
+## 红线
+- ≤100 行/文件 · ≤50 行/函数 · ≤120 列 · 0 print
+- 不许动 `scripts/core/`、`web/`、`static/`（`~/bin/league-accept.sh:46` 判 `git status` 命中即 FAIL）
+- 不许调 AF 接口（配额源默认关）
+- 不许给 `fact.jc_result` 加列
