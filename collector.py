@@ -334,12 +334,39 @@ def collect_all() -> int:
         rc |= collect(topic)
     return rc
 
-def collect_batch(topics: list) -> int:
-    """§6 B1：一批 = 全部 topic 齐全。每个指定 topic 各落一个文件（.jsonl 或 .empty），缺一个都不行。"""
+def collect_batch(topics: list) -> tuple[int, list]:
+    """§6 B1：一批 = 全部 topic 齐全。每个指定 topic 各落一个文件（.jsonl 或 .empty），缺一个都不行。
+
+    返回 (rc, 本批实际产出的文件路径列表)。
+    """
     rc = 0
+    paths = []
     for topic in topics:
-        rc |= collect(topic)
-    return rc
+        paths.append(collect_topic(topic))
+    return rc, paths
+
+
+def collect_topic(topic: str) -> Path:
+    """单 topic 采集 + 落文件，返回产出路径（.jsonl 或 .empty）。"""
+    spec = CONFIG["topics"].get(topic)
+    if not spec:
+        print(f"[collect] 未知 topic: {topic}")
+        raise ValueError(topic)
+    snap_ts = now_utc()
+    today = datetime.now(CN_TZ).strftime("%Y-%m-%d")
+    yesterday = (datetime.now(CN_TZ) - timedelta(days=1)).strftime("%Y-%m-%d")
+    today_minus_3 = (datetime.now(CN_TZ) - timedelta(days=3)).strftime("%Y-%m-%d")
+    today_minus_7 = (datetime.now(CN_TZ) - timedelta(days=7)).strftime("%Y-%m-%d")
+    rows = []
+    for url in spec["candidates"]:
+        url = (url.replace("{today}", today).replace("{yesterday}", yesterday)
+               .replace("{today_minus_3}", today_minus_3).replace("{today_minus_7}", today_minus_7))
+        rec = fetch(url)
+        rows.extend(_PARSERS[topic](url, rec, snap_ts))
+    path = write_batch(topic, rows)
+    _update_status(last_collect=topic, last_collect_at=now_utc())
+    print(f"[collect] {topic}: {len(rows)} 行 → {path}")
+    return path
 
 
 def probe() -> int:
@@ -393,31 +420,21 @@ def probe() -> int:
     pack = out_dir / "probe_pack.tar.gz"
     with tarfile.open(pack, "w:gz") as tf:
         tf.add(out_dir / "probe_results.json", arcname="probe_results.json")
-def _manifest(out_dir: Path, topics: list) -> str:
-    """§G(A)：.done 文件内写清单。每行 <相对路径>\t<行数>\t<逐行哈希聚合>。
+def _manifest(paths: list) -> str:
+    """§G(A)：.done 清单。每行 <相对路径>\t<行数>\t<逐行 src_hash 级联>。
 
-    只列本批 topics 目录下最新一个文件（__NNN 最大）。远端以清单为准。
-    空文件（.empty）行数为 0、聚合列空。
+    只列本批实际产出的文件（paths，来自 collect_batch）；tar 与清单一一对应，
+    无孤儿、无 double-list。.empty → 行数 0、级联列空。
     """
     lines = []
-    for topic in topics:
-        tdir = out_dir / topic
-        if not tdir.exists():
-            lines.append(f"{topic}/\t0\t")
-            continue
-        files = [f for f in tdir.iterdir() if f.is_file()]
-        if not files:
-            lines.append(f"{topic}/\t0\t")
-            continue
-        # 取本批最新文件（__NNN 最大；同一 topic 一批只产一个文件，无 __002 分片）
-        latest = max(files, key=lambda f: f.name)
-        rel = latest.relative_to(out_dir).as_posix()
-        if latest.suffix == ".empty":
+    for p in paths:
+        rel = p.name
+        if p.suffix == ".empty":
             lines.append(f"{rel}\t0\t")
         else:
             h = hashlib.sha256()
             n = 0
-            with open(latest, "r", encoding="utf-8") as fh:
+            with open(p, "r", encoding="utf-8") as fh:
                 for line in fh:
                     line = line.strip()
                     if not line:
@@ -429,29 +446,26 @@ def _manifest(out_dir: Path, topics: list) -> str:
 
 
 def push_batch(topics: list) -> int:
-    """B1+B2+G(A)：采集全部指定 topic → 原子写 .tmp → rename → 最后写 .done 清单 → 推远端。
+    """B1+B2+G(A)：采集全部指定 topic → 打包本批产出文件 → 远端落盘 → 最后写 .done 清单。
 
-    流程：collect 各 topic 落 out/（.jsonl/.empty）→ 打包只含本批 7 topic 文件（禁探针包）→
-    远端 tar 解到 .staging/（B2 原子性）→ 逐文件 rename 到 topic 目录 → 最后写 .done（含清单）→ chown。
+    流程：collect_batch 各 topic 各产一个文件（.jsonl/.empty，记 paths）→ tar 只含本批 paths
+    （topic/ 前缀）→ 远端解 staging → 逐文件 mv 到 topic 目录 → 最后 install .done（清单=paths）→ chown。
+    保证：每个推上来的文件被恰好一个 .done 覆盖（不多、不少、无 double-list、无孤儿）。
     """
-    rc = collect_batch(topics)
+    rc, paths = collect_batch(topics)
     out_dir = ROOT / "out"
     if not out_dir.exists():
         print("[push_batch] out/ 不存在")
         return 1
     batch_ts = now_utc().rstrip("Z").replace(":", "-")
-    # 打包：只含本批 topic 文件（探针包/旧批次不混入 incoming/）
+    # 打包：只含本批实际产出的文件（paths），topic/ 前缀；旧批次不混入
     pack = ROOT / "out.tar.gz"
     with tarfile.open(pack, "w:gz") as tf:
-        for topic in topics:
-            tdir = out_dir / topic
-            if tdir.exists():
-                for f in sorted(tdir.iterdir()):
-                    if f.is_file():
-                        tf.add(f, arcname=f"{topic}/{f.name}")
+        for p in paths:
+            tf.add(p, arcname=f"{p.parent.name}/{p.name}")
     # 本地先写 .done 清单文件（B2：远端 install .done 是最后一步）
     done = f"{batch_ts}Z.done"
-    manifest = _manifest(out_dir, topics)
+    manifest = _manifest(paths)
     done_local = ROOT / "out.done.tmp"
     done_local.write_text(manifest, encoding="utf-8")
     staging = f".staging_{batch_ts}"
