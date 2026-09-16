@@ -32,7 +32,7 @@ def upsert_jc_odds_history(cur, rows: list[dict], src: dict) -> int:
         try:
             cur.execute("savepoint rh")
             cur.execute(_SQL, params)
-            n += 1
+            n += cur.rowcount or 0
             cur.execute("release savepoint rh")
         except Exception as exc:
             cur.execute("rollback to savepoint rh")
