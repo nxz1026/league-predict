@@ -479,3 +479,15 @@ setsid bash ~/omp-resilient3.sh SMOKE1 /home/ubuntu/omp-smoke 300 1 ~/tickets/SM
           **只检工单授权可写的路径**（别检全仓 —— `predictions/*.json`、我自己的 `tickets/`、`docs/` 常年是脏的，
           我第一版就是全仓检查，被 `ai_scores.json` 误伤成 `DIRTY-ABORT`）；脏就 `exit 2` 交回队长看 diff，
           **绝不允许新尝试在"半个文件"上续写**（这正是 §9-63 那批伪 gap 的成因）。
+65. **建了表却没把 DDL 文件提交进 git ⇒ 环境不可重建，而且当场发现不了**
+     （2026-09-17 10:36 队长自查发现：`fact.jbq_match / jbq_offer / jbq_result` 三张表在库里活了两天、有数据、被工单当靶子用，
+     但 `docs/db/` 里**根本没有** `infra_p0_10_jbq_tables.sql` —— 我当时是在 `/tmp` 里执行完就直接开工单，文件没落进仓库）。
+     危害不是"少个文档"：① 换机/重建库会**少三张表**，装载器上线才炸；② 表形状只能靠 `information_schema` 反查，
+     于是**任何"列名写错"类验收（`jc-cols-check.py`）都在拿现状当规范**，等于没有规范；③ 我自己写工单时的"列清单"就变成口述。
+     ⇒ 三条规矩：
+       ① **DDL 与执行必须同一提交**：`psql -f docs/db/xxx.sql` 之前那个 commit 就得包含这个文件（不是执行之后再补）；
+       ② 新工具 **`~/bin/jc-ddl-audit.py`**：拿 `information_schema.tables` 全量基表逐张去 `docs/db/*.sql` 里找 `create table <schema>.<表>`，
+          **缺一张就 exit=1**；已反证过（把补回来的文件临时挪走 ⇒ 准确报出那三张、exit=1；放回 ⇒ 38/38 exit=0）；
+          ⇒ **每次验收 DDL 类工单、以及装 cron 之前跑一次**。
+       ③ 反向补文件之后必须**证明它可信**：把 `fact.` 换成临时 schema 在**一个 `begin … rollback` 的事务**里重放，
+          比对"表数 / 约束数 / 列数"与运行库一致（我这次是 **3 / 19 / 61** 两边全等），才准写"已核对"。
