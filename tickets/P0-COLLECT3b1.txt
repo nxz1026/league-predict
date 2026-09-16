@@ -1,0 +1,57 @@
+【项目】league-v2（§2-D7 ≤100 行/文件、≤50 行/函数、≤120 列 硬红线；§9：报告用锚点、禁 git、禁 print、不许放宽红线）
+【这一单**只新建一个纯解析器**：`scripts/store/parse_odds_hist.py`（**≤100 行、函数 ≤50 行**）——**不碰库、不接线、不改任何现有文件**】
+ 它是 `P0-COLLECT3b`（盘口**全历史** → `fact.jc_odds_history`，契约 v1.4）的第一步：把一行的 `payload` 摊成"每玩法每版一行"的记录。
+ 【🅣 第 1 个动作就 write 这个新文件 + 一个新测试文件，改完之前一行测试都不许跑（§9-66②）。】
+【A. 输入形状（队长 11:44 用真夹具逐键量过，照抄别去查）】
+ 夹具：`tests/fixtures/odds_history/finished_卡塔尔亚vs韩国亚__2041482.jsonl`（1 行 11714 B）与
+       `onsale_柏太阳神__2041495.jsonl`（1 行 2955 B）；**每行是一整个契约 v1.3 信封**（`kind/topic/snap_ts/fetched_at/endpoint/http_status/collector_host/payload/src_hash`）。
+ `payload` 顶层**恰好 16 个键、没有 `value` 包装**：
+   `matchId`(int) `leagueId`(**字符串 `'83'`！**) `homeTeamId`/`awayTeamId`(int) `homeTeamAbbName`/`homeTeamAllName`/`awayTeamAbbName`/`awayTeamAllName`(str)
+   `leagueAbbName`/`leagueAllName`(str) `singleList`(list) + 五个玩法数组 **`hadList` `hhadList` `crsList` `ttgList` `hafuList`**
+ ⇒ **玩法名映射**：`hadList→'had'`、`hhadList→'hhad'`、`crsList→'crs'`、`ttgList→'ttg'`、**`hafuList→'haf'`**（**注意：键名是 hafu，玩法码是 haf**，与 `fact.jc_offer` 一致）。
+ · 五个数组**一律"最新在前、最早在后"**（实测 `arr[0]` 时间最大）；
+ · 每条价格记录的键 = 价格键 + 三个元数据键 `updateDate`(`'2026-09-15'`) `updateTime`(`'18:09:00'`) `goalLine`；
+   `had/hhad` 的价格键 = `h hf d df a af`；`crs` = `s…`/`s…f` 一堆；`ttg` = `s0…s7`+f；`haf` = `ah/aa/ad/…`+f（**键随玩法变，别硬列**）；
+ · `goalLine` **只有 `hhad` 非空**（实测 `'+2'`），其余玩法是 `''`；
+ · ⚠️ **时间是北京时间（Asia/Shanghai 墙上时钟）**，载荷里没有时区信息。
+【B. 公开面（就这两个名字，`jc_odds_write.py` 与测试都按这个签名调）】
+```
+def parse_history(payload: dict) -> list[dict]:   # 一版一行；payload 缺/空 ⇒ 返回 []（**不许抛**）
+def parse_env(env: dict) -> list[dict]:           # 取 env["payload"] 调 parse_history；非 v1.4 形状 ⇒ []
+```
+ `parse_history` 返回的每个 dict 的键**就是 `fact.jc_odds_history` 的列名**（写手将来直接对着插值，不做二次翻译）：
+   `match_id`(int) `play_type`(str 五个之一) `seq_no`(int，**0 = 最早一版** ⇒ 从尾往前数：`seq_no = len(arr)-1-index`)
+   `update_ts`(**`datetime` 且带 tzinfo**，用 `zoneinfo.ZoneInfo("Asia/Shanghai")` 解释墙上时钟，**不许用运行机时区**——本机正好是 +08，会掩盖 bug)
+   `goal_line`(`str|None`，`''` ⇒ **None**) `goal_line_value`(`float|None`，`'+2'` ⇒ `2.0`；不可解析 ⇒ None 且**保留 `goal_line` 原文**)
+   `odds`(**dict**：该条记录**去掉 `updateDate`/`updateTime`/`goalLine` 之后剩下的全部键值**，值原样保留为字符串)
+   `is_first`(bool：**只有 `seq_no==0` 为 True**) `is_close`(**恒 False**，见 E) `league_id`(`int|None`：`str.isdigit()` 才转，否则 None)
+   `src_hash`(取信封 `src_hash`) `src_file`(取信封里那行的来源文件名；`parse_history` 拿不到就留 `""`，由 `parse_env`/写手补)
+【C. 必须成立的硬数字（这就是你的测试，写进 `tests/test_parse_odds_hist.py`，**不许改成"看着像"的值**）】
+ 1) 两份夹具 `parse_env` 合计 **34 条**；分玩法 **had 7 · hhad 9 · crs 6 · ttg 6 · haf 6**；
+ 2) 单份：`finished` **29 条**（had 6 · hhad 8 · crs 5 · ttg 5 · haf 5）、`onsale` **5 条**（每玩法 1）；
+ 3) `seq_no`：**0 = 最早** ⇒ `finished` 的 had `seq_no` 集合 = `{0,1,2,3,4,5}`；`hhad` = `{0..7}`；`crs/ttg/haf` = `{0..4}`；
+ 4) `finished` 的 had **`seq_no==0` 那条 `update_ts == datetime(2026,9,15,1,39,39, tz=timezone.utc)`**（= 北京 09:39:39），
+    **`seq_no==5` 那条 == datetime(2026,9,15,10,9,0, tz=utc)**（= 北京 18:09:00）；两条 `utcoffset()` 都必须 `== timedelta(0)`（**证明不是拿本机时区凑的**）；
+ 5) `is_first` 为 True 的条数 == **10**（= 2 份 × 5 玩法）；`is_close` 为 True 的条数 == **0**；
+ 6) `goal_line` 非 None 的条数 == **9**（全在 `hhad`），且这些条 `goal_line_value` 都是 float；`odds` 里**不含** `updateDate/updateTime/goalLine` 三个键，
+    `had/hhad` 的 `odds` 键集合恰为 `{h,hf,d,df,a,af}`；
+ 7) `league_id`：`finished` ⇒ `int 83`；给一个 `leagueId='abc'` 的 payload ⇒ `None` 且**不抛**；
+ 8) 健壮性：`parse_history({})`、缺 `hadList`、`hadList=[]`、数组里少 `updateTime` ⇒ **一律返回可用的子集或 `[]`，绝不抛异常**（写手会一行一行喂，抛一次就断一批）。
+【D. 不许做】不许连库（**这个模块不许 `import store.pg` / ` psycopg` / `ref.team` 任何东西**）；不许改 `parse_collector.py`/`jc_load.py`/`jc_read.py`/`jc_write.py`
+ （**`jc_load.py` 正被 `P0-COLLECT2q3b` 改，碰都别碰**）；不许碰 DDL；不许写 `/srv/league-staging/**`；**不许动 `ref.team`（D3）**；禁 git；禁 print；演练一律 `/tmp/…`。
+【T. 必须成立（按序跑，原始输出全进报告）】
+ T1 `python3 ~/bin/omp-ast-check.py scripts/store/parse_odds_hist.py tests/test_parse_odds_hist.py` → **0 违规**；`wc -l` 两个文件（解析器 **≤100**）
+ T2 `source ~/.venvs/league/bin/activate && PYTHONPATH=.:scripts python -m pytest tests/test_parse_odds_hist.py -q` → **C 那 8 组断言全绿**（原始输出）
+ T3 **回归没动别人**：`PYTHONPATH=.:scripts python -m pytest tests -q` → **428 + N passed**（N = 你新增的用例数，**0 failed**；贴出你数出来的 N）
+ T4 **不碰库自证**：`grep -nE "import|from" scripts/store/parse_odds_hist.py` → 只准出现 `json/datetime/zoneinfo/typing/collections` 之类标准库（**贴原文**）
+ T5 现状体检不受影响：`bash ~/bin/jc-ingest-run.sh` → `rc=0`、`select count(*) from ops.file_arrival where src_file like '%#MISSING%'` 跑前跑后相等（基线 **14**）
+【铁律】① 禁 git；② 禁 print；③ ≤100/≤50/≤120；④ **只新建解析器 + 一个测试文件**；
+ ⑤ 报告 `.omp-logs/P0-COLLECT3b1.report.txt`（T1~T5 原始命令 + 原始输出 + 两个文件行数）+ 全绿才 `echo TASK_DONE > .omp-logs/P0-COLLECT3b1.done`
+【边界】C1~C8 任何一条对不上 ⇒ **停下贴你实测的值**（那是我的量法或契约有变，**不许回头改断言凑绿**）；
+ 100 行装不下 ⇒ 停下贴 `wc -l`（我再决定是不是把 `crs/ttg/haf` 的键过滤拆成第二个模块）。
+【E. 顺手交代（不用你做）】`is_close` 这一列**本单永远留 False**：封盘版要靠"官方卖停/完场"状态判定，
+ 而 v1.4 载荷里那 16 个键**没有任何状态字段**（我量过）⇒ 收盘价派生留给下一张 `analysis.jc_close_price` 的单独工单，别在这儿猜。
+【验收（队长逐字复跑）】
+  PYTHONPATH=.:scripts python -m pytest tests -q
+  python3 ~/bin/omp-ast-check.py scripts/store/parse_odds_hist.py
+  LEAGUE_FROZEN_RE="scripts/(core|store/pg|ingest/jc_write)\.py|scripts/ingest/jc_(read|load)\.py" bash ~/bin/league-accept.sh P0-COLLECT3b1 scripts/store tests/test_parse_odds_hist.py

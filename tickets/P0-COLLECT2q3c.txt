@@ -1,0 +1,42 @@
+【项目】league-v2（§2-D7 ≤100 行/文件、≤50 行/函数、≤120 列 硬红线；§9：报告用锚点、禁 git、禁 print）
+【这一单**只改一行区域**：`scripts/ingest/jc_read.py` 的 `_manifest()` 里"取第二列"那一句（现 **97 行 ⇒ 净增 ≤1 行**）】
+ 防 **`IndexError` / `ValueError` 把整批炸掉**（cron 已上线 ⇒ 每天 144 趟，一趟崩就是 7 个 topic 全不装）。
+【🅣 第 1 个动作就 edit，改完之前一行测试都不许跑。】
+【A. 现状（队长 11:42 逐行读过，照抄别去查）】`_manifest` 里现在这两行：
+```
+        parts = line.split("\t")
+        rel, decl = parts[0].strip(), int(parts[1].strip() or "0")
+```
+ · 对方 `.done` 每行格式 = `<相对路径>\t<行数>\t<级联哈希>`，**分隔符是制表符**、行尾 **CRLF**（`splitlines()` 已吃掉 `\r`）；
+ · 实测两类违约：① **11:15 批整份清单被截断**（只有 1 行）；② 历史上有过**只有 1 列**的行 ⇒ 那时 `parts[1]` **直接 IndexError**；
+ · 另外 `or "0"` 现在还有个隐患：**空第二列会被当成"声明 0 行"** ⇒ 若盘上真有内容，会被判 `rejected`（行数不符）——这倒不致命，
+   但**"对方没写行数"和"对方写 0 行"应该同一种处理**（都走 `decl=-1` ⇒ 必然与真实行数不等 ⇒ 走既有 `rejected` 分支 + 日志可见）。
+【B. 唯一允许的改法（**净增 ≤1 行**，用 try/except，别加新函数、别加新参数）】
+ 把上面那句拆成：
+```
+        rel = parts[0].strip()
+        try:
+            decl = int(parts[1].strip())
+        except (IndexError, ValueError):
+            decl = -1
+```
+ ⇒ 语义：**列数不足 / 非数字 / 空 ⇒ `decl = -1`**；`-1` 永远不等于任何真实行数（`_count_lines` 只可能 ≥0）
+   ⇒ 该文件走 `_check_entry` 的 **`rejected`** 分支（**不误收、不崩、日志有 `manifest-mismatch`**）；
+   ⚠️ 别顺手把 `decl=-1` 改成"跳过该行"——**跳过就等于"清单没列这个 topic"**，会造出假 gap（§队长错账 #9 就是这类）。
+ 改完 `_manifest` 仍在 ≤50 行/函数、文件 ≤100 行（预计 **98**）。
+【C. 不许做】改 `_manifest` 以外的任何函数；改 `jc_load.py`（**`P0-COLLECT2q3b` 正在改它，碰都别碰**）；改 `jc_write.py`/DDL/夹具/解析器；
+ 删或改库里任何一行；往 `/srv/league-staging/**` 写（**只读**）；禁 git；禁 print；演练一律 `/tmp/…`。
+【T. 必须成立】
+ T1 **崩不了**：`/tmp/c1/` 造一份 marker：`<时刻>.done` 里写 **三行** —— ① 正常两列（列一个真放的 3 行 `jczq_offer/x.jsonl`）、
+    ② **只有第一列没有制表符**（`jczq_result/y.jsonl`）、③ 第二列是 `abc`；`PYTHONPATH=scripts python scripts/ingest/jc_load.py --dir /tmp/c1`
+    ⇒ **不得抛异常**（`rc=0` 或至少进程正常结束、日志出现 `rejected`/`manifest-mismatch`），②③ 两个文件**不许进库**；
+    贴原始输出（含 `select src_file, rows from ops.file_arrival where src_file like '%y.jsonl%' or src_file like '%2026-09-16T114200Z/%'` 之类能证明它们被记为 rejected 的行——**记不进 arrival 也算过，但要贴出日志**）。
+ T2 **正常清单不受影响**：`--dir /tmp/incoming` → `ups=15`、`--dir /tmp/incoming2` → `ups=40`、`errors=[]`（**与 2q3 验收时一字不差**）
+ T3 **实时目录**：`bash ~/bin/jc-ingest-run.sh` ⇒ `rc=0`、每批 `errors=[]`、
+    `select count(*) from ops.file_arrival where src_file like '%#MISSING%'` **跑前跑后相等**（当前基线 **14**）
+ T4 静态与回归：`python3 ~/bin/omp-ast-check.py scripts/ingest/jc_read.py` → 0 违规 + `wc -l`（**≤100**）；
+    `python3 ~/bin/jc-fk-audit.py fact` → exit=0；`… python -m pytest tests -q` → **428 passed / 0 failed**
+【铁律】① 禁 git；② 禁 print；③ ≤100/≤50/≤120；④ **只动 `_manifest` 那一句**；⑤ 报告 `.omp-logs/P0-COLLECT2q3c.report.txt`
+ + 全绿才 `echo TASK_DONE > .omp-logs/P0-COLLECT2q3c.done`
+【边界】T1 仍抛异常 ⇒ 停下贴 traceback；文件超 100 行 ⇒ 停下贴 `wc -l`（**别压注释硬挤**）。
+【验收（队长逐字复跑）】bash ~/bin/jc-ingest-run.sh && python3 ~/bin/jc-false-gaps.py && LEAGUE_FROZEN_RE="scripts/core/|scripts/ingest/jc_(load|write)\.py" bash ~/bin/league-accept.sh P0-COLLECT2q3c scripts/ingest/jc_read.py
