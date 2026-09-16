@@ -803,3 +803,15 @@ setsid bash ~/omp-resilient3.sh SMOKE1 /home/ubuntu/omp-smoke 300 1 ~/tickets/SM
      · 顺带纠正我自己工单里的一处**歧义**（下次写单避免）：我写"审计尾列 `src_hash/src_file` 由写手补"，又写"`COLUMNS` 白名单外一律 ValueError"
        ⇒ 工人就地把两列**先并进 row 再校验**（`jc_issue_write.py:55`），于是**每次调用必炸**（我用假游标实测：`ValueError: 指令含未登记列 ['src_file','src_hash']`）。
        规格应当写成**有序步骤**而不是并列条款（"① 只校验 `ins["row"]` ② 校验通过后**才**追加审计列到 cols+vals"）。
+100. **队长错 #20：psycopg3 的 jsonb 适配我写反了**（17:26 被工人用真错复现，工人自己改对了，我只补纪律）
+     · 我在 `2eA2` 里写"**不要手写 `Json(...)` 包裹，直接绑参数**"——**错**。`psycopg3` 对 **dict/list 不会自动适配到 `jsonb`**
+       （只自动适配 `datetime`/`date`），在 `sql.SQL(...).format()` 拼出来的 INSERT 上直接绑 dict 会
+       `psycopg.ProgrammingError: cannot adapt type 'dict' using placeholder '%s' (format: AUTO)`；
+       已验收的 `jc_write.py:85` 一直是 `"options": Json(row["options"])` ⇒ 我照抄姿势时**只抄了结构没抄适配器**。
+     · **判据修正**：`jsonb` 列一律 `Json(...)` 包裹（`from psycopg.types.json import Json`），其余类型直接绑参数。
+       教训：**"照抄已验收代码"时要连 import 行一起抄**（我只给了列名/表名规格，漏掉了 `Json` 这个 import）。
+     · **顺带抓到两张我此前不知道的 CHECK 约束**（`pg_constraint` 现查，之前从未在 DDL 文档里出现过）：
+       `jc_issue_n_matches_check: n_matches > 0` · `jc_issue_list_is_array: jsonb_typeof(draw_num_list)='array'` ·
+       `lottery_draw_prizes_array: jsonb_typeof(prizes)='array'` · **`jc_issue_draw_game_key_check: game_key IN ('sfc','jqc','bqc')`**
+       ⇒ 最后一条直接让工人**自造夹具炸**（他写了 `game_key: "901"`）⇒ **写工单/夹具时凡涉及 CHECK 列必须给真实枚举值**，
+       这也是"宁可不插，不可插错"在测试层的同一条红线。

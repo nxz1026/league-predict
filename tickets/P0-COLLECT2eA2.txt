@@ -37,7 +37,8 @@
     `n_matches/is_delay` = smallint；`status/equipment_count` = integer；
     **`draw_num_list/raw_head/numbers/prizes` = jsonb**；其余 = text。
   ⇒ **psycopg3 会把 Python 的 `datetime`/`date`/`dict`/`list` 自动适配到对应列**（真包里就是 18 个 datetime、120 个 date、124 个 dict、124 个 list），
-     所以**不要手写 `Json(...)` 包裹、也不要 `str()` 强转**——直接绑参数。
+     ⚠️（队长 17:28 修正：这条我原来写反了）psycopg3 对 **dict/list 不自动适配到 jsonb**，直接绑参数会 `ProgrammingError: cannot adapt type 'dict'`（工人实测、我已用假游标复现）⇒
+     **jsonb 列必须 `Json(...)` 包裹**（`from psycopg.types.json import Json`），与已验收的 `jc_write.py:85` 同姿势；`datetime`/`date` 保持直接绑参数（这两个是自动适配的）。
 · **空串事实**：真包里空串只出现在 `jc_issue_draw` 的三个 **text** 列（`delay_remark / pool_after_rj / sales_rj`，一批 7 个），
   **不落在任何时间戳/数值列** ⇒ 不会炸类型；但空串入库无意义 ⇒ **写手统一把 `""` 归一成 `None`**（一条规则，别做按列特例）。
 ────────────────────────────────────────

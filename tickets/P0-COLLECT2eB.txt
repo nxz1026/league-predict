@@ -1,0 +1,62 @@
+【项目】league-v2（§2-D7 硬红线：≤100 行/文件、≤50 行/函数、≤120 列；§9：禁 git、禁 print、报告用锚点）
+【单号】P0-COLLECT2eB　【产出】`.omp-logs/P0-COLLECT2eB.report.txt` + `.omp-logs/P0-COLLECT2eB.done`（.done 最后写）
+【前置】`P0-COLLECT2eA2` 已由队长验收（写手 `scripts/ingest/jc_issue_write.py` 在库里、测试全绿）——**本单只做接线，一字不改写手**。
+
+【这一单只做什么】把三个"写指令 topic"从 `skip` 变成"能落库"，改动面**只有两处**：
+  A. `scripts/ingest/jc_topic.py`（当前 **48 行**，上限 100 ⇒ 有 52 行余量）：加一个分支 + **逐条裸 SQL 保存点**
+  B. 新建 `tests/test_jc_topic_issue.py`：端到端（真夹具走 `load_topic()`）证明能落库、坏指令不废批、且**不留痕**
+【🛑 禁改】`jc_issue_write.py`（已验收）· `jc_load.py`（OPTIONAL 语义在里面）· `jc_read.py` / `jc_manifest.py`（哈希消歧刚落地）
+   · `jc_odds_write.py` / `jc_write.py` · 一切 `store/parse_*.py`（解析层，另单）· 一切 DDL · 一切夹具目录。
+【🛑 幂等保护（§9-84）】开工先 `grep -n "jc_issue" scripts/ingest/jc_topic.py`：
+   ⇒ 若分支**已在**且 `PYTHONPATH=.:scripts python -m pytest tests/test_jc_topic_issue.py -q` 已全绿 ⇒ **本单只剩补报告 + 写 .done，禁止重写**。
+
+【🅣 动作顺序（§9-66②）】先 write 测试文件，再改 `jc_topic.py`；两处都写完之前不要跑全量测试。
+
+────────────────────────────────────────
+【事实：照抄，别自己再查（队长 16:52–17:12 真包实测）】
+· 三个 topic 的解析器返回**同形状写指令**：`{"table","pk","row","notes"}`，且 `parse_line(env)` 返回**单个 dict（不是列表）**；
+  `table` 只会是 `fact.jc_issue` / `fact.jc_issue_draw` / `fact.lottery_draw` 三者之一（按 topic 一一对应）。
+· 每批真包指令数：`jc_issue=4`、`jc_issue_result=3`、`lottery_draw=120`（**这是设计事实，不是你的判据**——判据一律现测，§9-75）。
+· `jc_issue_result` 的 matchList **不产行**（只落在 `notes` 文字里）⇒ `fact.jc_issue_match` / `jc_issue_prize` **本单一行都不用管**（§9-96，另单）。
+· 写手公开面：`jc_issue_write.upsert_issue_instruction(cur, ins, src_hash, src_file) -> int`（返回 0/1；
+  表名/列不在它白名单内 ⇒ **抛 ValueError**）。**写手自己没有逐行保存点** ⇒ 隔离责任在**本单的接线层**（§9-99）。
+· 现网 `jc_topic.py` 结构（你只需对齐它）：`WRITE = ("jczq_offer", "jczq_result")`（第 10 行）、
+  `if topic in WRITE:`（第 28 行）里调 `parse_line`，否则第 45 行 `logger.info("skip %s n=%d (2e 范围)"…)`，
+  收尾统一走 `_ops(cur, topic, rel, size, n, ups, rej, gap, done)` 写 `ops.file_arrival` + `ops.ingest_log`。
+────────────────────────────────────────
+【A. `jc_topic.py` 要改成什么（逐条对齐，写法自由但语义必须一模一样）】
+ A1 新增常量（放在 `WRITE` 下一行）：`ISSUE = ("jc_issue", "jc_issue_result", "lottery_draw")`
+ A2 导入 `from ingest import jc_issue_write`（与既有 `from ingest import jc_odds_write, jc_write` 并排，**不要新起一行 import 路径**）
+ A3 在 `if topic in WRITE:` 之后、`skip` 分支之前，插入 `elif topic in ISSUE:` 分支，语义固定为：
+     · 逐行读 env（沿用本文件既有的行迭代方式，别新造一套）；`ins = parse_line(env)`；`if ins is None: continue`（`kind="error"` 行）
+     · **每条指令一个裸 SQL 保存点**（§9-78/§9-80：psycopg3 的 `Cursor` 没有 `.transaction()`、`Connection.transaction()` 没有 `savepoint=` 关键字，
+       **保存点必须建在循环体内**，否则会 `InvalidSavepointSpecification`）：
+         `cur.execute("savepoint iw")` → `n = jc_issue_write.upsert_issue_instruction(cur, ins, env.get("src_hash") or "", rel)` → `cur.execute("release savepoint iw")` → `ups += n`
+       失败路径：`except ValueError as e:` ⇒ `cur.execute("rollback to savepoint iw")` → `rej += 1` →
+         `logger.warning("issue-reject topic=%s 文件=%s 期=%s err=%s", topic, rel, (ins or {}).get("pk"), str(e)[:80])`
+       ⚠️ **只捕 `ValueError`**（白名单/列漂移/主键缺列都是它）；**不许捕 `Exception`**（数据库层错误必须炸给调用方，别藏）。
+     · 收尾调用既有 `_ops(...)`，参数姿势与本文件其它分支一致（`gap`/`done` 沿用现有算法，**不要自己发明**）。
+ A4 `skip` 分支**保持原样**（篮彩 `jclq_*` 仍必须走 skip —— 解析器至今 `raise`，§9-98；这是刻意的，不许"顺手接上"）。
+
+【B. `tests/test_jc_topic_issue.py`（照抄 `tests/test_jc_odds_write.py` 的连接姿势）】
+ B1 fixture：`conn = pg.connect("ing")` → `try: yield conn; finally: conn.rollback(); conn.close()`（**fixture 独占连接所有权**，§9-83；
+     测试体内**不要再套 `closing()`**，也不要自己 commit）；导入 `from store import pg`（**是 `store.pg`，不是 `core`**）。
+ B2 端到端**用真夹具**（不是自造 dict）：从 `/srv/league-staging/incoming/cn-collector/jc_issue/` 取最新一个 `.jsonl`，
+     逐行 `json.loads` 后调 `jc_topic.load_topic(cur, topic=..., lines=..., rel=...)`（**照 `tests/` 里既有 `load_topic` 用法**），断言：
+       ① 返回的 `ups > 0`；② **同一事务内** `select count(*) from fact.jc_issue` 与 `fact.jc_issue_draw` / `fact.lottery_draw` 之和 `> 0`；
+       ③ 幂等：同批**再跑一遍** ⇒ 三表行数不变、`last_seen_at` 变化、`first_seen_at` 不变。
+ B3 坏指令不废批：把一条指令的 `table` 改成 `fact.evil` 混进好指令里 ⇒ `rej=1` 且**好指令仍写入**（这是保存点隔离的唯一硬证据）。
+ B4 **不留痕**：收尾 `rollback()` 后**另开** `with pg.read_conn("ro") as c:` ⇒ `fact.jc_issue` / `jc_issue_draw` / `lottery_draw` **三表 count 全 0**
+     （`league_ing` 对 fact **没有 DELETE** ⇒ 全靠回滚，§9-83）。
+────────────────────────────────────────
+【必须成立（全绿才写 .done；两个数都贴，不许抄我写的数字 §9-75）】
+ T0 开工前先跑 `PYTHONPATH=.:scripts python -m pytest tests -q` 记基线数（今天 17:12 我实测 = **448 passed**；以你现测为准并点名差异）
+ T1 `PYTHONPATH=.:scripts python -m pytest tests/test_jc_topic_issue.py -q` → 全绿
+ T2 `PYTHONPATH=.:scripts python -m pytest tests -q` → **0 failed**（T0/收尾两个数都贴）
+ T3 **装载器真跑一次**：`bash ~/bin/jc-ingest-run.sh` → `rc=0`、日志里**不再出现** `skip jc_issue` / `skip jc_issue_result` / `skip lottery_draw`
+     （篮彩 `skip jclq_*` **必须仍然出现** —— 它没接线），并贴 `grep -a "消歧:" /tmp/jc-ingest-last.out` 那一行
+ T4 `python3 ~/bin/omp-ast-check.py scripts/ingest/jc_topic.py tests/test_jc_topic_issue.py` → **0 违规**；`wc -l` `jc_topic.py` **≤100**、函数 **≤50 行**
+ T5 `grep -c "print(" scripts/ingest/jc_topic.py` → **0**
+ T6 **`git status --porcelain scripts tests` 只允许出现 `jc_topic.py`、`tests/test_jc_topic_issue.py` 两项**（越界即 REJECT）
+【铁律】① 禁 git 写命令；② 禁 print；③ D7 红线；④ 只准动 A/B 两个文件；⑤ 要用户/采集机回话的事写【待确认】不猜。
+【边界】任何一条对不上：贴原始输出 + 点名行号，**停下**；**绝对禁止**为了变绿去改写手、改解析器、改 DDL、或往 `/srv/league-staging/**` 写东西。
