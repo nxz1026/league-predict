@@ -20,17 +20,17 @@ def iter_markers(root: Path, only: str | None = None) -> list[Path]:
     return [m for m in ms if m.name == key] if key else ms
 
 
-def _from_manifest(root: Path, man: dict[str, list[tuple[str, int]]],
+def _from_manifest(root: Path, man: dict[str, list[tuple[str, int, str]]],
                    topics: tuple[str, ...]) -> dict[str, list[tuple[Path, str]]]:
     out: dict[str, list[tuple[Path, str]]] = {}
-    resolved: dict[str, list[tuple[str, int]]] = {}
-    for rel, decl in man.get("", []):
-        if hit := _resolve(root, topics, rel, decl):
-            resolved.setdefault(hit[0], []).append((f"{hit[0]}/{rel}", decl))
+    resolved: dict[str, list[tuple[str, int, str]]] = {}
+    for rel, decl, dhash in man.get("", []):
+        if hit := _resolve(root, topics, rel, decl, dhash):
+            resolved.setdefault(hit[0], []).append((f"{hit[0]}/{rel}", decl, dhash))
     for topic in topics:
         entries = man.get(topic, []) + resolved.get(topic, [])
         out[topic] = [] if not entries and topic in OPTIONAL else ([(None, "missing")]
-            if not entries else [_check_entry(topic, root / rel, decl) for rel, decl in entries])
+            if not entries else [_check_entry(topic, root / rel, decl) for rel, decl, _h in entries])
     return out
 
 
