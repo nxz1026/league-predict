@@ -3,6 +3,11 @@
  为什么先搬家：`scripts/ingest/jc_read.py` 现在 **99 行**（2q1b 刚把清单消歧加进去），**红线只剩 1 行** ⇒
  任何后续改动都必须先把清单那一族函数搬到新模块，**不许靠压行/删注释硬挤**。
 【🅣 派工器会先验工区干净；第 1 个动作就 edit，改完之前一行测试都不许跑（这是 2q1b 之后定的新规矩，别"先量基线"）。】
+【♻ 上一轮的半成品（队长 10:44 存档 ⇒ **先读这两份再动手，允许照抄**）】
+ · `try 1` 在 10:42 **ACP 会话断流**（`[ACP 无返回]`，§9-64）时**已经完成 B 步搬家**：`jc_read.py` 99→36 行、新建 `jc_manifest.py` 68 行，
+   断在"改 `jc_read.py` 头部 docstring 与 import"那一步 ⇒ 留下**半个文件（字符串没闭合、不编译）**，我已还原成 HEAD（现在 `jc_read.py` 是干净的 99 行）。
+ · 草稿存档：`/tmp/2q2-jc_manifest.py`（68 行）与 `/tmp/2q2-draft.patch`（87 行 diff）。
+   `cat` 它们，**能用的直接用**（那是工人写的代码，不是我写的），不合适的自己写；但**必须自己过 B 步的 `jc-move-check` 证明**。
 
 【A. 现状（照抄，别去查）】
  · `jc_read.py`(99) 里有：`_stamp / iter_markers / _count_lines / _manifest / _check_entry / _resolve / _from_manifest / _window / files_for_batch / read_lines`；
