@@ -652,3 +652,12 @@ setsid bash ~/omp-resilient3.sh SMOKE1 /home/ubuntu/omp-smoke 300 1 ~/tickets/SM
      · 顺带一条正面记录：我用 `/tmp/mh` 造了**四行毒清单**（只有一列 / 第二列空 / 第二列 `xx` / 正常行重复）直接喂 `_manifest()`
        ⇒ **不崩**、三行毒行分别得到 `-1`（"声明不可知"）并走 `manifest-mismatch` / `manifest-file-missing` 记账，
        且**没有制造任何 gap 或 arrival 残留**（`select ... where src_file like '%11-42%'` = 0 行，gaps 前后都是 20）✔ `P0-COLLECT2q3c` 就是这个效果。
+83. **测试里"连接只能有一个所有者"**（2026-09-17 14:09，`3b2` 第三道坎；前两道是我的错规格 §9-78/§9-79）
+     · `store/pg.py:32 connect()` 的契约就写在 docstring 上：**"裸连接，不托管事务：调用方自行 commit/rollback"**；
+     · 工人很自然地写了 **fixture 里 `with closing(connection)` + 用例里再 `with closing(conn)`** ⇒ 同一条连接**关两次**：
+       第一个 `closing` 一关，后面所有断言与收尾 `rollback()` 全打在关闭连接上 ⇒ `OperationalError: the connection is closed`
+       （而且这种错**看起来像"我的写手坏了"**，实际是测试的连接所有权重叠）；
+     · **规定（以后凡"单事务 + 整体回滚"的写手测试照此写）**：
+       **fixture 独占所有权**（`try: yield conn / finally: conn.rollback(); conn.close()`），
+       用例体内**不许再套** `closing/with conn`；所有断言在 `finally` 之前完成；
+       "证明库里最终 0 行"必须**另开只读连接**（`with pg.read_conn("ro")`）——**同一事务内查不到未提交数据以外的东西，回滚后也不能复用刚关掉的连接**。

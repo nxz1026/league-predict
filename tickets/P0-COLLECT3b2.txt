@@ -72,3 +72,20 @@ def upsert_from_env(cur, env: dict) -> int                            # 调 pars
  ⇒ **唯一正确写法（不要再试任何 `*.transaction(savepoint=…)` 变体）**：
    `cur.execute("savepoint rh")` → 执行 insert → 成功 `cur.execute("release savepoint rh")` → 失败 `cur.execute("rollback to savepoint rh")` + `logger.warning` + `continue`。
  （psycopg3 里"嵌套事务自动开保存点"只有 `with conn.transaction():`，但它**不接受 `savepoint=` 参数**，而且放进 for 循环会让函数超 50 行 ⇒ 一律用裸 SQL。）
+【🩹 14:09 追加：`savepoint` 你已经改对了（我 grep 到 3 处、`assert 0 == 34` 也消失了），**现在只剩测试的连接收尾这一个错**：
+ · 症状：`psycopg.OperationalError: the connection is closed`，位置是 fixture 收尾的 `connection.rollback()`；
+ · 根因：你在 **fixture 里 `with closing(connection)`**、又**在每个用例里再来一次 `with closing(conn)`** ⇒ **同一条连接被关两次**，
+   第一个 `closing` 关闭后，第二个 `rollback()` 就打在已关闭的连接上（用例中间的断言也因此看不到未提交的数据）。
+ · `store/pg.py:32` 的 `connect()` 契约是"**裸连接、调用方自己管事务**"⇒ **只允许一个所有者**。修法（**照抄，别自己发明**）：
+```python
+@pytest.fixture()
+def conn():
+    connection = pg.connect("ing")
+    try:
+        yield connection            # 用例里**不要**再套 closing / with
+    finally:
+        connection.rollback()       # 先回滚（库里最终 0 行的保证）
+        connection.close()          # 再关
+```
+   用例体内：`cur = conn.cursor()` 直接用；所有断言**都在 `finally` 之前**跑完；查"库里最终 0 行"那一步
+   **另开一条只读连接**（`with pg.read_conn("ro") as c:`）——**不要在 rollback 之后复用同一条连接去查**。
