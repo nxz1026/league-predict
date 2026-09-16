@@ -1,0 +1,48 @@
+【项目】league-v2（§2-D7 ≤100 行/文件、≤50 行/函数、≤120 列 硬红线；§9：报告用锚点、禁 git、禁 print）
+【这一单是"盘口全历史"**接线**（第三步，也是最后一步）：把 `jc_odds_history` 这个 topic 接进入库链路——**净增 ≤14 行，分散在 3 个文件**】
+ 前置（都已完成，别重做）：`3b1` 解析器 `scripts/store/parse_odds_hist.py`(74) ✔ · `3b2` 写手 `scripts/ingest/jc_odds_write.py` ✔ · `P0-JCSPLIT` 把
+ `jc_load.py` 从 99 搬到 **66 行**（`_ops`/`load_topic` 现在在 `scripts/ingest/jc_topic.py`）✔ ⇒ **若这两个文件不在，停下告诉我**。
+【🅣 第 1 个动作就 edit（三个小改动，一次写完再跑测试）；判据一律"自量自比"（§9-75：cron 每 10 分钟动一次数，写死必过期）。】
+【A. 为什么必须特殊处理（**这是本单唯一有难度的地方，读懂再动手**）】
+ `jc_odds_history` 是**一天一趟**（契约 v1.4，对方 15:00 档采一次），而装载 cron 是 **`*/10` 一天 144 趟**。
+ 现在 `jc_read.py` 的 `TOPICS` 是**记账白名单**：`_from_manifest()` 对 `TOPICS` 里**每个** topic 都做
+ "清单没列 ⇒ `out[topic] = [(None,'missing')]` ⇒ 落一条 `#MISSING` gap"。
+ ⇒ **如果直接把新 topic 塞进 `TOPICS`，每天会凭空多出 143 条假缺档**（把 2q3 刚修干净的账本又搞脏，这是我明确不允许的）。
+ ⇒ 所以要新增一个**可选 topic** 概念：**只有清单里真的列了它，才处理；没列就当不存在，绝不记 gap**。
+【B. 三处改动（照抄，别扩）】
+ B1 `scripts/ingest/jc_read.py`（97 行 ⇒ ≤100）：
+   · 加一行常量 `OPTIONAL = ("jc_odds_history",)`；
+   · `_from_manifest()` 结尾**在现有 `for topic in topics:` 之后**加一小段：对 `OPTIONAL` 里、且在 `resolved`/`man` 中出现过的 topic，
+     按 `_check_entry` 同样口径补进 `out[topic]`（**没出现就什么都不做**）。**不许**改 `TOPICS` 本体、**不许**动 `_check_entry`/`_resolve`/`_window`。
+ B2 `scripts/ingest/jc_topic.py`（44 行 ⇒ ≤60）：`load_topic()` 里在 `if topic in WRITE:` 之后加 `elif topic == "jc_odds_history":` 分支
+   —— 逐行 `env` 调 `jc_odds_write.upsert_from_env(cur, env)` 累加 `ups`；单行异常 ⇒ `rej.append({"line": i, "reason": f"{type(e).__name__}:{str(e)[:120]}"})` 继续
+   （**坏行不炸批**，与 3b2 B3 同口径）；顶部补 `from ingest import jc_odds_write`。**不许**把 `jc_odds_history` 加进 `WRITE`（那是"双表 upsert"的名单，语义不同）。
+ B3 `scripts/ingest/jc_load.py`（66 行 ⇒ ≤80）：**只**把 orphan 兜底那两行的 topic 白名单从 `TOPICS` 扩成 `TOPICS + OPTIONAL`
+   （孤儿回收也认盘口历史目录），**别的一律不许动**。
+【C. 不许做】不许建表/`ALTER`（`fact.jc_odds_history` 已在）；不许改 `jc_write.py`(md5 锁)/`jc_odds_write.py`/`parse_odds_hist.py`/任何 DDL/任何夹具；
+ 不许碰 `ref.team`（D3）；不许写 `/srv/league-staging/**`；不许往真库**最终留行**（T3 用临时库/回滚证明）；禁 git；禁 print。
+【T. 必须成立（按序，原始输出全进报告）】
+ T0 **自量基线**（改之前）：`bash ~/bin/jc-ingest-run.sh` 之后立刻记 `A1=orphan n=?`、`A2=gaps=?`、`A3=fact.jc_odds_history 行数=?`（**必须是 0**）。
+ T1 **假 gap 不许增长（本单核心）**：改完之后**再跑一次** `bash ~/bin/jc-ingest-run.sh`
+    ⇒ `gaps` **仍 = A2**（±0；若 `+143` 就是你把它塞进 `TOPICS` 了 ⇒ 停下重做）、`orphan n` 与 A1 同、`errors=[]`。
+ T2 **可选 topic 真被处理**：临时演练目录 `/tmp/oh/`（**别碰 staging**）——
+    造一个 `oh/jc_odds_history/2026-09-17T06-00-00Z__001.jsonl`（内容 = 把 `tests/fixtures/odds_history/` 里**两份夹具原文**逐行拷进来，**别改一个字节**）
+    + `oh/2026-09-17T06-00-28Z.done` 只写一行 `jc_odds_history/2026-09-17T06-00-00Z__001.jsonl\t34`；
+    ⇒ `PYTHONPATH=.:scripts python scripts/ingest/jc_load.py --dir /tmp/oh --batch 2026-09-17T06-00-28Z`
+    ⇒ 期望：日志出现 `jc_odds_history` 且 `rows=34`；`select count(*) from fact.jc_odds_history` = **34**；
+      `select count(*) filter (where is_first) ... , count(*) filter (where goal_line is not null), count(*) filter (where is_close)` = **10 / 9 / 0**；
+      **再跑一遍同一条命令** ⇒ 行数**仍是 34**（PK upsert）、`gaps` 与 T1 相同（**这个演练不许造 gap**）。
+ T3 **收干净**：`sudo -n -u postgres psql -d league -c "delete from fact.jc_odds_history"` ⇒ 行数回到 **A3(=0)**；
+    并 `delete from ops.file_arrival where src_file like '%2026-09-17T06-00%'` ⇒ 演练痕迹清零（贴两条 `DELETE n` 原文）。
+ T4 **静态**：`python3 ~/bin/omp-ast-check.py scripts/ingest/jc_read.py scripts/ingest/jc_topic.py scripts/ingest/jc_load.py` → 0 违规；
+    `wc -l` 三个文件（**97→≤100 / 44→≤60 / 66→≤80**）；三个文件各净增多少行列出来（**合计必须 ≤14**）。
+ T5 **回归**：`source ~/.venvs/league/bin/activate && PYTHONPATH=.:scripts python -m pytest tests -q` → **`0 failed`**（基线 435+，按实测贴）；
+    `python3 ~/bin/jc-fk-audit.py fact` → exit=0；`python3 ~/bin/jc-false-gaps.py` → **判伪 0 条**。
+【铁律】① 禁 git；② 禁 print；③ ≤100/≤50/≤120；④ 只改 B1/B2/B3 三处；⑤ 报告 `.omp-logs/P0-COLLECT3b3.report.txt`（T0~T5 原始输出）
+ + 全绿才 `echo TASK_DONE > .omp-logs/P0-COLLECT3b3.done`
+【边界】T1 的 `gaps` 只要 **>A2** ⇒ 立刻停下（这就是"一天一趟 vs 十分钟一趟"的坑，别用"加过滤条件"绕，按 B1 的 OPTIONAL 做）；
+ 净增 >14 行 ⇒ 停下贴 `wc -l`；`fact.jc_odds_history` 最终不为 0 ⇒ 停下（说明 T3 没清干净）。
+【验收（队长逐字复跑）】
+  bash ~/bin/jc-ingest-run.sh        # gaps 必须与 T0 相同
+  sudo -n -u postgres psql -d league -Atc "select count(*) from fact.jc_odds_history"   # 必须 0
+  LEAGUE_FROZEN_RE="scripts/ingest/jc_write\.py|docs/db/" bash ~/bin/league-accept.sh P0-COLLECT3b3 scripts/ingest
