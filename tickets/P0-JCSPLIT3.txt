@@ -1,0 +1,29 @@
+【项目】league-v2（§2-D7 硬红线：≤100 行/文件、≤50 行/函数、≤120 列；§9：禁 git、禁 print、报告用锚点）
+【这一单做什么】**纯机械搬家**：把 `scripts/ingest/jc_read.py` 里的**清单解析四件套**原样搬进新文件 `scripts/ingest/jc_manifest.py`。
+ 目的：`jc_read.py` 现在 **99 行（只剩 1 行余量）**，下一单 `P0-COLLECT2q4` 要用 `.done` 第三列哈希做**精确消歧 + 半传检测**（§9-85），必须先腾地方。
+ ⚠️ **本单一行逻辑都不许改**（连变量名、日志文案、注释都不许多改）：**搬完了行为必须与搬之前完全一致**。
+
+【A. 只准动这两个文件】`scripts/ingest/jc_read.py`（变短）、`scripts/ingest/jc_manifest.py`（新建）。
+ 新建 `scripts/ingest/jc_load.py`/`jc_topic.py`/`jc_write.py`/解析器/DDL/夹具/测试 **一律禁止**（`jc_topic.py`/`jc_load.py` 此刻可能正被 `P0-COLLECT3b3` 改，**碰都别碰**）。
+
+【B. 搬家清单（我按 AST 量好的精确行区间，照抄即可）】从 `jc_read.py` 搬这 4 个函数（**连同它们各自的 docstring**）：
+   `_count_lines`（22–23 行）· `_manifest`（26–38 行）· `_check_entry`（41–50 行）· `_resolve`（53–61 行）  = 34 行
+ · 搬完 `jc_read.py` 里**删除**这 4 个函数定义，并在文件头加一行 `from ingest.jc_manifest import _count_lines, _manifest, _check_entry, _resolve`
+   （**必须用这种"再导出"写法**：`jc_read._manifest` 等旧名字要**照样可用**，别的模块和测试都是按 `jc_read.xxx` 引的）。
+ · 需要一起搬的 import 跟着走（`hashlib` 若原文件没用就别加）；`jc_manifest.py` 里**不要**引入新的第三方依赖。
+
+【C. 判据（全绿才准交 `.done`）】
+ T0 **先量基线**（搬之前跑，贴进报告）：`wc -l scripts/ingest/jc_read.py`、`PYTHONPATH=.:scripts python -m pytest tests -q`（期望 **441 passed**；
+   若此刻 `P0-COLLECT3b3` 正在改别的文件导致**你看到 441 以外的数**，把**搬前搬后两次数字都贴出来**，我要的是**增量不变**，不是绝对值）。
+ T1 **纯度自证**（这是本单的核心）：`python3 ~/bin/jc-move-check.py scripts/ingest/jc_read.py scripts/ingest/jc_manifest.py`
+   ⇒ 必须输出 `--- OK: 纯机械搬移`（该工具会比对搬出/搬入的 AST 与函数体文本，**改一个字都会报**）。**把这个工具的完整输出贴进报告。**
+ T2 **行为不变（离线，可写死数字）**：`PYTHONPATH=.:scripts python -m pytest tests -q` ⇒ **passed 数与 T0 相同、failed = 0**。
+ T3 **行为不变（实时目录，禁止写死、自己现测）**：
+   `bash ~/bin/jc-ingest-run.sh` ⇒ 记录 `rc=`、`orphan 装载 n=`、以及 `gaps`（`select count(*) from ops.file_arrival where src_file like '%#MISSING%'`）
+   ⇒ **本单不允许改变任何一条 gap**（搬家不改行为 ⇒ `gaps` 搬前搬后必须同一个数；若变了就是改到逻辑了，**停下告诉我**）。
+ T4 红线：`python3 ~/bin/omp-ast-check.py scripts/ingest/jc_read.py scripts/ingest/jc_manifest.py` → **0 违规**；
+   且 `wc -l` 两个文件都 **≤100**（预期 `jc_read.py` ≈ 67、`jc_manifest.py` ≈ 44）。
+ T5 全量：`PYTHONPATH=.:scripts python -m pytest tests -q` → **0 failed**。
+
+【D. 交付】报告写 `.omp-logs/P0-JCSPLIT3.report.txt`（本单文件名就是 `P0-JCSPLIT3.txt`）：
+ 按 `== T0 ==` … `== T5 ==` 分段贴**原始输出**，最后单独一行写两个文件的 `wc -l`。全绿再 `echo TASK_DONE > .omp-logs/P0-JCSPLIT3.done`。

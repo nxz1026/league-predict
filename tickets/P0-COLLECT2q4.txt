@@ -1,0 +1,37 @@
+【项目】league-v2（§2-D7 硬红线：≤100 行/文件、≤50 行/函数、≤120 列；§9：禁 git、禁 print、报告用锚点）
+【硬前置】`P0-JCSPLIT3` 必须先验收（清单四件套已搬进 `scripts/ingest/jc_manifest.py`，`jc_read.py` 已腾出余量）
+ ——**若 `jc_manifest.py` 不在，停下告诉我**，不要自己去改 99 行的 `jc_read.py`。
+【这一单做什么】用采集机 `.done` **第三列的级联哈希**给"丢了 `topic/` 前缀"的清单行做**精确归属**，并顺手做出**半传检测**。
+ 队长 14:52 已独立复算命中（§9-85）：`decl_hash == sha256( 文件逐行 utf-8 字节去掉换行按序拼接 )`，三批真包 **7/7 全命中**；
+ 现状是"按行数猜"（`_resolve`），**两个 topic 行数一旦相同就是猜** ⇒ 踩红线（宁可不插，不可插错）。
+
+【A. 只准动】`scripts/ingest/jc_manifest.py`（主战场）与它的测试 `tests/test_jc_manifest.py`（新建）。
+ **禁止**改 `jc_read.py` / `jc_load.py` / `jc_topic.py` / `jc_write.py` / 任何解析器 / DDL / 夹具 / 别的测试。
+
+【B. 要实现的语义（照抄，别自己发明）】
+ B1 新增一个**纯函数**（放 `jc_manifest.py`，不碰 DB）：
+   `def body_hash(path) -> str: return hashlib.sha256("".join(path.read_text(encoding="utf-8").splitlines()).encode("utf-8")).hexdigest()`
+ B2 `_resolve`（或它现在的等价物）里，**优先级**改成：
+   ① 第一列**带** `topic/` 前缀 ⇒ 一切照旧（**这是正常路径，不许动它的行为**）；
+   ② 丢前缀且该行**第三列有非空哈希** ⇒ 在**候选 topic 目录**里找 `body_hash(文件) == 声明哈希` 的那个 topic ⇒ **精确归属**；
+      **命中 0 个 ⇒ 不装载、不猜**，把 `f"manifest-hash-mismatch {rel}"` 塞进 `errors` 并 `logger.warning`（**这就是半传/内容被改的告警**）；
+      **命中 ≥2 个 ⇒ 同样不猜**，塞 `f"manifest-hash-ambiguous {rel}"` 进 `errors`；
+   ③ 丢前缀且第三列为空/`undefined`（老包、`.empty` 行）⇒ **退回今天的"按行数"逻辑**，一行语义都不许多改（**不许有回归**）。
+ B3 **候选 topic 集合**必须来自现有 `TOPICS`/`OPTIONAL` 常量，**不许写死目录名列表**（他们以后加 topic 要自动生效）。
+ B4 ❕**禁止**按"清单行序"（1=jczq_offer…7=lottery_draw）来归属——那个顺序我只是记录进了 §9-85 当旁证，**对方随时可能改顺序**，依赖它就是埋雷。
+ B5 函数体 ≤50 行 ⇒ 需要就再拆一个小函数；**不许**为了省行数把三档优先级塞成一行表达式。
+
+【C. 判据】
+ T1 **构造一个"老算法必错、新算法必对"的夹具**（本单的核心证据，全在 `/tmp/q4/` 里造，**不许碰 `/srv/league-staging`**）：
+    两个 topic 目录、**行数完全相同**（比如各 3 行）、**内容不同**，清单两行都**丢前缀**、第三列写各自的真实哈希
+    ⇒ 断言：两条都归到**正确的** topic（用 ②），且**换掉其中一个文件内容让哈希对不上声明** ⇒ 变成**不装载 + `errors` 里有 `manifest-hash-mismatch`**（用 ③ 的空哈希再造一例，断言退回按行数）。
+    贴出这段的**原始输出**（含你造的两份清单文本）。
+ T2 **实时回归（禁止写死数字，自己现测）**：`bash ~/bin/jc-ingest-run.sh` ⇒ `rc=0`；
+    跑之前先记 `select count(*) from fact.jc_offer` 与 `gaps`（`ops.file_arrival` 里 `#MISSING`）⇒ **跑完 gaps 必须与跑前同一个数**，
+    `fact.jc_offer` 必须**只增不减**；`errors=[]`（**真包 7/7 哈希都命中 ⇒ 不该出现 mismatch**；一旦出现，说明我把定义写错了，**立刻停下贴证据给我**）。
+ T3 **老包不回归**：拿一份**丢前缀且第三列是 `undefined`/空**的历史包（`/srv/league-staging/incoming/cn-collector` 里 01-13 之前的老批次，或 `/tmp/incoming` + `--batch 2026-09-15T15-16-32Z`）
+    ⇒ 走 ③，`ups=15`（`§9-82`：夹具判据必须带批次二元组）且 `errors=[]`。
+ T4 红线与全量：`python3 ~/bin/omp-ast-check.py scripts/ingest/jc_manifest.py` → **0 违规**；`wc -l` 该文件 ≤100；
+    `PYTHONPATH=.:scripts python -m pytest tests -q` → **0 failed**（passed 数与开工前 T0 基线一致或更多，两个数都贴出来）。
+
+【D. 交付】报告 `.omp-logs/P0-COLLECT2q4.report.txt`，按 `== T1 ==`…`== T4 ==` 分段贴原始输出；全绿再 `echo TASK_DONE > .omp-logs/P0-COLLECT2q4.done`。
