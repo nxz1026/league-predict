@@ -1,3 +1,8 @@
+【编号说明（队长 2026-09-17 09:30）】本单改名 **3a**：数据源 = 生产 `jczq_offer` 包里**内嵌的 `oddsHistory`**（≤5 项、`matchId` 恒 0、多 `poolCode` 混在一起），
+ 落 `fact.jc_offer.odds_history` jsonb，**零外部依赖、现在就能做**。
+ 另一单 **3b**（见 `docs/project/契约v1.4-盘口全历史.md`）数据源 = 官方**独立历史端点** `getOddsHistoryV1.qry`（一次请求拿回某场 5–8 版全量），落**新表** `fact.jc_odds_history`。
+ 两者**不可混用**：3a 是"某次抓取时顺带嵌的那一段"，3b 是"官方存的全量"；**3b 才是真 CLV 的正路**，3a 只是眼下白捡的一档信息。
+
 【项目】league-v2（§2-D7 ≤100 行/文件 硬红线；§9 铁律：报告用锚点、禁 git、禁 print）
 【前置】P0-COLLECT2 已把真包写入 `fact.jc_offer`。**本单只补一个被解析层丢掉的官方键**，别的一律不碰。
 

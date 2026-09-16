@@ -1,0 +1,75 @@
+【项目】league-v2（§2-D7 ≤100 行/文件、≤50 行/函数、≤120 列 硬红线；§9：报告用锚点、禁 git、禁 print）
+【这一单干什么】给已上线的看板补三件**立刻有用、且不依赖任何新数据**的东西：
+ ① **面板健康条**（回答"装载器还活着吗 / 数据是几点几分 / 有没有缺档"——你 06:35 说看板就是复核界面，那它必须先能自证新鲜度）；
+ ② **日期下拉**（现在只能手敲 `?day=`，页面上没有入口）；
+ ③ 把 `web/routers/jc.py:25-27` 那段 `sys.path` 引导**收敛到 app 层一处**（DASH1b 队长裁决：不许三个 router 各写一遍）。
+【前置】看板栈已在 `11282d9`：`scripts/store/jc_view.py`(93) / `web/routers/jc.py`(64) / `web/routers/__init__.py` / `static/jc.html`(82) / `web/api.py`(80) / `web/lifecycle.py`(38)。
+【🅣 只准读 4 个文件】`scripts/store/jc_view.py`、`web/routers/jc.py`、`web/lifecycle.py`、`static/jc.html`（其余材料全内联在本单里）。
+
+【A. 事实：需要的列**全都已有**，本单不建表、不改 DDL、不碰 ingest】
+```
+ops.file_arrival(topic, src_file, arrived_at timestamptz, bytes, rows, done_marker boolean)
+ops.ingest_log(id, topic, src_file, rows_in, rows_ups, rejected jsonb, ok boolean, at timestamptz)
+fact.jc_offer(match_id, play_type, snap_ts timestamptz, ...)  fact.jc_match(business_date date, ...)
+```
+ ⇒ 健康条**只查这 6 个标量**（`jc_view.py` 新函数 `panel_health()`，SQL 见 C① 逐字照抄）。
+【B. 不许做】改 `scripts/ingest/**`、`scripts/core/**`、任何 DDL、`tests/**` 之外的夹具；引任何前端库/CDN/字体/图标（页面必须自包含）；
+ 在 `web/**` 里出现 `import psycopg`（只准 `from store import jc_view`）；把健康条做成"再点一个按钮才出来"（必须在页面顶部**常驻一行**）。
+
+【C. 三件东西的确切形状】
+**① 健康条**（store + 端点 + 页面一行）
+```sql
+-- C① 放进 jc_view.py，复用现成的 _fetch()（降级语义一致：出错 ⇒ [] + logger.error("面板降级 …")）
+select
+  (select max(snap_ts) from fact.jc_offer)                                                        as last_offer_snap,
+  (select count(distinct snap_ts) from fact.jc_offer)                                             as offer_versions,
+  (select count(*) from fact.jc_offer where snap_ts = (select max(snap_ts) from fact.jc_offer))   as last_version_rows,
+  (select max(at) from ops.ingest_log)                                                            as last_load_at,
+  (select count(*) from ops.ingest_log where ok = false)                                          as load_errors,
+  (select count(*) from ops.file_arrival where src_file like '%#MISSING%')                        as gaps
+```
+ · 新端点 `GET /api/jc/health`（同样 `Depends(require_auth)`，返回**同一个信封** `{rows, sql_note, degraded}`）；
+ · 页面顶部常驻一行，六个字段 + **新鲜度着色**：`now() - last_load_at > 25 分钟 ⇒ 整行转红**并写"装载器可能没跑"**
+   （阈值 25 分钟 = 10 分钟档的 2.5 倍，写成一个常量 `STALE_MIN = 25`，别散落魔法数字）；
+   时间差在 **JS 里算**（页面不引库），`last_load_at` 必须是带时区的 ISO 串 ⇒ 直接 `new Date(...)` 能解析。
+**② 日期下拉**
+ · 新端点 `GET /api/jc/days` ⇒ `select business_date as day, count(*) as matches from fact.jc_match group by 1 order by 1 desc limit 14`（同样走 `_fetch`）；
+ · 页面把现在的手填 `?day=` 改成 `<select>`：第一项固定"最新营业日（缺省）"（value 空串），其余来自 `/api/jc/days`；
+   选中后**只重刷场次表**，不整页跳。
+**③ 引导收敛（净删代码）**
+ · `web/lifecycle.py` 顶部加 3 行（与 `web/enrich.py:9-11` 同款：`REPO_ROOT = Path(__file__).resolve().parents[1]`，再把 `REPO_ROOT / "scripts"` 塞进 `sys.path`）；
+ · `web/routers/jc.py` **删掉** `25-27` 那三行引导 + 对应的 `import sys/pathlib`（若别处不再用），并把 `from store import jc_view` 从函数体内**提到模块顶部**；
+ · ⚠️ 提上去之后必须自己验：`psql` 无关，靠 T3 的真 HTTP 调用证明 `ImportError` 没有回来。
+
+【D. 硬约束（D7 会真的挡住你，先按这个拆）】`static/jc.html` 现在 **82 行**，加健康条 + 下拉**一定超 100** ⇒
+ **必须**把逻辑拆到第二个文件 `static/jc.js`（≤100 行），`jc.html` 只留骨架 + `<script src="/static/jc.js"></script>`（**不加任何外链**）。
+ 拆完 `jc.html` 应 ≤60 行、`jc.js` ≤100 行；`jc_view.py` ≤100 行（现 93 ⇒ **只加得下 ~6 行**，
+ 所以 C①/②两条 SQL 要压进两个小函数，函数体 ≤50 行；装不下就**如实报"超线"**，别偷偷放宽）。
+ ⚠️ 若 `jc_view.py` 确实装不下 ⇒ **停下报告**，不要新建第四个文件以外的东西（队长会决定是拆 `jc_view` 还是砍需求）。
+
+【E. 必须成立（数字口径 2026-09-17 09:00 由队长实测；带 `≥` 的是实时增长的量，别去钉死精确值）】
+ E1 `python3 ~/bin/omp-ast-check.py scripts/store/jc_view.py web/routers/jc.py web/lifecycle.py static/jc.html static/jc.js` → **0 违规**
+ E2 `python3 ~/bin/jc-move-check.py /tmp/web_api.presplit.py web/api.py web/lifecycle.py --allow-add "include_router"` 形式：
+    `LEAGUE_ALLOW_ADD="include_router\(jc_router\)|import jc_router|from web\.routers\.jc|_SCRIPTS_DIR|sys\.path" python3 ~/bin/jc-move-check.py /tmp/web_api.presplit.py web/api.py web/lifecycle.py`
+    → **exit=0**（证明 ③ 是纯收敛、没往 `create_app`/`lifespan` 里塞业务）
+ E3 **真起服务**（不许用 pytest 代替）：`PYTHONPATH=. nohup python -m uvicorn web.api:app --host 127.0.0.1 --port 8078 &`
+    （⚠️ 这次**不要**带 `PYTHONPATH=scripts`——③ 做完就该由 app 引导自己解决；带不上就 500 ⇒ 说明没收敛成功）
+    先 `POST /api/v1/login` 拿 cookie（**只试一次**，5 次错会锁该 IP 600 秒），然后：
+    · `GET /api/jc/health` → 合法 JSON、`rows` 长度 **= 1**、六个键都在，且 `last_offer_snap` 是 `2026-09-16T…Z` 形态、
+      `offer_versions >= 13`、`last_version_rows = 40`、`gaps >= 8`、`load_errors` 是整数；
+    · `GET /api/jc/days` → `rows` 长度 **>= 2**，第一行 `day = "2026-09-16"`、`matches = 8`；
+    · `GET /api/jc/fixtures` → **40** 行（③ 收敛后端点必须照旧）；`GET /api/jc/fixtures?day=2026-09-15` → **45** 行；
+    · `GET /api/jc/backtest` → JSON 里含 `"0.6270"`；`GET /api/jc/issues?limit=9999` → **400**；
+    · 未登录（不带 cookie）访问 `/api/jc/health` 与 `/api/jc/days` → **401/403**（两个都要贴）；
+    · `GET /static/jc.html` → 200；`GET /static/jc.js` → **200**（新文件必须真的被挂出去）；
+ E4 **收尾自清**：`pkill -f "uvicorn web.api:app"` 后 `ps -eo args | grep -c "[u]vicorn web.api:app"` → **0**
+ E5 页面自包含：`grep -nE "https?://" static/jc.html static/jc.js` → **零命中**（除注释里写的"不引外链"这句话本身，有则删）
+ E6 `python3 ~/bin/jc-fk-audit.py fact ops` → exit=0；`bash ~/bin/v2b-check.sh` → 末行 **floor 全部满足**（本单**不该改变任何 count**）
+ E7 `source ~/.venvs/league/bin/activate && PYTHONPATH=scripts python -m pytest tests -q` → **428 passed / 0 failed**（web 测试有就带上）
+【铁律】① 禁 git；② 禁 print；③ ≤100/≤50/≤120；④ 只准动 `scripts/store/jc_view.py`、`web/routers/jc.py`、`web/lifecycle.py`、`static/jc.html`、`static/jc.js`（新建）五个文件；
+ ⑤ **不许往 8077 上打**（队长的 uvicorn 挂在 8077 给用户看，你一律用 **8078**）；⑥ 报告 `.omp-logs/P0-DASH2.report.txt`（E1~E7 原始命令 + 原始输出）
+ + 全绿才 `echo TASK_DONE > .omp-logs/P0-DASH2.done`
+【边界】D7 装不下、或 ③ 收敛后 `/api/jc/*` 报 500/ImportError ⇒ **贴原文停下**；`/api/jc/health` 出来 `rows` 不是 1 ⇒ 停下（那是我 SQL 写错，不是你的事，写下来我改）。
+【验收（队长逐字复跑）】
+  bash ~/bin/dash-verify.sh 8078
+  LEAGUE_FROZEN_RE="scripts/core/|scripts/ingest/" bash ~/bin/league-accept.sh P0-DASH2 scripts/store web/routers web/lifecycle.py static

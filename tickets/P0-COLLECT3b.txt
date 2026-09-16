@@ -1,0 +1,68 @@
+【项目】league-v2（§2-D7 ≤100 行/文件、≤50 行/函数、≤120 列 硬红线；§9：报告用锚点、禁 git、禁 print）
+【这一单干什么】**接契约 v1.4：把官方"盘口全历史"（`getOddsHistoryV1`）解析并写进 `fact.jc_odds_history`** —— 这是真 CLV 的唯一入口
+ （此前真 CLV 可算样本恒为 **0**；官方一次请求就给某场 5–8 版完整走势，含**封盘那一版**）。
+【前置】`P0-COLLECT2q` 已 ACCEPT（清单优先 + 无主文件 orphan + 清单丢前缀时按目录消歧）。
+【必读材料（**本单全部内联，不许去查别处**）】
+ · 表结构 = `docs/db/infra_p0_11_odds_history.sql`（**已执行**：14 列，PK `(match_id,play_type,update_ts)`，`play_type` CHECK 只允许 `had/hhad/crs/ttg/haf`）
+ · 契约 = `docs/project/契约v1.4-盘口全历史.md`
+ · 夹具（**md5 已锁，动一个字节就算作弊**）：
+   `tests/fixtures/odds_history/finished_卡塔尔亚vs韩国亚__2041482.jsonl` = `df911d69e1acf74065ade0d992032282`（1 行）
+   `tests/fixtures/odds_history/onsale_柏太阳神__2041495.jsonl` = `a329eb566b4d7b920e74a8a62612334d`（1 行）
+
+【A. 实测事实（队长 09:20Z 用 python 现算，照抄即可，**别再"验证"这些数**）】
+ · 每份样本 = **1 行**、9 键外壳、`payload` = 官方 `value` 原样（**顶层 16 键**：`matchId leagueId leagueAbbName leagueAllName
+   homeTeamId homeTeamAbbName homeTeamAllName awayTeamId awayTeamAbbName awayTeamAllName hadList hhadList crsList ttgList hafuList singleList`）；
+ · 五个历史数组 ⇒ 词表映射：`hadList→'had'`、`hhadList→'hhad'`、`crsList→'crs'`、`ttgList→'ttg'`、**`hafuList→'haf'`**
+   （**注意是 `haf` 不是 `hafu`**，与 `fact.jc_offer.play_type` 的 CHECK 保持同一词表）；
+ · 元素键：`had/hhad` = `h,d,a` + `hf,df,af` + `goalLine` + `updateDate,updateTime`；`ttg` = `s0…s7` + 各自 `*f` + `goalLine` + 时间；
+   `haf` = 9 个组合 `hh hd ha dh dd da ah ad aa` + 各自 `*f` + `goalLine` + 时间；`crs` = `s-1sh s-1sd s-1sa` + 31 个 `sXXsYY` + 各自 `*f` + `goalLine` + 时间（**共 68 键，别去展开**）；
+ · **数组顺序严格"新 → 旧"**（实测单调）⇒ `seq_no = 下标`（0 = 最新一版）；`max(seq_no)` 那一版 = 最早（≈开盘）；
+ · 两份样本合计 **34 个价格版**：**`had 7 · hhad 9 · crs 6 · ttg 6 · haf 6`**；每玩法 `max(seq_no)` = **`had 5 · hhad 7 · crs 4 · ttg 4 · haf 4`**；
+ · 同 `(matchId, 玩法, updateDate+updateTime)` **0 组撞键** ⇒ PK 成立；
+ · `goalLine`：只有 `hhad` 非空串（形如 `"+2"`），**其它玩法是 `""` ⇒ 存 NULL**；
+ · `updateDate`+`updateTime` 是**北京墙钟**（例：`2026-09-15` + `18:09:00` ⇒ 存 `2026-09-15 10:09:00+00`）；
+ · `*f` 箭头只见过 `"1"/"0"/"-1"` ⇒ **原样放进 `odds` jsonb，不许解释成布尔**；
+ · `singleList` **本单不落表**（要落表另开工单）。
+
+【B. 要写的东西（**文件位置已定死，别自己发明**）】
+ 1) 新建 `scripts/store/parse_odds_hist.py`（**≤80 行**）：`parse_odds_history(payload: dict) -> list[dict]`
+    返回**每个价格版一条**（样本共 34 条），每条键 = 表列名：`match_id, play_type, update_ts, seq_no, goal_line, goal_line_value, odds, is_first, league_id`
+    （`is_close` **不由解析器决定** ⇒ 见 C③；`src_hash / src_file / first_seen_at / last_seen_at` 由写层补）。
+    · 时间换算：`datetime.strptime(f"{d} {t}", "%Y-%m-%d %H:%M:%S").replace(tzinfo=ZoneInfo("Asia/Shanghai"))`；
+    · 任一条缺 `updateDate`/`updateTime` 或解析不出 ⇒ **raise ValueError**（宁可不插不可插错），**不许悄悄跳过那一版**。
+ 2) 新建 `scripts/ingest/jc_odds_write.py`（**≤80 行**）：`upsert_history(cur, rows: list[dict], snap: str, source: dict) -> int`
+    ⇒ **复用** `from ingest.jc_write import _upsert`（DASH1a / STORE2 / 2e 都是这么干的），PK `["match_id","play_type","update_ts"]`；
+    返回受影响行数；`odds` 必须用 `Json(...)` 包（psycopg3 不自动适应 dict）。
+ 3) `scripts/store/parse_collector.py`（现 78 行）：`PARSERS` 注册 `jc_odds_history` ⇒ `parse_line` 走"只传 payload"那条已有分支（**净增 ≤6 行**）。
+ 4) `scripts/ingest/jc_load.py`（现 87 行，**净增 ≤8 行**）：`TOPICS` 加 `"jc_odds_history"`、`WRITE` 加同名，
+    `load_topic` 里对该 topic 走 `ups += jc_odds_write.upsert_history(cur, p, env["snap_ts"], src)`（**一行 env = 34 条价格版**）。
+【C. 三条硬规矩】
+ ① **绝对不许写 `ref.team`、不许碰队名映射**（`payload` 里有 `homeTeamAbbName` 等中文名，但队名对照是 D3 人工审的事）
+    ⇒ 本单**只用 `matchId` 与 `leagueId`**；
+ ② **绝对不许碰 `fact.jc_offer` / `fact.jc_match`**（历史是另一条时间轴；`jc_offer.odds_history` 那列**永久留 NULL**）；
+ ③ **`is_close` 本单一律 FALSE**：判"封盘"必须证明该场**已完场**（要 join `fact.jc_result`），那是 `P0-CLV1` 的活
+    ⇒ 解析器与写层**都不许把它设成 true**；样本那两场根本不在 `fact.jc_result` ⇒ 期望值就是 **0**。
+【D. 不许做】改 DDL / 改 `jc_write.py` / 改 `jc_read.py`；改夹具（md5 已锁）；把两份样本复制进任何 `--dir` 装载目录（**只走测试路径**）；禁 git；禁 print。
+
+【E. 必须成立（**数字全部来自 A 节实测**，对不上就是解析错，别改期望）】
+ E1 单测：新建 `tests/test_ingest_odds_history.py`，读两份夹具 ⇒ `parse_odds_history` 返回 **34** 条；
+    按 `play_type` 计数 `had 7 / hhad 9 / crs 6 / ttg 6 / haf 6`；每玩法 `max(seq_no)` = `5 / 7 / 4 / 4 / 4`；
+    `is_first` 为真 **10** 条；`goal_line_value` 非空 **9** 条；`goal_line` 非空 **9** 条；
+    `had` 里 `seq_no=0` 那条的 `update_ts` == **`2026-09-15 10:09:00+00:00`**（北京 18:09）
+ E2 落库（**允许写真表**，E3 要查）：`fact.jc_odds_history` 行数 = **34**、`count(*) filter (where is_close)` = **0**、`count(distinct match_id)` = **2**
+ E3 幂等：同一批写两遍 ⇒ 仍 **34**（不许变 68），且 `last_seen_at` 变新、`first_seen_at` 不变
+ E4 **不许波及其它表**：跑本单前后各贴一条 `select count(*) from fact.jc_match`（**17**）、`from fact.jc_offer`（不变即可）、`from ref.team`（同值）
+ E5 未知 topic 仍要炸：在 `/tmp/hh/` 造一行 `topic:"jc_unknown"` + 一个**非空** `.done`，跑 `--dir /tmp/hh`
+    ⇒ 装载器**必须报错**（`ValueError: 未知 topic`），不许静默跳过（证明你没把 fail-loud 放宽）
+ E6 静态：`python3 ~/bin/omp-ast-check.py scripts/store/parse_odds_hist.py scripts/ingest/jc_odds_write.py scripts/store/parse_collector.py scripts/ingest/jc_load.py` → **0 违规**
+ E7 `python3 ~/bin/jc-fk-audit.py fact` → exit=0；`python3 ~/bin/jc-cols-check.py scripts/ingest/jc_odds_write.py`
+    ⇒ **必须出现 `fact.jc_odds_history` 那一行且全 ✔**（列级炸弹检查真的扫到了新写层，不是空跑）
+ E8 `bash ~/bin/v2b-check.sh` → 末行 **floor 全部满足**（本单不该改变那八张表任何 count）
+ E9 `source ~/.venvs/league/bin/activate && PYTHONPATH=scripts python -m pytest tests -q` → **全绿**，并**写明新总数**（基线 428，加了你新测试 ⇒ 给准确数，队长拿它当新基线）
+【铁律】① 禁 git；② 禁 print；③ ≤100/≤50/≤120；④ 只准新建 3 个文件 + 改 `parse_collector.py` / `jc_load.py` 两个；
+ ⑤ 报告 `.omp-logs/P0-COLLECT3b.report.txt`（E1~E9 原始命令 + 原始输出 + 新 pytest 总数）
+ + 全绿才 `echo TASK_DONE > .omp-logs/P0-COLLECT3b.done`
+【边界】E1~E3 任何一条对不上 ⇒ **贴原文停下**（那是我契约写错，你说了我改；**不要**为了让测试绿而放宽断言）；
+ D7 装不下（`parse_odds_hist.py` 超 100 行）⇒ **停下报告实际行数**，别砍功能别放宽红线。
+【验收（队长逐字复跑）】
+  LEAGUE_FROZEN_RE="scripts/core/|scripts/ingest/jc_write.py" bash ~/bin/league-accept.sh P0-COLLECT3b scripts/store scripts/ingest tests/test_ingest_odds_history.py

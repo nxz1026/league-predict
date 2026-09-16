@@ -1,8 +1,10 @@
-"""P0-COLLECT2i 自 jc_load 拆出：批↔文件时间戳窗口归属与读行工具；_stamp/iter_markers/read_lines 逐字搬移，files_for_batch 按 C 条改返回文件列表。"""
+"""P0-COLLECT2o 自 jc_load 拆出：批↔文件归属与读行工具；.done 清单优先（行数对账），0 字节 marker 走时间戳窗口兜底。"""
 import json
 import re
 from datetime import datetime
 from pathlib import Path
+
+from core.log import logger
 
 
 def _stamp(name: str) -> datetime:
@@ -17,8 +19,48 @@ def iter_markers(root: Path, only: str | None = None) -> list[Path]:
     return [m for m in ms if m.name == key] if key else ms
 
 
-def files_for_batch(root: Path, marker: Path,
-                    topics: tuple[str, ...]) -> dict[str, list[tuple[Path, str]]]:
+def _count_lines(path: Path) -> int:
+    return sum(1 for s in open(path, encoding="utf-8") if s.strip())
+
+
+def _manifest(root: Path, marker: Path) -> dict[str, list[tuple[Path, int]]]:
+    """.done 文本清单 → {topic: [(绝对路径, 声明行数)]}；0 字节 marker ⇒ {} 表示走窗口。"""
+    out: dict[str, list[tuple[Path, int]]] = {}
+    for line in marker.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        rel, n = parts[0], parts[1] if len(parts) > 1 else "0"
+        topic = rel.split("/", 1)[0]
+        out.setdefault(topic, []).append((root / rel, int(n.strip() or "0")))
+    return out
+
+
+def _check_entry(topic: str, p: Path, decl: int) -> tuple[Path, str]:
+    if not p.exists():
+        logger.warning("manifest-file-missing topic=%s 文件=%s", topic, p)
+        return (p, "rejected")
+    actual = _count_lines(p)
+    if actual != decl:
+        logger.warning("manifest-mismatch topic=%s 声明=%d 实际=%d 文件=%s",
+                       topic, decl, actual, p)
+        return (p, "rejected")
+    return (p, p.suffix.lstrip("."))
+
+
+def _from_manifest(man: dict[str, list[tuple[Path, int]]],
+                   topics: tuple[str, ...]) -> dict[str, list[tuple[Path, str]]]:
+    out: dict[str, list[tuple[Path, str]]] = {}
+    for topic in topics:
+        if topic not in man:
+            out[topic] = [(None, "missing")]
+            continue
+        out[topic] = [_check_entry(topic, p, decl) for p, decl in man[topic]]
+    return out
+
+
+def _window(root: Path, marker: Path,
+            topics: tuple[str, ...]) -> dict[str, list[tuple[Path, str]]]:
     ms = iter_markers(root)
     i = ms.index(marker)
     lo, hi = (_stamp(ms[i - 1].name) if i else datetime.min), _stamp(marker.name)
@@ -29,6 +71,12 @@ def files_for_batch(root: Path, marker: Path,
         cands.sort(key=lambda p: p.name)
         out[topic] = [(p, p.suffix.lstrip(".")) for p in cands]
     return out
+
+
+def files_for_batch(root: Path, marker: Path,
+                    topics: tuple[str, ...]) -> dict[str, list[tuple[Path, str]]]:
+    man = _manifest(root, marker)
+    return _from_manifest(man, topics) if man else _window(root, marker, topics)
 
 
 def read_lines(path: Path) -> list[dict]:

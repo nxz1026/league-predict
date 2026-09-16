@@ -443,4 +443,24 @@ setsid bash ~/omp-resilient3.sh SMOKE1 /home/ubuntu/omp-smoke 300 1 ~/tickets/SM
     附带事实（都实测过、别再猜）：`jc_issue_prize` **恒 0**（`prizeLevelList` 12 期全空数组）；开奖侧 `matchList` 的
     `result/czScore/czHalfScore/a/d/h` **全为空串** ⇒ `official_result/cz_score/cz_half_score` 只能落 NULL、`is_drawn` 全 false；
     `gmMatchId` **只有期头侧有**（114 个）；`startTime` 是纯日期（210/210）；`matchNum` 恒等于 1-based 下标（114/114）。
-
+ 62. **逐批期望值必须"每一批各自现算"，不许拿上一批的形状外推**（2026-09-17 01:04Z，COLLECT2o 的 E3，队长第 6 处规格错）：
+     我在 E3 写"实时五批各 `ups=49`"，实际是 `23-01 / 23-03 / 23-13 / 00-03 = 40`、从 `00-13` 起才 `= 49`——
+     差的正好是那几批的 `jczq_result` 是 **`.empty`**（那一刻没有已完场场次），而我看了两批有赛果就外推成"每批都带 9 条赛果"。
+     ⇒ 规矩：凡是"**逐批 / 逐文件**"的期望，一律**从 `.done` 清单第二列 `awk` 现算成一张表**贴进工单
+       （`awk -F'\t' '$1 ~ /^jczq_result\//{s+=$2} END{print s+0}' "$m"`），并在表旁写清"**为什么这几批不一样**"
+       （`.empty` 是正常输出、不是缺档 ⇒ 别把 `.empty` 算成 gap）；这次是**工人自己算对、把我的数纠回来**，
+       代价是它 3 分钟 + 我一轮返工 —— 说明"**外推出来的错期望一定会被真数据撞破**"，早点现算省事。
+     同批实测事实（别再猜）：落港目录**每 10 分钟准时多一个 marker**（00:33 → 00:43 → 00:53 我三次当场看见）；
+     `jclq_offer` 在 23:01 之后**每一批都是 `.empty`**（休赛期官方无盘）⇒ 篮彩眼下只有 result 有数据，别指望 offer。
+ 63. **工人跑到一半被 kill 过、或验收期间它还在改文件 ⇒ `ops.*` 里可能留着"未完成代码"写下的脏行，验收结束必须回查一遍**
+     （2026-09-17 01:07Z，COLLECT2o 验收现场，队长自己发现的，工人报告里不会有）：
+     我 01:05 从库里看到 `arrival 119 / gaps 14`（上一刻还是 99/8），多出的 **6 条 `2026-09-15T23-01-30Z/…#MISSING`** 一查就是假的：
+     `23-01` 的 `.done` **明明列了 7 个 topic**（其中 2 个是 `.empty`）。我用 `python -c` 直接调**当前** `files_for_batch()`
+     打印七个 topic 的归属 ⇒ **全部正确**（`.empty` 落 `empty` 不落 missing）⇒ 结论：那 6 行是 **00:59:23 那一刻代码还没写完时跑出来的一次**。
+     ⇒ 三条规矩：
+       ① **判"归属对不对"不要靠重跑装载器**（会写库、会撞车），用 `PYTHONPATH=scripts python - <<PY` 直接调函数打印返回值 —— **纯读、秒出、可与清单逐行对**；
+       ② 装载器的 `#MISSING` 是 `INSERT`，**后面正确的跑不会把它撤销**（PK 是 `topic/src_file`，与真文件的 `src_file` 不同名）
+          ⇒ 伪 gap 会**永久留在 `ops.file_arrival`**，只能**超级用户 `delete`**（`league_ing` 故意没有 DELETE 权限，这不是它的活）；
+          这次我删前拍数、删后核对：`119/14 → DELETE 6 → 113/8`，剩下 8 条全是老三批（0 字节 marker 走窗口）**真缺**，逐条点过名；
+       ③ 每次验收 ingest 类工单，末尾加一句 `select src_file from ops.file_arrival where src_file like '%#MISSING%' order by 1`，
+          **数一下 gap 是不是只减少了没增加** —— 这一条我原先的 oracle 里没有（只写了"count 不许下降"），所以差点漏掉。
