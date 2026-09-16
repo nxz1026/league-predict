@@ -52,7 +52,7 @@ select play_type, count(*) as n_fp,
        round(avg(bs)::numeric, 4) as brier,
        round(avg(us)::numeric, 4) as brier_uniform,
        round(avg(hit::int)::numeric, 4) as acc,
-       sum(if_clv) as clv_filled
+       sum(if_clv::int) as clv_filled   # ← 采纳 DASH1a 工人的最小修正：PG 无 sum(boolean)，cast 后逐格等价
   from (select play_type, fixture_id,
                sum(power(p_pred - outcome, 2)) as bs,
                sum(power((1.0 / cnt) - outcome, 2)) as us,
@@ -82,7 +82,7 @@ select play_type, count(*) as n_fp,
  T3 `python -c "import web.api"` 无异常（服务能装配起来）
  T4 **真连库跑三个函数**（当前库已装载 5 批：`fact.jc_match=17 / jc_offer=250 / jc_result=15 / backtest_market=175200 / jc_issue=0`）：
     写一个 `/tmp/dash_probe.py`（**放 /tmp，不许进 repo**）依次调用并打印，必须看到
-    · `fixtures_on(None)` → **85 行**（17 场 × 5 玩法，`snap_ts` 全为 `2026-09-15T23:03:02Z` 那一版）
+    · `fixtures_on(None)` → **40 行**（**队长 00:06 采纳裁决 (a)**：`None` 分支是 `max(business_date)=2026-09-16` = 8 场 ⇒ 8×5=40；我原先写 85 是把两营业日 17 场混算了）（17 场 × 5 玩法，`snap_ts` 全为 `2026-09-15T23:03:02Z` 那一版）
     · `fixtures_on("2026-09-15")` → 非空；`fixtures_on("garbage")` → **`[]` 且不抛**
     · `issues(20)` → **`[]`**（传统足彩还没入 2e 范围，**空就是正确答案，不许为了非空去塞数据**）
     · `backtest_summary()` → **正好 4 行**，且每个数与下表**逐字相同**（队长 23:47Z 直接对 `analysis.backtest_market` 跑出来的真值）：
@@ -104,3 +104,9 @@ select play_type, count(*) as n_fp,
 【边界】T4 跑不出上面的数：贴**打印原文** + 停下点名是哪个函数哪一行；**绝对禁止**改 SQL 的口径去凑数、或改 `backtest.py`/`web/routers/**` 来绕。
 【验收（队长逐字复跑，我自己再调一遍三个函数）】
   LEAGUE_FROZEN_RE="scripts/core/" bash ~/bin/league-accept.sh P0-DASH1a scripts/store/jc_view.py web/lifecycle.py web/api.py
+
+【队长裁决（2026-09-17 00:06，事后补记，不改变本单已完成的事实）】
+ §4-B 选 **(a)**：库里 17 场**合法地跨两个营业日**（09-15 九场 / 09-16 八场），`fixtures_on(None)` 取 `max(business_date)` ⇒ **40 行是正确答案**，
+ 我的 85 是错的（§9-60）。§4-A 的 `sum(if_clv::int)` **采纳并已同步进 C 节文本**。
+ 本单**按队长亲验收**（报告 84 行、T1/T3/T5/T6 全绿、T4 唯一未达项已裁定为工单期望值错误），
+ 哨兵缺失是工人**诚实的正确行为**（它拒绝为我错的数字写 TASK_DONE），故不补开"只跑不改"单，由 **DASH1b** 的哨兵统一为整个看板栈作证。

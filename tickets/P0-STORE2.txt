@@ -1,0 +1,77 @@
+【项目】league-v2（§2-D7 ≤100 行/文件 硬红线；§9：报告用锚点、禁 git、禁 print）
+【这一单做什么】把**篮彩赛果**从"解析层直接 raise"变成"能落 `fact.jbq_*`"。材料已全部备齐（队长 07:27 建好三张表、07:47 把 23 行真包做成夹具并算出硬期望）。
+ 范围**只有 `jclq_result`**：`jclq_offer` 休赛期官方无盘（`matchInfoList` 实测空）⇒ **一个真包都没见过，那一支必须继续 raise**（§9-50 的教训）。
+【🅣 禁止阅读其它源码】只准读这 5 个：`scripts/store/parse_collector.py`(78 行) · `scripts/ingest/jc_write.py`(100 行，**只为抄 `_upsert` 的调用姿势**) ·
+ `scripts/ingest/jc_load.py`(87 行) · `tests/fixtures/collector_v13/PROVENANCE.md` · `tests/test_parse_collector_offer.py`（抄测试风格）。
+ 第 1 分钟就 write/edit；**8 分钟内无写动作＝拒收**。
+
+【A. 新建 `scripts/store/parse_jbq.py`（≤100 行，函数 ≤50 行）】
+ 公开面（`jc_load.py` 与 `parse_collector.py` 都按这个签名调）：
+```
+def parse_result(env: dict) -> dict:   # 返回 {"match": {...jbq_match 一行...}, "row": {...jbq_result 一行...}}
+```
+ **映射表（payload 键 → 目标列；左边是官方原键，右边是 `fact.jbq_*` 真实列名，队长 07:27 从 `information_schema` 核对过）**
+| payload（22 键，实测存在） | 去向 | 规则 |
+|---|---|---|
+| `matchId` int | `match.match_id` / `row.match_id` | 原值 |
+| `matchNum` `"1301"` / `matchNumStr` `"周一301"` | `match.match_num` / `match.match_num_str` | 原文，不解析 |
+| `leagueId` int / `leagueName` / `leagueNameAbbr` | `match.league_id` / `league_cn` / `league_abbr` | 原文（实测 7=女篮世界杯、8=亚运会男篮） |
+| `homeTeam`/`awayTeam` | `match.home_cn` / `away_cn` | 竞彩中文全名 |
+| `homeTeamId`/`awayTeamId` int | `match.home_sporttery_id` / `away_sporttery_id` | 按 id 认队；**不许**填 `home_team_id`（映射未核对） |
+| `matchDate` `"2026-09-14"` | `match.match_date` | `date.fromisoformat`；**解析失败 → None**（不许猜年） |
+| `matchTime` `"12:00:00"` | `match.match_time` | 原文 |
+| `matchDate`+`matchTime` | `match.kickoff_bj` | 按**北京时**合成 timestamptz；**任一缺 → None** |
+| `status` int / `poolStatus` str | `match.status`/`pool_status`、`row.status`/`pool_status` | 原值（实测 status 全 2、poolStatus 全空串）**不翻译** |
+| `finalScore` `"61-105"` | `row.final_score` 原文 + `row.ft_h`/`ft_a` 切分 | 切不出两个整数 → 两列都 **None**，原文照存 |
+| `mnl`/`hdc`/`hilo`/`wnm` 四块 | `row.mnl_combination`/`mnl_desc`/`mnl_result_status`/`mnl_odds` …（每块 4 列，`wnm` 无 line） | `combination`/`combinationDesc`/`resultStatus` **原文**；`winOdds`→`*_odds` |
+| `hdc.goalLine` / `hilo.goalLine` | `row.hdc_line` / `row.hilo_line` | 真值在**块内**（实测 "-25.5"/"171.5"），**顶层没有 goalLine** |
+| 四块整体 | `row.raw_blocks`（jsonb） | `{mnl,hdc,hilo,wnm}` 原样 dict（宁可不插不可插错：解析列判错可重算） |
+| 任一块的 `single` | `row.betting_single` | 实测全 0 |
+ **硬规则（错一条整单拒收）**：
+ ① 官方原值是**空串 `""`** 的，解析列一律给 **`None`**，**绝对不许**给 `0`、`""`、或 `-1`（0 在盘口里是有意义的数据）；
+ ② `resultStatus` 可能是**中文**（实测 `"未开售"`）⇒ 当字符串原文存，不判布尔；
+ ③ `*_odds` / `*_line` 用 `decimal`（照 `store/parse_values.py` 的 `dec()`，它已经处理"空串/非数字 → None"）；
+ ④ 不认识的键**整块留在 `raw_blocks`**，不许丢，也不许自己发明列。
+【B. `scripts/store/parse_collector.py` 只改 `jclq_result` 那一支】
+ 现在它 `raise ValueError("fact 层无篮彩落点表（P0-STORE2 DDL 未建）：形态已冻结但无可落之表")` ⇒ 换成 `return parse_jbq.parse_result(env)`；
+ **`jclq_offer` 那一支保持 raise**，并把文案改成 `"jclq_offer 无真包（NBA/CBA 休赛期官方 matchInfoList 为空）⇒ 形状未证，禁止入库"`。
+ 文件必须 **≤100 行**（现在 78）。
+【C. 新建 `scripts/ingest/jbq_write.py`（≤100 行）】
+```
+from ingest.jc_write import _upsert      # 队长批准复用（避免复制 15 行 SQL 拼装器）；不要改 jc_write.py 去导出它
+def upsert_jbq_match(cur, row: dict, snap: str, source: dict) -> int: ...
+def upsert_jbq_result(cur, row: dict, snap: str, source: dict) -> int: ...
+```
+ · 目标表 `fact.jbq_match` / `fact.jbq_result`，PK 分别是 `[match_id]` / `[match_id]`；
+ · `src_hash`/`src_file` **必须进 cols**（两张表都是 NOT NULL 无默认）；`last_seen_at` 用 `snap`（两表都有这列 ✔）；
+ · `fact.jbq_offer` **本单不写**（无盘口真包）；`home_team_id/away_team_id` **本单不写**（映射未核对）；
+ · ⚠️ **`raw_blocks`/`options` 这类 dict 必须包 `psycopg.types.json.Json(...)`**（E4 那一课：psycopg3 不自动适配 dict）；
+ · ⚠️ cols 里的列名**只能来自 `docs/db/infra_p0_10_jbq_tables.sql`**，队长会用 `jc-cols-check.py` 逐列比。
+【D. `scripts/ingest/jc_load.py` 接线（只加不改）】
+ `WRITE` 加一项 `"jclq_result"`；`load_topic` 里 `jclq_result` 分支调 `jbq_write.upsert_jbq_match(cur, p["match"], snap, src)` +
+ `upsert_jbq_result(cur, p["row"], snap, src)`；`TOPICS` 顺序**不许变**（7 个 topic 的清单口径不变）；文件 ≤100 行（现在 87）。
+【E. 新建 `tests/test_parse_jbq.py`】断言**逐字用 `tests/fixtures/collector_v13/PROVENANCE.md` 那张表**（23 行真包的实测计数）：
+ `ft_h/ft_a` 非空 **23/23**；`hdc_line`/`hilo_line` 非空 **23/23**；`mnl_odds` 非空 **14**；`wnm_odds` 非空 **15**；
+ `mnl_result_status` 非空 **9**；`wnm_result_status` 非空 **8**；`hdc_result_status`/`hilo_result_status` 非空 **0**；
+ 每行 `raw_blocks` 含且仅含 `mnl/hdc/hilo/wnm` 四键；`league_id ∈ {7,8}`；**空串必须解析成 None**（挑 `"61-105"` 与 `mnl.goalLine==""` 各钉一条）。
+
+【必须成立】
+ T1 夹具：`wc -l tests/fixtures/collector_v13/jclq_result__23.jsonl` → **23**，`md5sum` → **`538fec620c5f85ccf433c74bb4b87bf9`**（**夹具不许动**，动了就是造假）
+ T2 `PYTHONPATH=scripts python -c` 打印 `parse_result(第1行)` 的 `match`/`row` 键集，与 A 表逐键对得上（贴原始输出）
+ T3 **真装载**：`PYTHONPATH=scripts python scripts/ingest/jc_load.py --dir /tmp/incoming2`
+    → 两行 `errors=[]`，`ups=` 队长算的是 **`23-01-30Z ups=86`** / **`23-03-19Z ups=86`**（每批 = 40 盘口 + 23 场次 + 23 赛果）；
+    若你的实测不是 86，**贴原文并说明差在哪**（`ON CONFLICT DO UPDATE` 被防回退门控挡掉的行会算 0，那是**正常的 86 以下**，
+    但 `errors` 必须为空、T4 的 count 必须全对 ⇒ **count 才是硬指标，`ups` 只是参考**）
+ T4 `sudo -n -u postgres psql -d league -Atc "select count(*) from fact.jbq_match"` → **23**；
+    `... "select count(*)||'/'||count(ft_h)||'/'||count(hdc_line)||'/'||count(raw_blocks) from fact.jbq_result"` → **`23/23/23/23`**
+ T5 幂等：T3 再跑一遍，T4 的三个数**一字不变**
+ T6 `python3 ~/bin/jc-cols-check.py scripts/ingest/jbq_write.py` → 全 ✔ ；`python3 ~/bin/omp-ast-check.py scripts/store/parse_jbq.py scripts/ingest/jbq_write.py scripts/store/parse_collector.py scripts/ingest/jc_load.py` → **0 违规**
+ T7 `python3 ~/bin/jc-fk-audit.py fact` → exit=0（`jbq_match.home_team_id` 保持 NULL 才不违反 FK）
+ T8 `PYTHONPATH=scripts python -m pytest tests -q` → **428 + 新增用例数，0 failed**
+【铁律】① 禁 git；② 禁 print；③ ≤100 行/文件、函数 ≤50 行、列 ≤120；④ 只准动 A/B/C/D/E 五条列出的 5 个文件（新增 4 + 改 `parse_collector.py`/`jc_load.py` 两处接线）；
+ ⑤ **不许**碰 `scripts/core/**`、`web/**`、`static/**`、DDL、`tests/fixtures/**`；⑥ 报告 `.omp-logs/P0-STORE2.report.txt`（T1~T8 原始输出）
+ + 全绿才 `echo TASK_DONE > .omp-logs/P0-STORE2.done`
+【边界】T4 数不对：贴 `select count(*) ... ` 与 `errors=[]` 原文 + 停下；**绝对禁止**造数据、改夹具、或往 `home_team_id` 里填猜出来的映射。
+【验收（队长逐字复跑）】
+  bash ~/bin/v2b-check.sh
+  LEAGUE_FROZEN_RE="scripts/core/" bash ~/bin/league-accept.sh P0-STORE2 scripts/store/parse_jbq.py scripts/ingest/jbq_write.py

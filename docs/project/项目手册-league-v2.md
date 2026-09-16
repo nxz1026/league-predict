@@ -3,6 +3,18 @@
 > 本目录是"体彩全玩法覆盖"项目的**决策与工单基线**，由海外 DSH 会话（nd-dsh 机）压缩生成。
 > 你在本机（NDORACLE）的操作方式见 `OMP-SKILL.md`；所有应用代码**一行都还没写**，本包 = 设计终稿。
 
+## 0. 进度快照（队长每次落盘后更新 · 最后更新 2026-09-16 07:44 北京）
+- **竞彩数据通路已打通**：真包 → `fact.jc_match/jc_offer/jc_result` **第一次进库并幂等复跑**
+  · 旧包 3 批 = `17 场 / 170 盘口行 / 15 赛果`（`gap 8 条`）· 5 批混包 = `17 / 250 / 15`、`fact.jc_offer` = `250/17/4`
+  · 机检全绿：`omp-ast-check` 0 违规、`jc-cols-check` 三表 ✔、`jc-fk-audit` 16 条外键全可满足、pytest **428 passed**
+- commit：**`9abb32b`**（装载层三文件 + 项目文档/DDL/工单纳入版本控制）→ **`7e5e13c`**（工单与晨报），均已 push `origin/v2`
+- 国内机 v1.2 回传**独立复算 PASS**：新到 2 批、`.done` 已变**清单**、380/380 行 `src_hash` 一致 ⇒ 契约侧正式推进到 **v1.3（清单）**
+- 篮彩：`jclq_result` **23 行真包**到手，`fact.jbq_match/jbq_offer/jbq_result` 三表已建（`docs/db/infra_p0_10_jbq_tables.sql`）
+- **在跑/排队（全部 Agnes，一次一单）**：`P0-DASH1a`（看板数据层，07:42 派）→ `P0-COLLECT2o`（`.done` 清单优先装载，工单已备）
+  → `P0-DASH1b`（router + 页面）→ `P0-COLLECT2e`（传统足彩五表）→ `P0-STORE2`（篮彩解析+写入）→ `CALIB1` → `CLV1`
+- **已知未决（需要用户/国内机）**：① `.done` 第三列级联哈希算法定义；② 西甲/英超中文队名核对放行（`P0-JCALIGN1` 的 seed）；
+  ③ 中超 AF `leagueId`（免费档无法做 id 发现，实测 `idLeague/idCountry/league=142` 全部拒绝）；④ NBA/CBA `leagueId`（休赛期无盘，真包只有亚运男篮/女篮世界杯）
+
 ## 1. 项目一句话
 把 league-predict（五大联赛预测引擎）升级为覆盖中国体彩全玩法的分析系统：
 竞彩足球 6 玩法 ×6 联赛（英超/西甲/意甲/德甲/法甲/中超）+ 传统足彩 4 玩法（14场/任9/6场半全场/4场进球）+ 篮彩 3 玩法 ×NBA/CBA + 数字彩 4 种（大乐透/排3/排5/七星彩，定位=管理/组合数学/EV/回测，**不预测**）。❌ 北单已排除。
@@ -21,6 +33,20 @@
 | D9 | **配额/收费型外部数据源默认关闭、功能保留**，开关统一走配置层（`LEAGUE_SOURCE_<SRC>=on/off`、`LEAGUE_QUOTA_CAP_<SRC>=N`、`--allow-paid` 单次放行；`.env` 覆盖、真实 env 优先）。**关闭必须零副作用**：不发请求、不落 `raw.*`、不记 `ops.quota_ledger`。用户 2026-09-15 原话：「要省着用，功能留着，默认关闭」。<br>连带效果：D2 里的境外盘口（Pinnacle / The Odds API）降级为**可选校验通道**（P0-MARKET2 默认不派）——2026-09-15 探针核对确认**竞彩官方 10 分钟快照即收盘盘口**（`oddsList[].updateDate/updateTime`），CLV/EV 走免费官方源即可，见 `docs/探针核对报告-v1.1-20260915.md` |
 
 ## 3. 已实测的关键事实（全部真实请求验证）
+
+- **07:55 API-Football 的两个纠正（推翻我此前写进文档的结论）**：
+  ① 基址是 **`v3.football.api-sports.io`**（我 07:52 误用 `api.api-football.com` 去试，DNS 直接解析失败，白白当成"域名出事"）；
+  ② `/leagues` 的过滤器是 **`id=<单个整数>`**，**不是 `idLeague=`** —— 实测 `?id=136&season=2023` → 正常返回（136 = 意甲 **Serie B**，覆盖 `{}`），
+     而 `?idLeague=142` 才报 "The idLeague field do not exist"。⇒ **我上一版"免费档完全无法做 id 发现"的结论下重了**：
+     免费档能做的是"已知 id 一次确认"，不能做的是"按国家/名称批量搜"（`id=` **不接受逗号列表** ⇒ 扫描要一个 id 一次请求）。
+  ③ `?code=CSL&season=2023` → **HTTP 200 但 `response` 为空**（不是错误）⇒ `CSL` 不是它的代码；**继续猜代码不划算**（每次 1 个配额、且空结果无信息）。
+  ⇒ 结论不变但理由更正：**中超的 AF leagueId 需要你从 api-football 面板/文档给一个数**（拿到后我 1 个请求确认、当天就能接进采集）。
+- **07:54 我自己写错的 SQL 被自己的验收抓到**（第 3 次队长侧规格错，前两次是 2f 的目录口径与 E8 的 FK）：
+  DASH1a 的 `backtest_summary` 我写了 `sum(if_clv)`，而 **PostgreSQL 没有 `sum(boolean)`** ⇒ `psycopg.errors.UndefinedFunction`，
+  更要紧的是 `_fetch()` 那层"任何异常降级成 `[]`"**把这个错吞成了"面板没数据"** —— 这正是我担心的静默失效模式。
+  ⇒ 修法（进 `P0-DASH1b` ①）：`count(*) filter (where if_clv)`；并**保留**降级但额外 `logger.error("jc_view 面板降级 …")` 让它在日志里必须可见。
+  ⇒ **教训**：`except Exception → 返回空` 这种"页面不 5xx"的写法，必须配一条**面板级健康信号**，否则我写的验收只会看到"空但没错"。
+
 - football-data.org 免费：FINISHED 场次含 `score.halfTime`（英超 380/380 ✅）→ 半全场模型有粮
 - API-Football：/odds?date 免费有盘（当日 10 场 ✅）；season 限 2022–2024；100 req/天
 - The Odds API：免费 500 credits/月，全市场（NBA 让分/大小够用；CBA 盘口覆盖待 probe）

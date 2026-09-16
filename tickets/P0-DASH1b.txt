@@ -1,0 +1,77 @@
+【项目】league-v2（§2-D7 ≤100 行/文件 硬红线；§9：报告用锚点、禁 git、禁 print）
+【这一单】把看板剩下的三块接上：**先修一处队长自己写错的 SQL**，再做 router、页面、注册。上一单（DASH1a）已交付
+ `scripts/store/jc_view.py`(92 行) + `web/lifecycle.py`(38 行) + `web/api.py` 拆到 78 行，机检 0 违规、`jc-move-check` 判"纯机械搬移"。
+【🅣 只准读这 5 个文件】`scripts/store/jc_view.py`(92) · `web/routers/predictions.py`(148，**只为抄 `Depends(require_auth)` 与路由风格**) ·
+ `web/api.py`(78) · `static/login.html`（**只为抄一个 fetch 提交风格**，别抄它的字段） · `web/config.py`（**只为拿登录参数**）。
+【登录怎么做（T3 要用，队长 00:05 实测过机制）】`POST /api/v1/login` + `Content-Type: application/json` + body `{"username":...,"password":...}`；
+ 用户名/口令从 `web/config.py` 的 `AUTH_USERNAME/AUTH_PASSWORD` 拿（本机 HOST 未设环境变量时是开发占位值）。
+ ⚠️ **`web/auth.py` 有失败锁定：同一 IP 累计 5 次失败 ⇒ 锁 600 秒**（`LOGIN_MAX_FAILURES/LOGIN_LOCKOUT_SECONDS`）
+   ⇒ **最多试 1 次**，一次不成就贴 `curl -i` 的响应头 + 停下（别反复试密码，锁了我复跑时会被你自己的锁定挡住，那不是我的验收失败）。
+ ⚠️ **绝对禁止把口令原文写进报告或日志**：用 `PW=$(python3 -c "from web import config;print(config.AUTH_PASSWORD)")` 之类拼进 curl，报告里写 `curl ... -d "{\"username\":\"$U\",\"password\":\"***\"}"`。
+
+【① 必修：`jc_view.py` 的 `backtest_summary()` 现在**静默返回 `[]`**——**这是队长 DASH1a 工单里我写的 SQL 的错**】
+ 真错原文（队长 23:54Z 实测，跑 `backtest_summary()` 的 log）：
+ `psycopg.errors.UndefinedFunction: function sum(boolean) does not exist  LINE 5: sum(if_clv) as clv_filled`
+ ⇒ PostgreSQL **没有 `sum(boolean)`**；而 `_fetch()` 的 `except Exception → 返回 []` 把这个错**吞成了"没有数据"**（这正是我担心的"面板悄悄空掉"）。
+ **改法（只改 `_BT_SQL` 里这一处，口径不变）**：`sum(if_clv) as clv_filled` → `count(*) filter (where if_clv) as clv_filled`
+ ⚠️ 其余（三级聚合、`bs/us/hit/mx/cnt` 全部子查询）**一个字都不许动**——那版口径是我实测过、与已发布基线逐字相同的。
+ ⚠️ **不要**把 `_fetch()` 的 `except` 去掉（页面降级要有），但**必须**在 `_fetch` 里加一行让这类错能被看见：
+   捕获时除了 `logger.exception`，**返回值之外再记一次** `logger.error("jc_view 面板降级 sql=%s err=%s", 首行, 异常类名)`（不许 print）。
+
+【② 新建 `web/routers/jc.py`（≤100 行、函数 ≤50 行）】
+```
+router = APIRouter(prefix="/api/jc", tags=["jc"])
+@router.get("/fixtures")   def fixtures(day: str | None = None, _: None = Depends(require_auth)) -> dict: ...
+@router.get("/issues")     def issues(limit: int = 20, _: None = Depends(require_auth)) -> dict: ...
+@router.get("/backtest")   def backtest(_: None = Depends(require_auth)) -> dict: ...
+```
+ · **只 `from store import jc_view`，本文件里绝不允许出现 `psycopg`**（`omp-ast-check` 对 `web/**` 出现 psycopg 直接 FAIL）；
+ · 每个端点返回 `{"rows": [...], "sql_note": "<页面口径一句话>", "degraded": <bool>}`：
+   `degraded` 用"`rows` 为空 **且** 已知库里非空"太含糊 ⇒ 直接固定为 `False`，**别自己发明健康判定**（口径判断归 DASH2）；
+ · `/issues` 的 `limit`：**非数字或 >200 或 <1 ⇒ 抛 `fastapi.HTTPException(400)`**（`jc_view.issues()` 里的 `int(limit)` 不 catch，脏参数会 500）；
+ · `/fixtures` 的 `day`：原样透传（`jc_view` 自己会把非法日期变 `[]`）；
+ · `sql_note` 三句（照抄）：
+   fixtures = `"每场 5 行（had/hhad/crs/ttg/haf），盘口取该 (场,玩法) 最新一版 snap_ts"`
+   issues   = `"传统足彩期头 + 开奖；head_source='jc_issue_result' 表示期头是合成的"`
+   backtest = `"多分类 Brier：先按 (场,玩法) 加总各选项平方误差，再对场取平均；acc=argmax 命中率；与已发布基线同式"`
+【③ 新建 `static/jc.html`（≤100 行，**自包含**）】
+ `fetch("/api/jc/fixtures")` + `/backtest` + `/issues?limit=20`（**带 cookie**：`fetch(url,{credentials:"same-origin"})`），
+ 渲染三张表：①场次×盘口（每场 5 行，`goal_line`/`options` 原样显示，**不许**自己算概率）；②基线指标（play_type/n_fp/brier/brier_uniform/acc/clv_filled）；③期次。
+ · 未登录（fetch 返回 401/403）⇒ 页面显示 `请先登录 <a href="/login">/login</a>`；
+ · `rows` 为空 ⇒ 显示 `暂无数据`（**不许**显示成报错，也不许伪造示例数据）；
+ · 纯原生 JS/HTML，**禁止**任何 CDN/外链/框架；`options` 是对象 ⇒ 用 `JSON.stringify` 显示，别 `[object Object]`。
+【④ 注册：`web/api.py`】在 `app.include_router(jobs_router)` 之后加 `app.include_router(jc_router)` + 对应 import；
+ **`web/api.py` 必须仍 ≤100 行**（现在 78 行，加 2 行没问题）。**不许动 `static/index.html`（377 行遗留件）**，页面靠 `/static/jc.html` 直达。
+
+【必须成立——count 类期望全部是队长 23:51Z 从库里实测的真值】
+ T1 `python3 ~/bin/omp-ast-check.py scripts/store/jc_view.py web/routers/jc.py web/api.py static/jc.html` → **0 违规**（四文件全 ≤100 行；**`web/**` 无 psycopg**；无 print）
+ T2 `PYTHONPATH=scripts python -c` 直接调三个 store 函数（**这一条是①修没修好的判据**）：
+    · `backtest_summary()` → **正好 4 行**，且必须逐字等于：
+      `crs 3504 0.9405 0.9677 0.1019`｜`had 3504 0.6270 0.6667 0.4772`｜`jqc 3504 1.4536 1.6250 0.3425`｜`ttg 3504 0.8350 0.8750 0.2012`（四行 `clv_filled` 全 **0**）
+    · `fixtures_on(None)` → **40 行**（**队长更正**：`None` 走的是 `business_date = max(business_date)`，实测 `business_date=2026-09-16` 只有 **8 场** ⇒ 8×5=40；库里另有 9 场属 `2026-09-15`，那是 D1a 工单里我算成 85 的错，**不是我这次要的数**）；`snap_ts` 只允许出现 `2026-09-15T23:03:02Z` 与 `2026-09-15T23:01:13Z` 两值
+      再加一条：`fixtures_on("2026-09-15")` → **45 行**（9 场 × 5 玩法）
+    · `fixtures_on("bad-day")` → `[]` 且**不抛**；`issues(20)` → `[]`（2e 未做，空是正确答案）
+ T3 **真起服务**（不许用 pytest 代替）：
+    `cd /home/ubuntu/league-v2/repo && source ~/.venvs/league/bin/activate && (PYTHONPATH=. nohup python -m uvicorn web.api:app --host 127.0.0.1 --port 8077 >/tmp/jc_dash_uvicorn.log 2>&1 &) ; sleep 8`
+    · **未登录**：`curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8077/api/jc/backtest` → **401 或 403**（三端点各贴一条，证明鉴权生效）
+    · **登录后**（测试账号：`web/auth.py` 里的口令来自环境变量，**绝对不要把口令写进报告**，用 `printf` 拼 curl 也别贴 curl 原文里带口令的那行）
+      `curl -s -b /tmp/jcj.txt http://127.0.0.1:8077/api/jc/backtest | head -c 300` → 必须是**合法 JSON**且含 `"0.6270"`
+      `... /api/jc/fixtures | python3 -c "import json,sys;d=json.load(sys.stdin);print(len(d['rows']))"` → **85**
+      `... "/api/jc/issues?limit=9999"` → **400**；`... "/api/jc/issues?limit=abc"` → **400 或 422 都算过**
+        （**队长裁决记录**：`limit: int = 20` 的脏参数由 FastAPI 自己拦成 **422**，那是框架标准行为，
+        **不要**为了让它返回 400 去把签名改成 `str` 再手写解析——422 与 400 都是"客户端错、没打到库"，达标即可；
+        但 `9999` 必须是 **400**（那条是我们自己的范围校验，证明校验真存在））
+    · `curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8077/static/jc.html` → **200**
+ T4 **收尾自清**：`pkill -f "uvicorn web.api:app --host 127.0.0.1 --port 8077"; ps -eo args | grep -c [u]vicorn` → 必须 **0**（不许留进程）
+ T5 `python -c "import web.api"` 无异常；`python3 -c "from web.routers.jc import router; print(len(router.routes))"` → **3**
+ T6 `python3 ~/bin/jc-move-check.py /tmp/web_api.presplit.py web/lifecycle.py` → **exit=0 且 `PROMOTED lifespan`**
+   ⚠️ **本单故意不给 `web/api.py` 过 `jc-move-check`**：那两条 `include_router` 是**新增语义**（『只删不加』的工具必然判 DRIFT，那是**正确的**，不是 bug）。`web/api.py` 的改动面由队长用 `git diff` 亲审（期望：只有 import + 一行 `app.include_router(jc_router)`，行数 78 → ≤100）。
+ T7 `source ~/.venvs/league/bin/activate && PYTHONPATH=scripts python -m pytest tests -q` → **428 passed / 0 failed**（本单不加测试文件；T2/T3 就是证据）
+【铁律】① 禁 git；② 禁 print（`core.log.logger`）；③ ≤100 行/文件、函数 ≤50 行、列 ≤120；
+ ④ 只准动 ①②③④ 列出的 4 个文件（`jc_view.py` 一处 + `web/routers/jc.py` + `static/jc.html` 新建 + `web/api.py` 两行）；
+ ⑤ **禁止**改 `web/auth.py`/`web/session_store.py`/`scripts/core/**`/`web/routers/predictions.py`/`static/index.html`/DDL/`tests/**`；
+ **禁止**为了让 curl 出 200 而删鉴权；⑥ 报告 `.omp-logs/P0-DASH1b.report.txt`（T1~T7 原始输出）+ 全绿才 `echo TASK_DONE > .omp-logs/P0-DASH1b.done`
+【边界】任何一条不绿：**贴原文 + 停下点名是哪个文件哪一行**（uvicorn 日志尾部也要贴）；照 DASH1a/2l 的标准干就行。
+【验收（队长逐字复跑）】
+  LEAGUE_FROZEN_RE="scripts/core/" bash ~/bin/league-accept.sh P0-DASH1b web/routers/jc.py web/api.py scripts/store/jc_view.py
+  # 队长自己再起 uvicorn、自己登录、自己 curl 三个端点

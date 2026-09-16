@@ -1,62 +1,107 @@
-【项目】league-v2（§2-D7 ≤100 行/文件 硬红线；§9：报告用锚点、禁 git、禁 print）
-【范围】只写**传统足彩五张表**：`fact.jc_issue` / `fact.jc_issue_draw` / `fact.jc_issue_match` / `fact.jc_issue_prize` / `fact.lottery_draw`。
-竞彩那三张（`jc_match/jc_offer/jc_result`）由 P0-COLLECT2d 已完成 ⇒ **入口已存在**：先读 `scripts/ingest/jc_load.py`（≤120 行）**在它上面加**，不许重写、不许改它已有的三表逻辑。
+【项目】league-v2（§2-D7 ≤100 行/文件、≤50 行/函数、≤120 列 硬红线；§9：报告用锚点、禁 git、禁 print）
+【这一单做什么】把**传统足彩五表**从"解析器已就绪、装载器 skip"接成"能落库"。解析器 `store/parse_jcissue.py`(41)/`store/parse_misc.py`(33) **已验收，本单只读不改**；
+ 缺的只有**写层 + 接线**。队长 00:20Z 用 5 批真包**重新逐表推导过 oracle**（数字与本单旧版一致，但推导过程现在写全了，见 D 节）。
+【🅣 只准读这 5 个文件】`scripts/ingest/jc_load.py`(87) · `scripts/ingest/jc_write.py`(100，**只为抄 `_upsert` 调用姿势**) ·
+ `scripts/store/parse_collector.py`(78) · `scripts/store/parse_jcissue.py`(41) · `scripts/store/parse_misc.py`(33)。第 1 分钟就 write/edit。
 
-【🅐 第一动作（违反即判失败）】
- 1. 第 1 分钟：读 `scripts/ingest/jc_load.py` + `scripts/ingest/jc_write.py`（看清 2d 已建立的 upsert 风格与批遍历入口），**立刻**列出"我要新增哪几个函数"写进报告草稿；
- 2. 第 2 分钟起：新建 `scripts/ingest/jc_issue_write.py`（≤100 行，别塞进 `jc_write.py`，它已经贴着红线）并接上 `jc_load.py`；
- 3. 每写完一个函数就跑 `PYTHONPATH=scripts python scripts/ingest/jc_load.py --dir /tmp/incoming`，报错就地修。
- ⚠️ **开单 8 分钟内没有 write/edit = 直接拒收**（前两单各 40 分钟 0 改动全废，队长看日志时间戳）。
+【A. 解析器返回的**已经是写指令**（照抄，别猜）】`parse_line(env)` 对这三个 topic 返回
+ `{"table": "fact.jc_issue", "pk": {"game_num": "90", "issue_no": "26127"}, "row": {...}, "notes": [...]}`
+ ⇒ 本单核心是**泛型写**：`_upsert(cur, d["table"], list(d["pk"]), cols, row, ...)`。**不要**给每张表手写一个函数（行数会爆）。
 
-【🅑 只准读这些】`scripts/ingest/jc_load.py`、`scripts/ingest/jc_write.py` 全文 · `scripts/store/parse_collector.py` 第 1-40 行 ·
- `docs/db/infra_p0_8_jc_tables.sql`（查列名与 FK）· `scripts/ingest/collector_pull.py` 第 40-99 行。**其余不许读。**
-
-【附：五张表的**真实列**（队长 21:22Z 从 `information_schema` 拉的，`!` = NOT NULL 且**无默认值** ⇒ 你必须给值，否则整块插不进去）】
-· `jc_issue`：`game_num!` `issue_no!` `game_name` `sale_begin` `sale_end` `draw_at` `n_matches!` `draw_num_list!` `raw_head!` `src_hash!` `src_file!` `first_seen_at!` `last_seen_at!`
-  ⇒ **合成父行最容易死在 `n_matches` / `draw_num_list` 上**：前者用 `len(matchList)`，后者用该期 result 的比分列表长度或 `[]`（**空数组是合法 JSONB 值，别塞 `""`**）。
-· `jc_issue_draw`：`game_num!` `issue_no!` `game_key!` `draw_result` `pool_after` `sales` `pool_after_rj` `sales_rj` `paid_begin` `paid_end` `is_delay` `delay_remark` `src_hash!` `src_file!` `first_seen_at!` `last_seen_at!` **`game_name`**
-  · `game_key!` NOT NULL ⇒ 由 `lotteryGameNum` 推（90→`4ffzz`、98→`4ffi`、94→`bjj9`；**推不出就整行放弃并记 `notes`，不许瞎猜**）；
-  · `game_name` 是队长**已 ALTER 加上的新列**（DDL 文件 `docs/db/infra_p0_8_jc_tables.sql` 已同步），别再用 `ref.league.game_key` 反查。
-· `jc_issue_match`：`game_num!` `issue_no!` `seq!` `gm_match_id` `league_cn` `home_cn` `away_cn` `home_short` `away_short` `start_date` `raw!` `is_drawn!` `cz_score` `cz_half_score` `official_result` `src_hash!` `src_file!` `first_seen_at!` `last_seen_at!`
-· `jc_issue_prize`：`game_num!` `issue_no!` `tier_no!` `prize_level!` `stake_count` `stake_amount` `stake_amount_format` `total_prizeamount` `award_type` `grp` `sort_no` `is_rj!` `raw!` `src_hash!` `src_file!` `is_current!`
-  ⇒ 真包产 **0 行**；测试用夹具旧探针（`prizeLevelList` 非空那 3 行）在**单事务 ROLLBACK** 里跑，断言 `is_current` 的 true/false 迁移。
-· `lottery_draw`：`game_num!` `issue_no!` `game_name` `draw_date` `status` `numbers_raw!` `numbers!` `prizes!` `pool` `equipment_count` `src_hash!` `src_file!` `first_seen_at!` `last_seen_at!`
-  ⇒ `numbers_raw!` 存**原始字符串**（不拆不排不去重）；`numbers!`/`prizes!` 是 jsonb（解析层给的数组/对象，允许 `[]`/`{}`，**不允许 `""`/`None`**）。
-
-【oracle：真包 3 批全跑完的期望行数（队长独立算好，逐表核对）】
-| 表 | 行数 | 拆解 |
+【B. 新建 `scripts/ingest/jc_issue_write.py`（≤100 行）——公开面固定】
+```
+from ingest.jc_write import _upsert          # 队长批准复用（不要为此去改 jc_write.py）
+ROW_COLS / JSONB_COLS: 见 C 节，照抄
+def upsert_descriptor(cur, d: dict, snap: str, source: dict, synth: dict | None = None) -> int: ...
+def upsert_issue_matches(cur, payload: dict, snap: str, source: dict) -> int: ...
+```
+ · `upsert_descriptor`：
+   1) `cols = [c for c in ROW_COLS[table] if c in d["row"]]`（**只写解析器真给了的键**，缺列就少写列，不许自己补默认值）；
+   2) **空串 → None**：任何 `str` 值等于 `""` ⇒ 传 `None`（§3 铁律"空串不是数据"；`jc_issue_draw` 的 6 个 text 列实测全是空串，T4 就查这个）；
+   3) **jsonb 必须包 `Json(...)`**（E4 那一课，psycopg3 不自动适配 dict/list）：只对 `JSONB_COLS[table]` 里的列包；
+   4) 审计列一律补：`src_hash`/`src_file` ← `source`；`first_seen_at`/`last_seen_at` ← `snap`（这五张表全是 NOT NULL）；
+   5) **`gates=None`**（这五张表**没有** `snap_ts` 列，别照抄竞彩三表的防回退）；
+   6) `synth` 不为 None 时 ⇒ 表示"这期只有开奖、没见到期头"，要**合成一条 `fact.jc_issue` 父行**：
+      `game_num/issue_no` 用 `synth`，`n_matches = 0`（NOT NULL，不许填 14 骗人），`draw_num_list = Json([])`，
+      `raw_head = Json({"head_source": "jc_issue_result"})`（**页面/查询靠这个键区分合成行**），其余列 NULL。
+ · `upsert_issue_matches`：把 `payload["matchList"]` 展开写 `fact.jc_issue_match`，**映射表（队长 00:14Z 实测 210 个元素的键分布）**：
+   | matchList 元素键 | → 列 | 规则 |
+   |---|---|---|
+   | 期身份 `lotteryGameNum`/`lotteryDrawNum` | `game_num`/`issue_no` | 用**期**的值 |
+   | `matchNum` **int** | `seq` smallint | PK 之一；实测恒等于 1-based 下标（114/114）⇒ **直接用 `matchNum`** |
+   | `gmMatchId` int | `gm_match_id` bigint | 只期头侧有（114 个）；开奖侧**没有这个键** ⇒ 传 None，**不许填 0** |
+   | `matchName` | `league_cn` | 例 `"亚运男足"` |
+   | `masterTeamAllName`/`guestTeamAllName` | `home_cn`/`away_cn` | 全名 |
+   | `masterTeamName`/`guestTeamName` | `home_short`/`away_short` | 简称（**含全角空格**，如 `"国  安"`，原样存别 trim） |
+   | `startTime` `"2026-09-16"` | `start_date` **date** | `date.fromisoformat`；实测 210/210 都是纯日期无时间 |
+   | `result` / `czScore` / `czHalfScore` | `official_result` / `cz_score` / `cz_half_score` | **空串 → None**（实测 24 个开奖场次里这三列**全为空串** ⇒ 本批落库应全是 NULL，别当赛果写进去） |
+   | `a` / `d` / `h` / `infohubMatchId` / `leagueId` | **无对应列** ⇒ 只活在 `raw` 里 | **禁止**为它们 ALTER 表（D7 前向原则） |
+   | 整个元素 dict | `raw` jsonb NOT NULL | `Json(元素)` |
+   | — | `is_drawn` boolean NOT NULL | 一律 **`False`**（实测 `result` 非空 **0/24** ⇒ 现在没有"已开赛果"的证据） |
+【C. 类型与 jsonb 事实（队长 00:12Z 从 `information_schema` 导，别再查）】
+```
+ROW_COLS = {
+  "fact.jc_issue":      ("game_num","issue_no","game_name","sale_begin","sale_end","draw_at",
+                         "n_matches","draw_num_list","raw_head"),
+  "fact.jc_issue_draw": ("game_num","issue_no","game_key","game_name","draw_result","pool_after","sales",
+                         "pool_after_rj","sales_rj","paid_begin","paid_end","is_delay","delay_remark"),
+  "fact.lottery_draw":  ("game_num","issue_no","game_name","draw_date","status","numbers_raw",
+                         "numbers","pool","equipment_count","prizes"),
+}
+JSONB_COLS = {"fact.jc_issue": ("draw_num_list","raw_head"),
+              "fact.jc_issue_draw": (),
+              "fact.lottery_draw": ("numbers","prizes")}
+```
+ · `jc_issue`(13 列)：`n_matches` smallint NN；`draw_num_list`/`raw_head` jsonb NN；`sale_begin/sale_end/draw_at` 是 **`timestamp without time zone`**，解析器给的是 **naive `datetime`** ⇒ 直接传，别转字符串。
+ · `jc_issue_draw`(17 列)：`game_key` text NN（实测 `"sfc"`）；`draw_result/pool_after/sales/pool_after_rj/sales_rj/delay_remark` **实测全是 `""`** ⇒ 走 B-2)；`paid_begin/paid_end` naive datetime。
+ · `jc_issue_match`(19 列)：PK `(game_num,issue_no,seq)`；`raw` jsonb NN、`is_drawn` boolean NN。
+ · `jc_issue_prize`(16 列)：PK `(game_num,issue_no,tier_no)`。**本单不写**：5 批 12 期 `prizeLevelList` **实测全为空数组**（`{'list:0': 12}`）⇒ **留 0 行就是正确答案，禁止造占位行**。
+ · `lottery_draw`(14 列)：PK `(game_num,issue_no)`；`numbers_raw` text NN；`numbers` jsonb（`{"front":[...],"back":[...]}`）；`prizes` jsonb **NOT NULL 且实测非空 list** ⇒ 必须 `Json(...)`；`draw_date` 是 **date**；`status`/`equipment_count` 是 int。
+【D. oracle 的完整推导（**5 批 = `/tmp/incoming_all` 一次跑完**）】
+ · 行数（parse 成功 / 总行）：`jc_issue 12/12`（旧 4 + 新 8）、`jc_issue_result 12/12`（6+6）、`lottery_draw 480/480`（240+240）⇒ **零解析失败**。
+| 表 | 期望 | 推导（可复核的 SQL/口径） |
 |---|---|---|
-| `fact.jc_issue` | **7** | 4 个真期头（90/26127、900129/26127、98/26181、94/26188）+ **3 个必须由 `jc_issue_result` 合成的父行**（90/26126、98/26180、94/26187） |
-| `fact.jc_issue_draw` | **3** | 6 行 result（同内容两批）→ 3 个不同期 |
-| `fact.jc_issue_match` | **62** | 真期头 38 场（14+14+6+4）+ 合成父行 24 场（14+6+4） |
-| `fact.jc_issue_prize` | **0** | **真包 6 行 result 的 `prizeLevelList` 全是空数组**（未开奖，官方 09-16 才开）⇒ **一行都不许造** |
-| `fact.lottery_draw` | **120** | 240 行 → 120 个 `(game_num, issue_no)`；其中 30 期跨批内容有变 ⇒ 取最新 |
-同一目录**连跑两遍，五表 count 逐表一字不变**。
+| `fact.jc_issue` | **7** | 真期头 distinct `(game_num,issue_no)` = **4**：`('90','26127') ('900129','26127') ('94','26188') ('98','26181')`；<br>开奖侧 distinct = **3**：`('90','26126') ('94','26187') ('98','26180')`；**两侧交集 = 0**（开奖都是上一期号）⇒ **必须合成 3 条父行** ⇒ 4 + 3 = **7**。<br>　　⚠️ 为什么非合成不可（队长 00:14Z 逐条查过约束，别自己下结论）：`fact.jc_issue_draw` **没有** FK（0 条）⇒ 它自己插得进去；但 `fact.jc_issue_match` 与 `fact.jc_issue_prize` **都有** FK → `fact.jc_issue` ⇒ 开奖侧那 24 场若没有合成父行，会**直接 `ForeignKeyViolation` 整批回滚**（就是 E8 那一类）。页面侧同样需要父行，否则 3 个开奖期次查不到期头。 |
+| `fact.jc_issue_draw` | **3** | 12 行 → distinct `(game_num,issue_no)` = 3（跨批重复 4 次） |
+| `fact.jc_issue_match` | **62** | 期头侧展开 distinct = **38** + 开奖侧 = **24**，两侧 issue 不相交 ⇒ 并集 **62**（**不要**只从 `jc_issue` 展开，那样少 24 行） |
+| `fact.jc_issue_prize` | **0** | `prizeLevelList` 12 期全空 |
+| `fact.lottery_draw` | **120** | 480 行 → distinct `(game_num,issue_no)` = 120 |
+ · 另外**每批 `lottery_draw` 都是 240 行、跨批完全重复** ⇒ 这一张表就是"幂等 + 去重"的最强测试（480 进 120 出）。
 
-【本单真正的难点：FK 孤儿是常态，必须父行先行（队长核过，不许改口径）】
-· `jc_issue_result` 的期头**永远比 `jc_issue` 的在售期头早一期** ⇒ 真包 **3/3 全是孤儿**，而 `jc_issue_draw/jc_issue_match/jc_issue_prize` 都有 FK 指向 `fact.jc_issue`。
-· 合成父行只用 result payload **自带**的字段：`lotteryGameNum / lotteryGameName / lotterySaleBeginTime / lotterySaleEndtime / lotteryDrawTime` + `len(matchList)`；
-  `raw_head` 存原 payload，并在 jsonb 里加 `"head_source":"jc_issue_result"`（**就是这个拼写**）；**不许为此改 DDL/加列**。
-· 后到的**真期头**（`jc_issue` topic）只允许**补空列**，**不覆盖已有非空值**（期头 topic 才是权威）；同事务内先父后子，父行写不进则**整块子树放弃并记 `notes`**（**宁可不插，不可插错**）。
-· `is_current`：`fact.jc_issue_prize` 有这列（官方开奖后会整体换形 `tier_no`，而 `league_ing` 在 fact **无 DELETE**）⇒ 重刷同期时用 **UPDATE 把差集置 `is_current=false`**；
-  真包产 0 行，但**这条代码路径必须有测试覆盖**（用夹具里那 3 行旧探针 `jc_issue_result`——它们的 `prizeLevelList` 非空，会产 prize 行；测试跑在单事务里 ROLLBACK）。
-· 类型容错（照 2d 的规矩）：`""` / 缺键 / 类型不对 ⇒ **NULL**，不许抛、不许当 0。真实样本：`lotterySaleEndTimeUnix` 两批分别是 `0`(int) 与 `{}`(dict)；
-  `jc_issue_draw.sales/pool_after/sales_rj` 未开奖时是**空串带千分位**；`lottery_draw.prizes` 跨批**整体换形** ⇒ 原值一律保留在 jsonb/text，转换失败逐条进 `notes`。
-· `lottery_draw` 身份 = `(lotteryGameNum, lotteryDrawNum)` **两键**（单用期号会跨玩法重号）；`numbers` 保持**原样字符串**（不拆不排不去重）。
+【E. 接线：`scripts/ingest/jc_load.py`（87 行，**只加不改语义**，最终 ≤100 行）】
+ `WRITE` 从 `("jczq_offer","jczq_result")` 扩到 `("jczq_offer","jczq_result","jc_issue","jc_issue_result","lottery_draw")`；
+ 这 5 个 topic 现在的 `logger.info("skip %s n=%d (2e 范围)")` 换成真写：
+ · `jc_issue` ⇒ `upsert_descriptor(...)` + `upsert_issue_matches(cur, env["payload"], snap, src)`；
+ · `jc_issue_result` ⇒ 先 `upsert_descriptor(..., synth={"game_num":g,"issue_no":i})`（**合成父行**，同一 PK 已存在时靠 upsert 不覆盖真期头：
+   **合成调用必须在真期头之后仍安全** ⇒ 用 `_upsert(..., extra_where="fact.jc_issue.raw_head ? 'head_source'")` 之类把"不许把真期头改成合成行"钉住；
+   想不出安全写法就**贴出你的写法进报告**让队长审，别硬编）+ `upsert_descriptor(draw...)` + `upsert_issue_matches(...)`；
+ · `lottery_draw` ⇒ `upsert_descriptor(...)`；
+ ⚠️ `jclq_offer`/`jclq_result` **继续 skip**（那是 `P0-STORE2` 的范围，别顺手做）。
 
 【必须成立】
- T1 `PYTHONPATH=scripts python scripts/ingest/jc_load.py --dir /tmp/incoming` 跑通，五表 count = **7 / 3 / 62 / 0 / 120**
- T2 同命令第二遍：五表 count 一字不变（两遍原始输出都进报告）
- T3 **写入证据**：报告贴一条真实落地证据（`ops.ingest_log` 或 `ops.file_arrival` 查询输出，含 `rows_ups`）——只有 pytest 绿不算
- T4 `fact.jc_issue` 里**合成父行与真期头可区分**：`select coalesce(raw_head->>'head_source','(真期头)'), count(*) from fact.jc_issue group by 1` 输出 **3 / 4**
- T5 `PYTHONPATH=scripts python -m pytest tests -q` → **428 passed / 0 failed**（本单会**新增** prize 路径用例 ⇒ 总数应 ≥429，用例行数在报告里写明）
- T6 `python3 ~/bin/omp-ast-check.py scripts/ingest/jc_load.py scripts/ingest/jc_issue_write.py <你新增/改的每个文件>` → **0 违规**（每个文件 ≤100 行）
-【铁律】① 禁 git；② 禁 print；③ ≤100 行/函数 ≤50 行/≤120 列；④ stdlib + psycopg（仅 ingest/store）；
- ⑤ 禁改：`scripts/store/parse_*.py`、`scripts/ingest/jc_write.py` 里 2d 已写的三表函数（要复用就 import，别改）、`tests/fixtures/**`、
- 任何 DDL/建表/加列/GRANT、`/srv/league-staging/**`、真联网；测试写库一律单事务 + ROLLBACK（T1/T2 真跑是唯一允许的留痕）；
- ⑥ 报告 `.omp-logs/P0-COLLECT2e.report.txt`（T1~T6 原始输出 + "哪几处我很想顺手改但没改"）+ `echo TASK_DONE > .omp-logs/P0-COLLECT2e.done`
-【边界】若"合成父行"在某张表上写不进（FK/非空/CHECK 冲突），**停下点名那张表那一列**；
- **绝对禁止**为了凑 count 而：造 prize 行、把孤儿子行直接丢弃不记 `notes`、或改解析层。可确认数允许是 0。
+ T1 起点自查（**非 0 就停下报告，别 truncate**）：
+    `sudo -n -u postgres psql -d league -Atc "select (select count(*) from fact.jc_issue)||'/'||(select count(*) from fact.jc_issue_draw)||'/'||(select count(*) from fact.jc_issue_match)||'/'||(select count(*) from fact.jc_issue_prize)||'/'||(select count(*) from fact.lottery_draw)"` → **`0/0/0/0/0`**
+ T2 `cd /home/ubuntu/league-v2/repo && source ~/.venvs/league/bin/activate && PYTHONPATH=scripts python scripts/ingest/jc_load.py --dir /tmp/incoming_all` 跑**两遍**：
+    · 每条 batch 日志 `errors=[]`（一条不许有错）；末行 count 两遍一字不变，且必须是
+      `jc_match=17 jc_offer=250 jc_result=15 jc_issue=7 jc_issue_draw=3 jc_issue_match=62 jc_issue_prize=0 lottery_draw=120`（**贴原始整行**）
+ T3 合成父行可区分：`sudo -n -u postgres psql -d league -c "select coalesce(raw_head->>'head_source','(真期头)') as h, count(*) as n from fact.jc_issue group by 1 order by 1"`
+    → 必须正好两行：**`(真期头) | 4`** 与 **`jc_issue_result | 3`**（合成行的标记只在 `raw_head` 里，**不新增列**）
+ T4 **空串已变 NULL**：`sudo -n -u postgres psql -d league -Atc "select count(*) from fact.jc_issue_draw where draw_result='' or pool_after='' or sales='' or delay_remark=''"` → **0**；
+    `... "select count(*) from fact.jc_issue_draw where draw_result is null"` → **3**
+ T5 **赛果三列必须是 NULL**（别把空串当比分）：`sudo -n -u postgres psql -d league -Atc "select count(*) from fact.jc_issue_match where official_result is not null or cz_score is not null or cz_half_score is not null"` → **0**；
+    `... "select count(*) from fact.jc_issue_match where is_drawn"` → **0**
+ T6 **jsonb 真进去了**：
+    `... "select count(*) from fact.jc_issue where raw_head ? 'lotteryGameNum'"` → **4**
+    `... "select count(*) from fact.lottery_draw where jsonb_array_length(prizes) > 0"` → **120**
+    `... "select count(*) from fact.jc_issue_match where raw ? 'leagueId'"` → **62**
+ T7 **FK 可满足**：`python3 ~/bin/jc-fk-audit.py fact` → **exit=0**（真外键只有两条：`jc_issue_match → jc_issue`、`jc_issue_prize → jc_issue`；`jc_issue_draw` **无 FK** ⇒ T7 绿不代表 draw 侧数据完整，还得看 T3 的合成行）
+ T8 `python3 ~/bin/omp-ast-check.py scripts/ingest/jc_issue_write.py scripts/ingest/jc_load.py scripts/ingest/jc_write.py scripts/store/parse_jcissue.py scripts/store/parse_misc.py` → **0 违规**
+ T9 `python3 ~/bin/jc-cols-check.py scripts/ingest/jc_issue_write.py` → 全 ✔；再跑 `python3 ~/bin/jc-cols-check.py scripts/ingest/jc_write.py` → **仍全 ✔**（证明没碰坏老文件）
+ T10 `PYTHONPATH=scripts python -m pytest tests -q` → **428 passed / 0 failed**
+【铁律】① 禁 git；② 禁 print；③ ≤100 行/文件、函数 ≤50 行、列 ≤120；④ **只准新建 `jc_issue_write.py` + 改 `jc_load.py`**；
+ 解析器三文件与 `jc_write.py` **只读**；⑤ 禁改 DDL/`tests/**`/`web/**`/`static/**`、禁真联网、禁 `truncate`/`delete`；
+ ⑥ 报告 `.omp-logs/P0-COLLECT2e.report.txt`（T1~T10 原始输出 + "哪几处我很想顺手改但没改"）+ 全绿才 `echo TASK_DONE > .omp-logs/P0-COLLECT2e.done`
+【边界】D 节任何一格数不对：贴**原始 count 输出**+点名函数/行，**停下**；**绝对禁止**为凑数造 prize 行、把孤儿子行悄悄丢掉不记 `notes`、或改解析层。
 【验收（队长逐字复跑）】
-  bash ~/bin/v2b-check.sh    # 三遍真跑 + 八表逐表 count + gap + is_current/head_source 抽查
-  bash ~/bin/league-accept.sh P0-COLLECT2e scripts/ingest tests/test_ingest_jc_issue.py
+  bash ~/bin/v2b-check.sh
+  LEAGUE_FROZEN_RE="scripts/core/" bash ~/bin/league-accept.sh P0-COLLECT2e scripts/ingest/jc_issue_write.py scripts/ingest/jc_load.py

@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import time
-from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -24,39 +23,17 @@ except Exception:  # AI 扩展模块损坏不得拖垮 app 启动（WO-M3 验收
     errors.logger.exception("AI 路由导入失败，已降级跳过")
     ai_router = None
 from web.routers.jobs import router as jobs_router
+from web.routers.jc import router as jc_router
 from web.routers.predictions import router as predictions_router
 from web.routers.sources import router as sources_router
+from web.lifecycle import lifespan
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 APP_TITLE = "league-predict Web Dashboard"
 APP_VERSION = "0.1.0"
 
 
-def _start_cron(app: FastAPI) -> None:
-    """ENABLE_CRON=true 时启动 apscheduler（可选件，try-import 降级）。"""
-    if not config.ENABLE_CRON:
-        return
-    try:
-        from web.services.cron import start_scheduler
-        start_scheduler(app)
-    except Exception as exc:  # 任何异常都不许拖垮 app 启动
-        errors.logger.exception("cron 启动失败（降级为不启用）: %s", exc)
-
-
 def create_app() -> FastAPI:
-    @asynccontextmanager
-    async def lifespan(app: FastAPI):
-        # 启动时清理一次过期会话（幂等；正常路径有惰性清理兜底）。
-        from web import session_store
-        session_store.purge_expired_sessions()
-        _start_cron(app)
-        yield
-        try:
-            from web.services.cron import shutdown_scheduler
-            shutdown_scheduler()
-        except Exception:
-            pass
-
     app = FastAPI(title=APP_TITLE, version=APP_VERSION, lifespan=lifespan)
     errors.register(app)
 
@@ -88,6 +65,7 @@ def create_app() -> FastAPI:
     app.include_router(predictions_router)
     app.include_router(sources_router)
     app.include_router(jobs_router)
+    app.include_router(jc_router)
     if ai_router is not None:
         app.include_router(ai_router)
     return app
