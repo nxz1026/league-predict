@@ -18,11 +18,11 @@ TABLES = ("jc_match", "jc_offer", "jc_result", "jc_issue", "jc_issue_draw",
 
 
 def _ops(cur, topic: str, rel: str, size: int | None, n: int, ups: int,
-         rej: list, gap: bool) -> None:
+         rej: list, gap: bool, done: bool) -> None:
     cur.execute("insert into ops.file_arrival (topic,src_file,bytes,rows,done_marker) values "
                 "(%s,%s,%s,%s,%s) on conflict (topic,src_file) do update set bytes=excluded.bytes,"
                 "rows=excluded.rows,done_marker=excluded.done_marker",
-                (topic, rel, size, n, not gap))
+                (topic, rel, size, n, done))
     cur.execute("insert into ops.ingest_log (topic,src_file,rows_in,rows_ups,rejected,ok) "
                 "values (%s,%s,%s,%s,%s,%s)",
                 (topic, rel, n, ups, Json(rej) if rej else None, not rej or gap))
@@ -30,7 +30,7 @@ def _ops(cur, topic: str, rel: str, size: int | None, n: int, ups: int,
 
 def load_topic(cur, root: Path, marker: Path, topic: str, path: Path | None, state: str) -> dict:
     rel = f"{topic}/{path.name}" if path else f"{marker.stem}/{topic}#MISSING"
-    lines = read_lines(path) if path and state == "jsonl" else []
+    lines = read_lines(path) if path and state in ("jsonl", "orphan") else []
     n, ups, rej = len(lines), 0, []
     if topic in WRITE:
         for i, env in enumerate(lines, 1):
@@ -46,8 +46,9 @@ def load_topic(cur, root: Path, marker: Path, topic: str, path: Path | None, sta
                 ups += jc_write.upsert_jc_result(cur, p["row"], snap, src, None, None)
     else:
         logger.info("skip %s n=%d (2e 范围)", topic, n)
-    _ops(cur, topic, rel, path.stat().st_size if path else 0, n, ups, rej, state == "missing")
-    return {"topic": topic, "lines": n, "ups": ups, "gap": state == "missing"}
+    gap, done = state == "missing", state != "missing" and state != "orphan"
+    _ops(cur, topic, rel, path.stat().st_size if path else 0, n, ups, rej, gap, done)
+    return {"topic": topic, "lines": n, "ups": ups, "gap": gap}
 
 
 def load_batch(conn, root: Path, marker: Path) -> dict:
@@ -75,6 +76,17 @@ def main(argv: list[str] | None = None) -> int:
             r = load_batch(conn, root, m)
             logger.info("batch %s ups=%d errors=%s", r["marker"],
                         sum(t["ups"] for t in r["topics"]), r["errors"])
+        seen = {p for m in iter_markers(root, args.batch)
+                for cs in files_for_batch(root, m, TOPICS).values() for p, _ in cs or [] if p}
+        orph = [p for t in TOPICS for p in sorted((root / t).glob("*.jsonl")) if p not in seen]
+        try:
+            with conn.cursor() as cur:
+                for p in orph: load_topic(cur, root, Path("orphan"), p.parent.name, p, "orphan")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+        logger.info("orphan 装载 n=%d 文件=%s", len(orph),
+                    ",".join(p.name for p in orph[:5]) + ("…" if len(orph) > 5 else "") or "-")
         with conn.cursor() as cur:
             vals = [cur.execute(f"select count(*) from fact.{t}").fetchone()[0] for t in TABLES]
         conn.commit()
