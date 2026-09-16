@@ -75,3 +75,12 @@ router = APIRouter(prefix="/api/jc", tags=["jc"])
 【验收（队长逐字复跑）】
   LEAGUE_FROZEN_RE="scripts/core/" bash ~/bin/league-accept.sh P0-DASH1b web/routers/jc.py web/api.py scripts/store/jc_view.py
   # 队长自己再起 uvicorn、自己登录、自己 curl 三个端点
+
+【队长裁决（2026-09-17 00:41 事后补记）】
+ 本单**按队长亲验收**（`~/bin/dash-verify.sh`：401×3 / 登录 200 / fixtures 40 与 45 / issues 0 / backtest 4 行逐字对平基线 /
+ 脏 limit 400×3 / 页面 200 / 收尾进程 0），commit `11282d9` 已 push。哨兵缺失的原因有两个，**都是我的**：
+ ① 工单 C 节的 `sum(if_clv)` 在 PG 里根本不可执行（无 `sum(boolean)`），且被 `_fetch` 的"降级成 `[]`"吞成"面板没数据"；
+ ② T3 我写的 `PYTHONPATH=.` 与仓库约定 `PYTHONPATH=scripts` 不符 ⇒ 端点一调就 ImportError，工人自己加了 `web/routers/jc.py:25-27` 的 scripts 目录引导
+ （**先接受这个引导**，DASH2 里我要求收敛成一处：与 `web/enrich.py:9-11` 同款放 app 引导层，别在三个 router 里各写一遍）。
+ 另外它把 `limit` 从 `int` 改成 `str` 自校验（返回 400 而不是 FastAPI 的 422）——**比我给的判据更严**，采纳。
+
