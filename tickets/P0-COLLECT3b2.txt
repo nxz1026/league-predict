@@ -23,8 +23,13 @@ def upsert_from_env(cur, env: dict) -> int                            # 调 pars
   ` league_id=excluded.league_id, src_hash=excluded.src_hash, src_file=excluded.src_file, last_seen_at=now()`
   ⇒ **`first_seen_at` 不在 do-update 列表里**（首次插入靠 default now()，重复装载只刷 `last_seen_at`）。
  B2 `odds` 是 jsonb ⇒ **必须 `Json(row["odds"])` 包**（psycopg3 直接塞 dict 会被当 Python 对象报错；这是仓库里踩过的坑）。
- B3 **坏行不许炸整批**（每天 144 趟，一炸就断一批）：逐行 `try/except` ⇒ 失败行 **只允许**用 `logger.warning("odds-hist-reject …")` 记一条（**不许 print**），
-     继续下一行；返回的 int = 成功行数。⚠️ **不许吞异常后返回 0 还打 TASK_DONE**（数不对就要在报告里显出来）。
+ B3 **坏行不许炸整批 —— 但必须用 SAVEPOINT**（队长 §9-78 补：我原来只写"逐行 try/except"，**在同一个 PG 事务里那样根本不够**：
+     任何一条语句报错后事务就进入 aborted 状态，后续语句全部报 `InFailedSqlTransaction`（= 你现在测试里那两条 `ERROR ... psycopg`）。
+     正确形状（**照这个改，只多两行**）：
+       每条语句前 `cur.execute("savepoint rh")`；成功则 `cur.execute("release savepoint rh")` 并 `n += cur.rowcount or 0`；
+       失败则 **`cur.execute("rollback to savepoint rh")`**（把事务救回可用）+ `logger.warning("odds-hist-reject …")` + `continue`；
+     返回的 int = 成功行数；**不许**吞异常后返回 0 还打 TASK_DONE。
+     ⚠️ T3 的三条（1 好 2 坏）必须返回 **1** 且**不抛**，同时 `fact.jc_odds_history` 里那条好的**在事务内可查到**（T3 也在回滚事务里跑）。
  B4 `is_close` **原样透传**（上游恒 False）——**不许在这一层猜"最后一版就是收盘价"**（§9-70：v1.4 载荷 16 个键里没有任何状态字段，我量过）。
 【C. 不许做】不许 `ALTER`/建表（表已存在）；不许改 `jc_write.py`（md5 锁）/`jc_load.py`（`P0-COLLECT2q3b` 正在改）/`jc_read.py`/DDL/夹具；
  **不许往 `fact.jc_odds_history` 最终留行**（T2 用回滚证明）；不许碰 `ref.team`（D3）；不许写 `/srv/league-staging/**`；禁 git；禁 print；演练一律 `/tmp/…`。

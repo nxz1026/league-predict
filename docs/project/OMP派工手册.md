@@ -614,3 +614,10 @@ setsid bash ~/omp-resilient3.sh SMOKE1 /home/ubuntu/omp-smoke 300 1 ~/tickets/SM
        只有"每趟都该出现"的 topic 才准进 `TOPICS`（判据就这一句，别凭感觉加）。
      · 顺带一条通用教训：**任何" cadence 不匹配"的接线，先问"我的记账逻辑会不会把它每趟都判成缺失"**——
        我方已知的第二例是 `jclq_*`（每天 15:00/15:30 一趟），将来接 `P0-STORE2` 时同样要走 `OPTIONAL`，**不许**再进 `TOPICS`。
+78. **队长错账 #16：我在 `3b2` 的 B3 写了"逐行 try/except 就不许炸批"——在 PostgreSQL 的同一事务里这句话不成立**
+     · 事实：**任何一条语句报错，整个事务立刻进入 aborted 状态**，之后所有语句都报 `InFailedSqlTransaction`
+       ⇒ 我 13:13 跑 `pytest tests -q` 看到的正是 `2 failed, 2 errors`，错误名就是 `psycopg...`（工人的实现"照我的规格写"，失败得完全合规）；
+     · **正确形状（以后凡是"一批里允许坏行"的写手一律照此）**：每行前 `savepoint` → 成功 `release savepoint` → 失败 **`rollback to savepoint`** 再记 `logger.warning` 并继续；
+       多花 2 行，换来"坏行只损失它自己"，而且**外层事务/回滚语义不变**（我们的测试模式是 `begin…rollback` 自证，两者完全兼容）；
+     · 顺带定一条通用规矩：**写手工单必须写清"错误恢复原语"**（savepoint / 独立事务 / 整批回滚三选一），
+       不写清就等于把"能不能容错"变成工人运气（今天 3b2 就是运气不好撞上了）。
