@@ -1,0 +1,56 @@
+【项目】league-v2（§2-D7 ≤100 行/文件、≤50 行/函数、≤120 列 硬红线；§9：报告用锚点、禁 git、禁 print、不许放宽红线）
+【这一单**只改一个文件**：`scripts/ingest/jc_load.py`（现 **87 行** ⇒ 改完 **≤100**，**净增 ≤12 行**）】
+ 加"**orphan 兜底**"：盘上有、但这趟清单/窗口都没认领的 `*.jsonl` ⇒ 当**排在最后的额外伪批**装载，**不记 gap**。
+ 【🅣 派工器会先验工区（脏但**能编译** ⇒ 允许续跑）；**第 1 个动作就 edit，改完之前一行测试都不许跑**。】
+【A. 现状（队长 11:38 逐行读过，照抄，别去查）】
+ · `TOPICS`（7 个，顺序**不许变**）· `WRITE=("jczq_offer","jczq_result")` · `TABLES`（8 张，`main()` 末尾打计数）；
+ · `load_topic(cur, root, marker: Path, topic, path: Path|None, state)`：
+   - `rel = f"{topic}/{path.name}" if path else f"{marker.stem}/{topic}#MISSING"` ⇒ **有 path 时 src_file 天然就是 `<topic>/<文件名>`**（孤儿正是这一支，不用改）；
+   - `lines = read_lines(path) if path and state == "jsonl" else []`；
+   - 末尾 `_ops(cur, topic, rel, size, n, ups, rej, state == "missing")`；
+ · `_ops(..., gap)` 里 `done_marker = not gap` ⇒ 现状 `missing → false`、`jsonl/empty/rejected → **true**`
+   ⇒ **孤儿要的是 `false`，所以必须把"是不是缺档"和"有没有 marker"拆成两个值**（见 B2，改动很小，**别加参数以外的东西**）；
+ · `load_batch()` 里对每个 marker 调 `jc_read.files_for_batch(root, marker, TOPICS)` ⇒ `{topic: [(Path|None, kind)]}`；`main()` 遍历 `iter_markers(root, args.batch)`。
+【B. 唯一允许的改法（**照这个做，别另发明**）】
+ B1 `load_topic` 支持**第三种 state 值 `"orphan"`**：读行条件改成 `state in ("jsonl", "orphan")`（**同一行内改，不新增行**）。
+ B2 `_ops` 末尾多一个参数 `done: bool`（插入语句里 `done_marker` 用它，不再用 `not gap`）；
+    `load_topic` 调用处传 `gap = state == "missing"`、`done = state != "missing" and state != "orphan"`
+    ⇒ 三类行为别记错：`jsonl/empty/rejected → done=true`、`missing → gap=true & done=false`、`orphan → gap=false & done=false`。
+ B3 `main()` 里 marker 循环**跑完之后**（**必须最后**，别插中间盖新批次）：
+    `seen = {p for m in 全部 marker for cands in files_for_batch(root, m, TOPICS).values() for p, st in cands or [] if p}`
+    （**重新走一遍清单/窗口**换这个集合，别改 `load_batch` 的签名——多扫一次是确定性的、只读、便宜）；
+    然后对 `TOPICS` 各目录 `root/t.glob("*.jsonl")` 里 **不在 `seen`** 的文件逐个
+    `load_topic(cur, root, Path("orphan"), topic, p, "orphan")`；`.empty` **永远不算孤儿**（只 glob `*.jsonl`）。
+ B4 日志**总共只打一条**：`orphan 装载 n=%d 文件=%s`（最多列 5 个文件名，多了以 `…` 结尾；`n=0` 也要打，`文件=-`）。
+ 净增 **≤12 行**。装不下 ⇒ **停下贴 `wc -l`**（我来决定拆哪里，**不许**放宽红线、不许压别人注释）。
+【C. 不许做】改 `jc_read.py`（97 行，刚验收）；改 `jc_write.py` / DDL / 夹具 / 任何解析器；**删或改库里任何一行**（gap 与 arrival 都不许删，那是队长的活）；
+ 往 `/srv/league-staging/**` 写/改名/删（**只读**，本单不许在那儿造文件）；禁 git；禁 print；演练一律 `/tmp/…`。
+【T. 必须成立（按序跑，原始输出全进报告）】
+ T0 **先量基线**（改之前跑，贴原始输出）：`bash ~/bin/jc-ingest-run.sh` 之后的三条计数 +
+    `sudo -n -u postgres psql -d league -Atc "select count(*) from ops.file_arrival where src_file like '%#MISSING%'"`
+    ⇒ 队长 11:31 实测 **gaps=14**（真缺档，含 6 条来自"残清单"批 `03-15-24Z`）；`fact.jc_offer=1440`、`jc_match=36`、`jc_result=24`。
+ T1 **实时目录**：`bash ~/bin/jc-ingest-run.sh` ⇒ `rc=0`、每批 `errors=[]`、**出现一条** `orphan 装载 n=?`
+    ⚠️ **`n` 不许你猜**：我 11:38 用"文件名前 16 字 vs marker 前 16 字"粗算出 35 个"无主"，但那**不是权威口径**
+      （早期批次 `.done` 的**上传时刻**与文件的**采集分钟**不同，窗口分支会认领掉一部分）⇒ **以你的实际输出为准**，
+      报告里必须贴 `n` 的值 + 文件名（前 5 个）+ 下面 T2 三条 SQL 的原始结果。
+ T2 **孤儿落账正确**（三条都要贴）：
+    `… "select count(*) from ops.file_arrival where done_marker=false and src_file not like '%#MISSING%'"` ⇒ **必须 = T1 的 n**
+    `… "select src_file, rows from ops.file_arrival where done_marker=false and src_file not like '%#MISSING%' order by 1 limit 6"`
+    `… "select count(*) from ops.file_arrival where src_file like '%#MISSING%'"` ⇒ **必须仍 = 14**（孤儿一条 gap 都不许造）
+ T3 **幂等**（这条是本单真正的验收刀）：**再跑一次** T1 ⇒ `orphan 装载 n=**0**`
+    且 `fact.jc_offer` / `fact.jc_match` / `fact.jc_result` 三个计数**与第一次跑完完全相同**（孤儿已被 `seen` 通过窗口/清单认领，不会反复捞）
+    ⚠️ 若第二次 `n>0` ⇒ 说明 `seen` 没覆盖到它们（例如这些文件其实**每次都无主**）⇒ **停下贴两次的 n**，那属于契约问题（文件永远不会有 marker），别自己加去重表。
+ T4 **夹具没坏**：`PYTHONPATH=scripts python scripts/ingest/jc_load.py --dir /tmp/incoming` → `ups=15`、`--dir /tmp/incoming2` → `ups=40`、
+    `errors=[]`，且**这两趟都不许出现 `orphan 装载 n>0`**（夹具目录里没有无主文件）。
+ T5 **造一个孤儿**（只准 `/tmp/c5`）：一份合法 marker（清单列 `jczq_offer/x.jsonl` + 真实行数）并真放那个文件；
+    **另在 `jczq_offer/` 放一个 2 行的 `y.jsonl` 不列进清单** ⇒ `--dir /tmp/c5` ⇒ 日志 `orphan 装载 n=1 文件=y.jsonl`，
+    且 `select src_file, done_marker, rows from ops.file_arrival where src_file='jczq_offer/y.jsonl'` ⇒ **一行、`done_marker=f`、rows=2**（贴原文）。
+    ⚠️ 跑完**留着别删**（队长按 `jczq_offer/y.jsonl` 清）。
+ T6 静态与回归：`python3 ~/bin/omp-ast-check.py scripts/ingest/jc_load.py` → 0 违规 + `wc -l scripts/ingest/jc_load.py`（**≤100**）；
+    `python3 ~/bin/jc-fk-audit.py fact` → exit=0；`source ~/.venvs/league/bin/activate && PYTHONPATH=scripts python -m pytest tests -q` → **428 passed / 0 failed**
+【铁律】① 禁 git；② 禁 print；③ ≤100/≤50/≤120；④ **只改 `jc_load.py`**；⑤ 报告 `.omp-logs/P0-COLLECT2q3b.report.txt`
+ （T0~T6 原始命令 + 原始输出 + 实际行数）+ 全绿才 `echo TASK_DONE > .omp-logs/P0-COLLECT2q3b.done`
+【验收（队长逐字复跑）】
+  bash ~/bin/jc-ingest-run.sh
+  python3 ~/bin/jc-false-gaps.py
+  LEAGUE_FROZEN_RE="scripts/core/|scripts/ingest/jc_(read|write)\.py" bash ~/bin/league-accept.sh P0-COLLECT2q3b scripts/ingest/jc_load.py
