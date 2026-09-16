@@ -1,10 +1,102 @@
-【备忘 · 尚未派工，排在 2eA2/2e-B 之后】P0-COLLECT2lqP —— 冻结篮彩契约 v1.2 并实现两个解析器
-【为什么必须先做】§9-98：`store/parse_misc.py:28` 的 `parse_jclq_offer` 现在**故意 raise**（"契约 v1.1 未冻结"）
- ⇒ 篮彩**没有解析层就没有装载层**，`STORE2` 写手单会被这张挡死。今天它休眠只因为 `jc_topic.WRITE` 不含篮彩（skip 在 parse 之前）。
-【队长派工前必须补齐的三件事（缺一不许派）】
- 1. **§9-93 只量了 `jclq_offer`，`jclq_result`（赛果）一行都还没量** ⇒ 先从真包量出键集与四玩法块（mnl/hdc/hilo/wnm）实际形状；
- 2. `fact.jbq_*` 三表的 DDL 列我已重建验证过（`docs/db/infra_p0_10_jbq_tables.sql`），**但 `jbq_offer.snap_ts` 是 text**
-    ⇒ 要逐列确认"解析器输出 → DDL 列"的映射表（照传统足彩 §9-96 的做法：**解析列 ⊆ DDL 列 且只差审计尾列**才算对齐）；
- 3. **闸门联动**：真包里已出现 `leagueId=26 美职女篮`（封闭清单只允许 NBA/CBA）
-    ⇒ 解析器只负责"忠实规范化"，**范围判定留在 `core/jc_gate.py`**（对照入库、永不进模型），派工时要写死这条职责边界。
-【验收必须包含】同一批真包"改前 skip / 改后能解析"的对照、以及**零回归**：`jczq_*` 三个已接线 topic 的 ups 数一字不差。
+【项目】league-v2　【硬红线】≤100 行/文件、≤50 行/函数、≤120 列；禁 git 一切子命令；禁 print（用 logger）；报告写 `.omp-logs/P0-COLLECT2lqP.report.txt`，`.done` 最后写
+【单号】P0-COLLECT2lqP　【改动面只有 2 个文件】
+  1. `scripts/store/parse_misc.py`（改两个已存在的 `raise` 桩里的**一个**）
+  2. `tests/test_parse_jclq_result.py`（新建）
+【🛑 禁改】`parse_misc.py` 里 `parse_jclq_offer` **保持 raise 不动**（它的契约 v1.1 还没冻结，本单不碰）；
+  `parse_collector.py` 的 `PARSERS` 表**已经注册了** `jclq_result: parse_jclq_result`，不用加；
+  `scripts/ingest/*`（接线是下一张单）、`docs/db/infra_p0_10_jbq_tables.sql`（表已建好，0 行）。
+
+────────────────────────────────────────
+【这单只做一件事】把 `parse_jclq_result(payload: dict) -> dict` 从 raise 改成真解析。
+  它现在的正文只有一句 raise，原文如下（照这个位置改，别动别的函数）：
+    def parse_jclq_result(payload: dict) -> dict:
+        '''§5.6 已冻结 jclq_result 形态，但 P0-STORE2 的 DDL 只有足球 8 表、无篮彩落点 ⇒ 不产行（点名等定）。'''
+        raise ValueError("fact 层无篮彩落点表（P0-STORE2 DDL 未建）：形态已冻结但无可落之表")
+  ⚠️ 那句报错**已经过期**：`fact.jbq_result` 表**已建好**（`docs/db/infra_p0_10_jbq_tables.sql:53`，现在 0 行），
+    落点存在的，所以这单就是把它接上。
+
+【返回形状（照抄同族解析器，`scripts/store/parse_jcissue.py:28` 同款）】
+  return out("fact.jbq_result", {"match_id": row["match_id"]}, row, notes)
+  —— `from .parse_jcissue import out` 或本模块内已有的 `out`（先看文件顶部已 import 了什么，别重复 import）。
+
+【payload 22 键（采集机 09:53Z 实测，采集端已书面确认）】
+  {"allAwayTeam": "str", "allHomeTeam": "str", "awayTeam": "str", "awayTeamId": "int", "finalScore": "str", "hdc": "dict", "hilo": "dict", "homeTeam": "str", "homeTeamId": "int", "leagueBackColor": "str", "leagueId": "int", "leagueName": "str", "leagueNameAbbr": "str", "matchDate": "str", "matchId": "int", "matchNum": "str", "matchNumStr": "str", "matchTime": "str", "mnl": "dict", "poolStatus": "str", "status": "int", "wnm": "dict"}
+  · 4 个 dict 块 `hdc/hilo/mnl/wnm`，**每块都是同样 6 键**：['combination', 'combinationDesc', 'goalLine', 'resultStatus', 'single', 'winOdds']
+    （`hdc`=让分、`hilo`=大小分、`mnl`=单场胜负、`wnm`=胜负/胜负过关）
+  · `status`：1=开售中(finalScore='-'), 2=完赛(finalScore='主-客')
+  · `leagueId`：接口**不过滤联赛**（采集端确认），result 窗内实测 {'7': '女篮世界杯', '8': '亚运会男篮'}，
+    当前在售 5 场全是 WNBA `leagueId=26`。**本单解析器不许按联赛过滤/抛错**——全收，闸门在下一单（用户口径：
+    非 NBA/CBA 进参考存储，解析层只负责原样解析）。
+
+【`fact.jbq_result` 列（DDL 已定，row 里的键必须是这些的子集）】
+  主键 **`(match_id)`**（`jbq_result_pkey`）。列全集：
+  match_id bigint NO / final_score text / ft_h integer / ft_a integer / status integer / pool_status text /
+  betting_single smallint / mnl_combination text / mnl_desc text / mnl_result_status text / mnl_odds numeric /
+  hdc_line numeric / hdc_combination text / hdc_desc text / hdc_result_status text / hdc_odds numeric /
+  hilo_line numeric / hilo_combination text / hilo_desc text / hilo_result_status text / hilo_odds numeric /
+  wnm_combination text / wnm_desc text / wnm_result_status text / wnm_odds numeric /
+  raw_blocks jsonb / src_hash text NO / src_file text NO / first_seen_at timestamptz / last_seen_at timestamptz
+  ⚠️ `src_hash` / `src_file` / `first_seen_at` / `last_seen_at` **四个键你不许出现在 row 里**——
+    那四个由写手层（下一单）加，你塞进去会被列白名单拒（`jc_issue_write` 的 `COLUMNS` 白名单会 raise）。
+
+【字段映射（逐条照抄，不许自己发挥）】
+  match_id        = payload["matchId"]                    # int，必填
+  final_score     = payload["finalScore"]                 # str；开售时是 "-"
+  ft_h / ft_a     = final_score 按 "-" 切成两个 int；**status != 2 或 final_score 为空/"-" ⇒ 两者都 None**
+  status          = payload["status"]                     # int
+  pool_status     = payload["poolStatus"]                 # str
+  betting_single  = payload["mnl"]["single"]              # smallint
+  mnl_* / wnm_*   = 该块的 combination / combinationDesc / resultStatus / winOdds
+  hdc_line        = payload["hdc"]["goalLine"]            # str → numeric（"-27.5" → -27.5）
+  hdc_*（其余）   = 同上取 combination / combinationDesc / resultStatus / winOdds
+  hilo_*          = 同 hdc（line 取 goalLine）
+  raw_blocks      = 一个 dict，装下**没被上面摊平的其余全部键**：
+                    leagueId / leagueName / leagueNameAbbr / leagueBackColor / matchNum / matchNumStr /
+                    matchDate / matchTime / allHomeTeam / allAwayTeam / homeTeam / awayTeam /
+                    homeTeamId / awayTeamId
+                    （`leagueId` 放这里是为了下一单的闸门能读到，别自己过滤）
+【""/空值规矩（照抄 `jc_issue_write` 那条）】
+  · `winOdds` 是 `""` ⇒ 对应 `*_odds` 列传 **None**（别传空串，numeric 列会报错）
+  · `goalLine` 是 `""` 或 `"-"` ⇒ 对应 `*_line` 列传 **None**；`"-27.5"` 这种正常字符串转成 numeric
+  · `resultStatus` 开售时是 `"-"` ⇒ **原样保留** `"-"`（这是合法业务值，别当成空值处理）
+  · 4 个块的 `single` 若彼此不一致 ⇒ 仍以 `mnl["single"]` 为准，并在 `notes` 里加一条
+    `"betting_single 四块不一致: mnl=.. hdc=.. hilo=.. wnm=.."`（真包目前四块都是 0）
+
+────────────────────────────────────────
+【B. 测试 `tests/test_parse_jclq_result.py`（纯函数，不连库，不许动 DB）】
+  fixture 用采集机落下的真样本（路径可能变，先 `ls` 该目录取实际文件名，读不到就用下面这两份内嵌副本）：
+  /srv/league-staging/incoming/cn-collector/jclq_sample_review/jclq_result_key_structure_and_samples.json
+  B1 `test_open_sample_status1`：用**开售样本**（`status=1`, `finalScore="-"`, `matchId=2041526`,
+     `matchNumStr='周三302'`）⇒ 断言 `row["status"]==1`、`row["final_score"]=="-"`、
+     `row["ft_h"] is None and row["ft_a"] is None`、`row["match_id"]==2041526`、
+     `hdc_line == -27.5`（原样 `-27.5`）、`hilo_line == 170.5`、`mnl_odds is None`（winOdds 是空串）。
+  B2 `test_finished_sample_status2`：用**完赛样本**（`status=2`, `finalScore='74-79'`,
+     `matchId=2041525`, `matchNumStr='周三301'`）⇒ 断言 `status==2`、
+     `final_score=="74-79"`、**`ft_h==74 and ft_a==79`**、
+     `hdc_odds == 1.65`、`hdc_line == -3.5`、`hdc_combination == "H"`、`hilo_desc == "大"`。
+  B3 `test_row_keys_are_ddl_subset`：两份样本的 row 键 **都必须 ⊆** `fact.jbq_result` 的真实列集
+     （用 `information_schema.columns` 现场查，别写死列表；查不到库就 `pytest.skip`，照 `tests/test_jc_issue_write.py` 的 fixture 姿势）。
+  B4 `test_missing_required_raises`：删掉 `matchId`（或传 `matchId` 不是 int）⇒ 必须 raise（用 `need()`，别自己 if）。
+  B5 `test_bad_finalscore_raises_or_none`：`status=2` 但 `finalScore="abc"`（切不出两个整数）⇒ **raise ValueError**；
+     `status=1` 且 `finalScore="-"` ⇒ 不 raise、`ft_h/ft_a` 为 None（B1 已覆盖，这里补 `status=2`+坏值这一支）。
+  B6 `test_no_league_filtering`：把样本的 `leagueId` 改成 26（WNBA）、7（女篮世界杯）、8（亚运男篮）各跑一遍 ⇒
+     **都正常返回**，不许 raise（解析器不做联赛闸门，用户口径是"非 NBA/CBA 进参考存储"）。
+  B7 `test_raw_blocks_holds_rest`：断言 `row["raw_blocks"]["leagueId"]`、`["leagueName"]`、`["matchNumStr"]` 存在且值对；
+     并断言 **`src_hash`/`src_file`/`first_seen_at`/`last_seen_at` 都不在 row 里**（写手层的事）。
+
+────────────────────────────────────────
+【必须成立（全绿才写 .done；两个数都贴出来，不许抄我写的数字）】
+  T0 开工先贴：`wc -l scripts/store/parse_misc.py tests/test_parse_jclq_result.py`（改前行数）
+  T1 `cd ~/league-v2/repo && . ~/.venvs/league/bin/activate && PYTHONPATH=.:scripts python -m pytest tests -q`
+     ⇒ **0 failed**，贴 T0 基线数与本次数的两个数
+  T2 `wc -l` 两个文件都 ≤100 行；单个函数 ≤50 行；最长行 ≤120 列
+  T3 `python3 ~/bin/omp-ast-check.py scripts/store/parse_misc.py tests/test_parse_jclq_result.py` ⇒ 违规 0 条
+  T4 `grep -c "print(" scripts/store/parse_misc.py tests/test_parse_jclq_result.py` ⇒ 两文件都 0
+  T5 `grep -n "raise ValueError" scripts/store/parse_misc.py` ⇒ **还剩 1 处**（`parse_jclq_offer` 的，本单不动它）
+  T6 **不许**改 `scripts/ingest/*`、不许建表、不许 `git` 任何子命令、不许写 `/srv/league-staging/**`
+【报告写这些】① 两份样本各跑出什么 row（贴 `match_id`/`status`/`ft_h`/`ft_a`/`hdc_line`/`hilo_line`/`*_odds` 实值）；
+  ② `raw_blocks` 里实际装了多少键；③ 四块 `single` 是否一致（一致就写"四块一致=0"）；
+  ④ `parse_jclq_offer` 的 raise 还在不在（贴 T5 输出）；⑤ T0/T1 两个数。
+【别做的事】别把篮彩接线进 `jc_topic.py`（那是下一单，且那张单正在另一台机器上跑，改了会撞）；
+  别给 `jbq_result` 加列（`leagueId` 走 `raw_blocks`，加列是队长的事）；
+  别对 `leagueId` 做 NBA/CBA 白名单过滤（闸门是下一单的事，解析层全收）。
