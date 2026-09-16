@@ -529,24 +529,12 @@ def main() -> int:
     ap.add_argument("--mode-log", metavar="MODE", default="",
                     help="静默模式：stdout/stderr 同时追加写 logs/collector_<MODE>.log（计划任务无窗口时诊断用）")
     args = ap.parse_args()
-    # 静默日志 tee：stdout/stderr 同时追加写 logs/collector_<mode>.log（CreateNoWindow 模式诊断全在这）
+    # 静默日志：stdout/stderr 同时追加写 logs/collector_<mode>.log（计划任务无窗口时诊断全在这）
     if args.mode_log:
         _lh = ROOT / "logs" / f"collector_{args.mode_log}.log"
         _lh.parent.mkdir(parents=True, exist_ok=True)
-        _fh = open(_lh, "a", encoding="utf-8")
-
-        class _Tee:
-            def __init__(self, f):
-                self.f = f
-            def write(self, s):
-                self.f.write(s)
-                self.f.flush()
-            def flush(self):
-                self.f.flush()
-
-        _tee = _Tee(_fh)
-        sys.stdout = _tee
-        sys.stderr = _tee
+        sys.stdout = open(_lh, "a", encoding="utf-8")
+        sys.stderr = open(_lh, "a", encoding="utf-8")
     if args.probe:
         return probe()
     if args.collect:
