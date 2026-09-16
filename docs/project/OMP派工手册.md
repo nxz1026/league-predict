@@ -580,3 +580,17 @@ setsid bash ~/omp-resilient3.sh SMOKE1 /home/ubuntu/omp-smoke 300 1 ~/tickets/SM
      结果很有趣：工人改成 `... .replace(tzinfo=ZoneInfo("Asia/Shanghai")).astimezone(timezone.utc)`（**先解释墙上时钟、再归一到 UTC**）
      ⇒ 我那句错的断言**反而成立了**、7 个用例全绿。**代码是对的、我的判据是歪的**，所以记进错账本而不是怪工人。
      ⇒ 规矩：**跨时区的断言只断"时刻"（与 UTC 瞬间比较），不断"偏移标签"**；`timestamptz` 入库统一存 UTC 归一值（省 ZoneInfo、比较不歧义）。
+75. **队长错账 #15：cron 一上线，我工单里所有"写死的数据库计数"当场变成过期判据**（2026-09-17 12:46，`P0-JCSPLIT` 派出去 40 秒我自查出来、立刻收回）
+     · 我 11:5x 写 `P0-JCSPLIT` 时把判据写成 `fact.jc_offer=1440 / jc_match=36 / jc_result=24 / gaps=14 / pytest 428 passed`；
+     · 到 12:46 的真实现场：**cron 每 10 分钟自动装载** ⇒ `jc_offer` 已 1575 且还在涨、`gaps` 因两次"残清单批"变 20；
+       `P0-COLLECT3b1` 刚合进 **7 个新用例** ⇒ `pytest` 基线是 **435** 不是 428；
+       而 E1 那句 **"`orphan 装载 n=0`"跟我 12:04 刚立的 §9-71（孤儿每趟都会重装、`n=14` 才是正常态）正面矛盾**。
+     · ⇒ 结果注定是"工人正确地跑完、报告正确地红着、我再看一遍发现是我自己的错"——**浪费一轮工单，且会让工人误以为自己做坏**。
+     【**新规矩（以后照这条写单）**】
+       ① 凡是 **cron 会动的东西**（`fact.*` 计数、`ops.file_arrival` 行数、`orphan 装载 n`）**一律不许写死**：改成
+          **`E0 先自量基线抄进报告` + 后续只与 `A1/A2/…` 比**，并且明确"**只许多不许少**"或"**必须相等**"哪种；
+       ② **只有离线夹具**（`/tmp/incoming*`、`tests/fixtures/*`）可以写死数字——它们不受 cron 影响（本轮实测 `ups=15 / ups=40` 稳定）；
+       ③ 派工前**先 `git log --oneline -5` 看今天合了什么**，把 `pytest` 基线数**当场更新**（今天的轨迹：428 → **435**）；
+       ④ 收回流程本身也记一笔：杀 wrapper 用 `kill -TERM -<pgid>`（`pgid` 从 `ps -eo pid,pgid,args` 看），
+          **杀完必须再查一次 `omp` 残留**——这次 `timeout/omp-call/omp` 那条链的 pgid 与 wrapper **不同**（`omp-call` 自己开了新会话），
+          第一刀只杀掉了 wrapper，**孤儿会话还在跑**（差点同时跑两个工人改 `scripts/ingest`），补 `kill -TERM -223892` 才干净。
