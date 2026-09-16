@@ -8,22 +8,38 @@
 > 接受 4 支降级队（拉科鲁尼亚/桑坦德竞技/莱万特/马拉加）无 AF 历史。
 > ⇒ **合并 SQL 永远不会有命中，本单不再产出 SQL，改只读核查 + 留档。**
 >
-> ## ★新增发现（2026-09-16 实测）：竞彩侧同一家俱乐部有两个 sporttery id
-> ```
-> 皇家马德里  id=2350   af=541  jc=664  aliases={"sporttery":"664","api_football":541,"football_data":86}
-> 马德里竞技  id=120507 af=NULL jc=172  aliases={"sporttery":"172"}
-> ```
-> `fact.jc_match` 实测：`home_sporttery_id=172` 时队名「马德里竞技」；
-> `away_sporttery_id=664` 时队名「皇家马德里」——**采集机自己用两个名字指同一家俱乐部**。
-> ⇒ 这不是能靠合并解决的问题：`aliases->>'sporttery'` 是单值，一行只能持一个 id，
-> 合并等于丢掉另一个 id 对应的那部分比赛（`jc_id` 生成列也只取一个值）。
-> 真正修法是 schema 支持一队多 jc id（DDL，另开工单）或采集机统一队名口径（采集机侧）。
-> **本单不碰这两件事，只把事实留档。**
+> ## ★更正（2026-09-16 22:40，采集端回复 + 真盘复验）
+> 上一版本单把「马德里竞技」和「皇家马德里」当成同一家俱乐部——**错了**。
+> 皇家马德里 = Real Madrid，马德里竞技 = Atlético Madrid，是两家同城对手。
+> 采集端已确认：沿用 sporttery 官方字段即已统一——`homeTeamAllName`/`awayTeamAllName`
+> （全名）进队表、`*AbbName`（简称）做展示名，两俱乐部各一行、各挂各的 id。
+> 真盘复验：09-15 埃尔切 vs 皇家马德里(664)、09-16 马德里竞技(172) vs 奥萨苏纳(534)——两场不同比赛。
+> ⇒ **竞彩侧没有「同俱乐部双 id」问题，无需采集机改口径。**
 >
-> 顺带：库内无法模糊检测同类情况（`ref.team` 无 AF 原名列，只有 `name_cn`+`aliases`；
-> 按 `name_cn` 分组查不到，因为两个名字字符串不同）。这类问题的检测需要队名归一化，
-> 属 `store/team_identity.py` 的 `resolve_team` 范畴，不在本单。
-
+> ## ★真正的重复对（2 对，AF 行均在库，合并免费）
+> | 竞彩侧（我插的，无历史） | AF 侧（在库，有历史） | fact.fixture 引用 |
+> |---|---|---|
+> | 马德里竞技 id=120507 jc=172 af=NULL | **Atletico Madrid id=2354 af=530 fd=78** | **114 场** |
+> | 阿拉维斯 id=120506 jc=171 af=NULL | **Alaves id=3114 af=542 fd=263** | 西甲在库 |
+>
+> 其余 4 支（马拉加 jc=512 / 桑坦德竞技 jc=676 / 拉科鲁尼亚 jc=509 / 莱万特 jc=33）
+> **确实无 AF 行**——2022 年前已降级，免费档也查不到，C 决策已接受缺口。
+> 全库 substring 扫查无误报外同类重复（`威尼斯`/`尼斯`、`拉斯帕尔马斯`/`帕尔马` 是含字误报）。
+>
+> ## ⚠️ 合并方向必须反过来（原方案 1 写反了）
+> 预测通过 `fact.fixture` 连历史，历史挂在 **AF 行**上（Atletico Madrid 被引用 **114** 次、
+> 马德里竞技 **0** 次）。所以 winner 必须是**持 af_id 的 AF 行**，loser 是我插的 sporttery 行——
+> 与原方案 1「winner = 持 sporttery 键那一行」**相反**。
+> 另三点实证（都改变做法）：
+> - `af_id`/`fd_id`/`jc_id` 是**生成列**（从 aliases 派生）⇒ 改 aliases 即生效。
+> - `ref.team` 有 **4 个部分唯一索引**：`team_jc_key`/`team_af_key`/`team_fd_key`
+>   （各 `UNIQUE (sport,x) WHERE x IS NOT NULL`）+ `team_sport_name_cn_key UNIQUE (sport,name_cn)`。
+>   ⇒ **它们不是 pg_constraint 项，`pg_constraint` 查询看不到**——我第一次查约束时那条 SQL 因
+>   `text || char` 报错返回空，我误读成「零约束」，干跑才被 `duplicate key (football,172)` 打回。
+>   ⇒ 合并顺序必须是**先摘 loser 的 sporttery 键，再加到 winner**，反了立刻撞 team_jc_key。
+> - `team_merge_map` 在 `scripts/` `web/` `tests/` **零引用**（4 行先例全是死数据）⇒
+>   写进 merge_map 对 join **无任何运行时效果**，别指望它。
+> 已出待审 SQL：`docs/db/待审-西甲两对合并.sql`（**不自动执行**，等人工点头）。
 
 ## 背景（19:20–20:30 实测，全部来自本库，无猜测）
 球队对照 A 已执行（`docs/db/seed_jc_team_pool_v2.sql`，用户批复「执行」）：
