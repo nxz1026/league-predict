@@ -41,11 +41,27 @@
 【B. `tests/test_jc_topic_issue.py`（照抄 `tests/test_jc_odds_write.py` 的连接姿势）】
  B1 fixture：`conn = pg.connect("ing")` → `try: yield conn; finally: conn.rollback(); conn.close()`（**fixture 独占连接所有权**，§9-83；
      测试体内**不要再套 `closing()`**，也不要自己 commit）；导入 `from store import pg`（**是 `store.pg`，不是 `core`**）。
- B2 端到端**用真夹具**（不是自造 dict）：从 `/srv/league-staging/incoming/cn-collector/jc_issue/` 取最新一个 `.jsonl`，
-     逐行 `json.loads` 后调 `jc_topic.load_topic(cur, topic=..., lines=..., rel=...)`（**照 `tests/` 里既有 `load_topic` 用法**），断言：
-       ① 返回的 `ups > 0`；② **同一事务内** `select count(*) from fact.jc_issue` 与 `fact.jc_issue_draw` / `fact.lottery_draw` 之和 `> 0`；
-       ③ 幂等：同批**再跑一遍** ⇒ 三表行数不变、`last_seen_at` 变化、`first_seen_at` 不变。
- B3 坏指令不废批：把一条指令的 `table` 改成 `fact.evil` 混进好指令里 ⇒ `rej=1` 且**好指令仍写入**（这是保存点隔离的唯一硬证据）。
+ B2 端到端**用真包**（不是自造 dict）：三个 topic 各取最新一个 `.jsonl`，路径**必须写精确**：
+     `/srv/league-staging/incoming/cn-collector/{jc_issue,jc_issue_result,lottery_draw}/2026-09-16T10-13Z__001.jsonl`
+     ⚠️（我 17:5x 实测）`/srv/league-staging/incoming` 是 `drwxr-x--x` 属 `league` ⇒ **能遍历但不能列目录**，
+       `ls /srv/league-staging/incoming` 和 `find /srv/league-staging/incoming` 都 Permission denied；
+       只有精确进到 `cn-collector/<topic>/` 才可读。所以别用 `glob`/`ls` 去找文件，直接写死路径（找不到就用
+       `ls -t .../ <topic>/ | head -1` 在该 topic 目录内取最新）。
+   **`load_topic` 的真实签名是 6 个位置参数**（`jc_topic.py:24`）：`load_topic(cur, root, marker, topic, path, state)`
+     —— 不要写 `load_topic(cur, topic=..., lines=..., rel=...)`，那会 `TypeError`。
+     · `path` = 该 topic 的真包文件（后缀 `.jsonl`）；**`state` 必须传 `"jsonl"`**
+       （第 26 行 `read_lines(path) if path and state in ("jsonl","orphan") else []` ⇒ 传别的值整批 0 行，测试会假绿/假红）；
+     · `root` 传 `Path.cwd()`（本函数不读它）；`marker` 传 `path`（只在 `path is None` 的兜底分支才用到）。
+   断言：① 每个 topic 返回 dict 的 `ups > 0`（返回键**只有** `topic/lines/ups/gap`）；
+       ② **同一事务内** 三表各自 `count(*) > 0`（别把三表求和，单表 0 行就该暴露）；
+       ③ 幂等：同一批**再跑一遍** ⇒ 三表行数不变、`last_seen_at` 变大、`first_seen_at` **不变**。
+ B3 坏指令不废批（**保存点隔离的唯一硬证据**）：用
+     `monkeypatch.setattr(jc_issue_write, "upsert_issue_instruction", f)` 让**第一条**指令抛 `ValueError("boom")`、
+     其余正常返回 1（`f` 的签名照抄 `tests/test_jc_issue_write.py` 的 `_write`：`(cur, ins, src_hash, src_file)`），
+     跑完 `load_topic` 后查 **`ops.ingest_log`**：`rejected` 非空（JSON 数组，元素含 `line` 与 `reason`）、
+     `rows_ups` = 好指令条数、`ok = false`。
+     ⚠️ `load_topic` 的返回值**不含 rej**（只有 `topic/lines/ups/gap`），别指望从 return 读；
+     写 `ops.ingest_log` 的是 `_ops()`（`jc_topic.py:13-21`，列 = topic/src_file/rows_in/rows_ups/rejected/ok/at）。
  B4 **不留痕**：收尾 `rollback()` 后**另开** `with pg.read_conn("ro") as c:` ⇒ `fact.jc_issue` / `jc_issue_draw` / `lottery_draw` **三表 count 全 0**
      （`league_ing` 对 fact **没有 DELETE** ⇒ 全靠回滚，§9-83）。
 ────────────────────────────────────────
