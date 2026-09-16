@@ -37,6 +37,12 @@ def upsert_from_env(cur, env: dict) -> int                            # 调 pars
  T1 **先算期望**（用解析器在本地跑两份夹具，不落库）：合计 **34 行**（had 7 · hhad 9 · crs 6 · ttg 6 · haf 6；`finished` 29 / `onsale` 5）
  T2 **回滚自证（本单核心）**：写一个测试（`tests/test_jc_odds_write.py`），
     用 `with closing(pg.connect("ing")) as conn:` 打开事务 ⇒ `upsert_from_env` 喂两份夹具（**34 行**）⇒ 断言
+    ⚠️ **连接生命周期（队长 §9-79 补，专门治 `the connection is closed` + `assert 0 == 34` 这一对症状）**：
+      · 全程**只用一个 conn**，且**所有断言都在 `conn.close()` 之前**完成（`with closing(...)` 块**内部**跑完 T2 与 T3 再退出）；
+      · **不要**在 `with` 块外面再碰 cursor/conn；**不要**在 `rollback()` 之后还去 `cur.execute` 查数（查数要么在 rollback **之前**（看到未提交数据），
+        要么 rollback **之后**重开一个只读连接查（看到 0 行）——**两种别混在一条断言里**；
+      · `assert 0 == 34` 的另一半原因通常是**每条 insert 都被 B3 的容错路径吞掉**（真错误被 `logger.warning` 藏了）
+        ⇒ 请在测试里**先把容错关掉**（直接 `cur.execute` 一条）确认能插入 1 行，再回头测 34 条。
       `select count(*) from fact.jc_odds_history` == **34**、`select count(*) filter (where is_first) ...` == **10**、
       `select count(*) filter (where is_close)` == **0**、`select count(*) filter (where goal_line is not null)` == **9**、
       重放同一批第二遍 ⇒ 行数**仍是 34**（PK upsert 生效）且 `last_seen_at` 非空、`first_seen_at` 不变（贴两条时间戳原文）
