@@ -37,4 +37,33 @@
  T4 红线与全量：`python3 ~/bin/omp-ast-check.py scripts/ingest/jc_manifest.py` → **0 违规**；`wc -l` 该文件 ≤100；
     `PYTHONPATH=.:scripts python -m pytest tests -q` → **0 failed**（passed 数与开工前 T0 基线一致或更多，两个数都贴出来）。
 
-【D. 交付】报告 `.omp-logs/P0-COLLECT2q4b.report.txt`，按 `== T1 ==`…`== T4 ==` 分段贴原始输出；全绿再 `echo TASK_DONE > .omp-logs/P0-COLLECT2q4b.done`。
+【D. 交付】报告 `.omp-logs/P0-COLLECT2q4c.report.txt`，按 `== T1 ==`…`== T4 ==` 分段贴原始输出；全绿再 `echo TASK_DONE > .omp-logs/P0-COLLECT2q4c.done`。
+
+【🎯 16:08 队长自纠 + **照抄级补丁**（我上一版把 B2 写成"只准动 `jc_manifest.py`"，**那是做不到的**：
+ 现在 `_manifest()` 只保留 `(相对路径, 声明行数)` 两元组、**第三列哈希被它丢了** ⇒ 哈希传不进 `_resolve`，而 `_manifest` 的调用方 `_from_manifest` 在 `jc_read.py`。
+ ⇒ **本单现在放开 `scripts/ingest/jc_read.py`**（它刚被 JCSPLIT3b 腾到 **58 行**，有 42 行余量），**`jc_load.py` / `jc_topic.py` 仍然禁改**。
+ ——以下 5 处照抄，别自己发明（净增 ≈ 14 行，两个文件都远低于 100）：
+ **P1** `jc_manifest.py` 头部 import 加 `import hashlib`。
+ **P2** `jc_manifest.py` 里 `_count_lines` 之后加 3 行：
+   `def body_hash(p: Path) -> str:`
+   `    """采集机 .done 第三列定义（队长 14:52 三批真包 7/7 复算命中）：sha256(逐行 utf-8 字节去掉换行按序拼接)。"""`
+   `    return hashlib.sha256("".join(p.read_text(encoding="utf-8").splitlines()).encode("utf-8")).hexdigest()`
+ **P3** `_manifest()`：返回类型改成 `dict[str, list[tuple[str, int, str]]]`；在 `except (IndexError, ValueError): decl = -1` 之后加一行
+   `    dhash = parts[2].strip() if len(parts) > 2 else ""`
+   并把收尾那行 `out.setdefault(key, []).append((rel, decl))` 改成 `out.setdefault(key, []).append((rel, decl, dhash))`（**其余一字不改**）。
+ **P4** `_resolve()` 签名改成 `_resolve(root: Path, topics: tuple[str, ...], rel: str, decl: int, dhash: str = "")`，函数体**最前面**加哈希档（命中 1 个才返回；0 个或 ≥2 个只打两条固定关键字的 warning 后 `return None`）：
+   `    if dhash and dhash != "undefined":`
+   `        hits = [(t, root / t / rel) for t in topics`
+   `                if (root / t / rel).is_file() and body_hash(root / t / rel) == dhash]`
+   `        if len(hits) == 1:`
+   `            logger.warning("manifest-哈希消歧 topic=%s 文件=%s", hits[0][0], rel)`
+   `            return hits[0]`
+   `        logger.warning("manifest-hash-%s rel=%s 声明=%s 命中=%d",`
+   `                       "ambiguous" if hits else "mismatch", rel, dhash[:12], len(hits))`
+   `        return None`
+   ——**下面既有的"按行数"那段原样保留**（那就是 ③ 档：老包/`.empty` 没哈希 ⇒ 行为与今天完全一致，不许顺手改它）。
+ **P5** `jc_read.py` 的 `_from_manifest()` 里两处三元组对齐：
+   `for rel, decl in man.get("", []):` ⇒ `for rel, decl, dhash in man.get("", []):`，且 `_resolve(root, topics, rel, decl)` ⇒ `_resolve(root, topics, rel, decl, dhash)`；
+   `resolved.setdefault(hit[0], []).append((f"{hit[0]}/{rel}", decl))` ⇒ `... .append((f"{hit[0]}/{rel}", decl, dhash))`；
+   `for rel, decl in entries:` ⇒ `for rel, decl, _h in entries:`（**带前缀的行不启用哈希档**，维持今天语义，这是刻意的：不改动正常路径）。
+【判据不变（T1 双 25 行夹具 / T2 实时零回归 / T3 老包 ups=15 / T4 红线+全绿），但 T2 里"日志不出现关键字"这句改成：**真包允许出现 `manifest-哈希消歧`，不允许出现 `manifest-hash-mismatch` / `manifest-hash-ambiguous`**。）
