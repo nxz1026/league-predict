@@ -62,16 +62,14 @@ def _resolve(root: Path, topics: tuple[str, ...], rel: str, decl: int):
 def _from_manifest(root: Path, man: dict[str, list[tuple[str, int]]],
                    topics: tuple[str, ...]) -> dict[str, list[tuple[Path, str]]]:
     out: dict[str, list[tuple[Path, str]]] = {}
-    for topic in topics:
-        if topic not in man:
-            out[topic] = [(None, "missing")]
-            continue
-        out[topic] = [_check_entry(topic, root / rel, decl) for rel, decl in man[topic]]
+    resolved: dict[str, list[tuple[str, int]]] = {}
     for rel, decl in man.get("", []):
-        hit = _resolve(root, topics, rel, decl)
-        if hit:
-            t, p = hit
-            out.setdefault(t, []).append(_check_entry(t, p, decl))
+        if hit := _resolve(root, topics, rel, decl):
+            resolved.setdefault(hit[0], []).append((f"{hit[0]}/{rel}", decl))
+    for topic in topics:
+        entries = man.get(topic, []) + resolved.get(topic, [])
+        out[topic] = [(None, "missing")] if not entries else [
+            _check_entry(topic, root / rel, decl) for rel, decl in entries]
     return out
 
 
