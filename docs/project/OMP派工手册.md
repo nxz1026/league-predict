@@ -791,3 +791,15 @@ setsid bash ~/omp-resilient3.sh SMOKE1 /home/ubuntu/omp-smoke 300 1 ~/tickets/SM
      · **⇒ 队列顺序更正**：`STORE2`（篮彩写手）**被解析层挡死**，前置是 **`P0-COLLECT2lqP`：实现 `parse_jclq_offer`/`parse_jclq_result` 并冻结契约 v1.2**；
        好消息是**形状我已经量好了**（§9-93：26 键扁平、盘口在 `oddsHistory` 的 `h/a`、`odds` 是空串不是数组、`snap_ts` 用 `updateDate+' '+updateTime` 字符串），
        坏消息是**这批真包里有 `leagueId=26 美职女篮` 这种封闭清单外的联赛** ⇒ 解析层一开，闸门（`core/jc_gate.py`）必须同时参与（对照入库、永不进模型）。
+99. **`jc-cols-check` 的 dict 形态被验证可用 + 顺手抓到一条新风险**（2026-09-17 17:12，我拿工人刚落地的 `jc_issue_write.py` 喂工具）
+     · §9-97 那条改法**当场见效**：`✔ fact.jc_issue dict声明=9 真列=13 / jc_issue_draw 13/17 / lottery_draw 10/14，exit 0（CHECKS=3）`
+       ⇒ 印证"**判据引用我的工具时，先拿一个符合规格的临时文件喂工具**"是对的（这次喂的是真产物，比 `/tmp/dyn.py` 更强）；
+     · **NOT NULL 无默认列**（`information_schema` 现查）：
+       `jc_issue`: `game_num issue_no n_matches draw_num_list raw_head src_hash src_file` ·
+       `jc_issue_draw`: `game_num issue_no game_key src_hash src_file` · `lottery_draw`: `game_num issue_no numbers_raw prizes src_hash src_file`
+       ⇒ 解析器对这几列**都有产出**（9/13/10 列里都含）✔ 但我给写手定的 **`"" → None` 归一**一旦命中这些列（如某天 `game_key` 变空串），
+         就会把"空串"变成 **NULL 炸 NOT NULL** ⇒ **`2e-B`（接线单）必须规定：逐条指令用裸 SQL 保存点隔离**（`savepoint iw` / `release iw` / `rollback to iw`，
+         与 `jc_odds_write.py` 同姿势、§9-78/§9-80），否则一条坏指令废一整批；
+     · 顺带纠正我自己工单里的一处**歧义**（下次写单避免）：我写"审计尾列 `src_hash/src_file` 由写手补"，又写"`COLUMNS` 白名单外一律 ValueError"
+       ⇒ 工人就地把两列**先并进 row 再校验**（`jc_issue_write.py:55`），于是**每次调用必炸**（我用假游标实测：`ValueError: 指令含未登记列 ['src_file','src_hash']`）。
+       规格应当写成**有序步骤**而不是并列条款（"① 只校验 `ins["row"]` ② 校验通过后**才**追加审计列到 cols+vals"）。
