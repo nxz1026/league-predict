@@ -1,7 +1,7 @@
 【项目】league-v2（§2-D7 ≤100 行/文件、≤50 行/函数、≤120 列 硬红线；§9：报告用锚点、禁 git、禁 print）
 【这一单是"盘口全历史"**接线**（第三步，也是最后一步）：把 `jc_odds_history` 这个 topic 接进入库链路——**净增 ≤14 行，分散在 3 个文件**】
  前置（都已完成，别重做）：`3b1` 解析器 `scripts/store/parse_odds_hist.py`(74) ✔ · `3b2` 写手 `scripts/ingest/jc_odds_write.py` ✔ · `P0-JCSPLIT` 把
- `jc_load.py` 从 99 搬到 **66 行**（`_ops`/`load_topic` 现在在 `scripts/ingest/jc_topic.py`）✔ ⇒ **若这两个文件不在，停下告诉我**。
+ `jc_load.py` 从 99 搬到 **66 行**（`_ops`/`load_topic` 现在在 `scripts/ingest/jc_topic.py`）✔ ⇒ **这两个文件都已验收（`scripts/store/parse_odds_hist.py` 74 行 · `scripts/ingest/jc_odds_write.py` 51 行，`pytest 441 passed`）；**若你发现它们不在，停下告诉我****。
 【🅣 第 1 个动作就 edit（三个小改动，一次写完再跑测试）；判据一律"自量自比"（§9-75：cron 每 10 分钟动一次数，写死必过期）。】
 【A. 为什么必须特殊处理（**这是本单唯一有难度的地方，读懂再动手**）】
  `jc_odds_history` 是**一天一趟**（契约 v1.4，对方 15:00 档采一次），而装载 cron 是 **`*/10` 一天 144 趟**。
@@ -32,6 +32,9 @@
     ⇒ 期望：日志出现 `jc_odds_history` 且 `rows=34`；`select count(*) from fact.jc_odds_history` = **34**；
       `select count(*) filter (where is_first) ... , count(*) filter (where goal_line is not null), count(*) filter (where is_close)` = **10 / 9 / 0**；
       **再跑一遍同一条命令** ⇒ 行数**仍是 34**（PK upsert）、`gaps` 与 T1 相同（**这个演练不许造 gap**）。
+ T2b **并发提示（队长 14:28 补）**：`P0-COLLECT3b2c` 的测试可能同时在往 `fact.jc_odds_history` 里"开事务→回滚"，
+   你若在 T2/T3 的 SQL 上**卡住超过 30 秒**（`select pid, state, wait_event_type from pg_stat_activity where datname='league'` 能看到 `lock`），
+   **不要杀别人的事务**，等它跑完再来一次；实在等不到就把 T2/T3 挪到报告最后再做，并贴出等待证据。
  T3 **收干净**：`sudo -n -u postgres psql -d league -c "delete from fact.jc_odds_history"` ⇒ 行数回到 **A3(=0)**；
     并 `delete from ops.file_arrival where src_file like '%2026-09-17T06-00%'` ⇒ 演练痕迹清零（贴两条 `DELETE n` 原文）。
  T4 **静态**：`python3 ~/bin/omp-ast-check.py scripts/ingest/jc_read.py scripts/ingest/jc_topic.py scripts/ingest/jc_load.py` → 0 违规；

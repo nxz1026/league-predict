@@ -89,3 +89,10 @@ def conn():
 ```
    用例体内：`cur = conn.cursor()` 直接用；所有断言**都在 `finally` 之前**跑完；查"库里最终 0 行"那一步
    **另开一条只读连接**（`with pg.read_conn("ro") as c:`）——**不要在 rollback 之后复用同一条连接去查**。
+【🩹 14:14 再追加两条（若你正在跑，忽略此段；这是给下一轮会话的）：
+ ① `'Connection' object has no attribute 'rowcount'` ⇒ **测试传错了对象**：写手收的是 **cursor**（B1 签名 `upsert_jc_odds_history(cur, rows, src)`），
+    你写成 `upsert_from_env(conn, ENVS[0])` ⇒ 必须 `cur = conn.cursor()` 后**全程传 `cur`**（`cur.rowcount` 才是每语句行数）；
+ ② `InvalidSavepointSpecification: savepoint "rh" does not exist` ⇒ **保存点必须"本轮先建后用"**：
+    每一次循环内 `cur.execute("savepoint rh")` → 试 insert → 成功 `release savepoint rh` / 失败 `rollback to savepoint rh`；
+    **不许**把 `savepoint` 建在循环外（第一条失败之后就再也 release 不了，第二条就报"does not exist"）。
+ ③ 判据不变：T2 = **34 → 重放仍 34 → rollback → 另开 `pg.read_conn("ro")` 查 = 0**；T3 = 三条(1 好 2 坏) 返回 **1** 且不抛。
