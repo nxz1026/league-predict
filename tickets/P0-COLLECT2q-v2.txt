@@ -1,0 +1,72 @@
+【项目】league-v2（§2-D7 ≤100 行/文件、≤50 行/函数、≤120 列 硬红线；§9：报告用锚点、禁 git、禁 print）
+【编号说明】这是 `P0-COLLECT2q` 的 **v2**（哨兵名仍是 `P0-COLLECT2q`）。v1 只给了行为描述 ⇒ 工人 15 分钟没落笔；
+ **本版把判定顺序、函数签名、骨架全贴出来**，你照抄 + 跑 E 节 + 交报告。细节可改（变量名/换行/logger 位置），**判定语义不许改**。
+【这一单只做两件事】**B1 清单外的"无主文件"不許丢也不許张冠李戴**（orphan）；**B2 国内机 09:13 起 `.done` 第一列丢了 `topic/` 前缀 ⇒ 按目录消歧**。
+【🅣 只准读 2 个文件】`scripts/ingest/jc_read.py`（现 83 行）、`scripts/ingest/jc_load.py`（现 87 行）。**第 1 个动作就 write/edit**。
+
+【A. 现状（`jc_read.py` 是 2o 落地后的样子，**别推翻，只在其上加**）】
+ `_stamp / iter_markers / _count_lines / _manifest / _check_entry / _from_manifest / _window / files_for_batch / read_lines` 九段；
+ 语义：`.done` 非空 ⇒ 只认清单（`_from_manifest`）；0 字节 ⇒ 走 `_window`；行数不符 ⇒ `(path,"rejected")`；清单没列的 topic ⇒ `[(None,"missing")]`。
+【B. 现场事实（照抄，别去查）】
+ · **B1**：`jczq_offer/` 里有三个真文件 `2026-09-15T22-48Z__001.jsonl / 22-49Z / 22-54Z`（各 100,533 B / 40 行），
+   **不在任何 `.done` 里、那三个时刻也没有 marker**（marker 序列 `15-16-32Z` 直接跳 `23-01-30Z`）。
+ · **B2**：`01-03-20Z.done` 每行是 `jczq_offer/2026-09-16T01-03Z__001.jsonl\t40\t<hash>`；从 `01-13-20Z.done` 起变成
+   `2026-09-16T01-13Z__001.jsonl\t40\t<hash>`（**目录前缀没了**），真文件仍在 `jczq_offer/…`；截至队长 09:30 已坏 **3 批**（01-13 / 01-23 / 01-30）。
+ · 所有 `.done` 行尾是 **CRLF** ⇒ 取字段一律 `.strip()`；第三列 hash **本单仍不校验**（算法没定义）。
+ · `load_topic(cur, root, marker, topic, path, state)` 的 `state`：`"jsonl"` 读行入库 / `"missing"` 记 `#MISSING` / **其它值**（`empty`、`rejected`）⇒ `n=0` 不读行、不算 gap。
+
+【C. 判定顺序（**这就是本单的全部逻辑，别自己加规则**）】
+ 1) 清单行**有** `topic/` 前缀 ⇒ 权威归属（现状不变）。
+ 2) 清单行**没有**前缀 ⇒ `_resolve()`：在所有 topic 目录里找"**文件存在 且 实际非空行数 == 声明行数**"的**唯一**命中；
+    · 恰好 1 个命中 ⇒ 归它 + `logger.warning("manifest-无目录前缀 topic=%s 文件=%s（按目录消歧）", ...)`（**这条日志是对方违约的凭证，必须有**）；
+    · 0 个或 ≥2 个命中 ⇒ **不许猜**，留给第 3 步。
+ 3) **磁盘上有、但 1)/2) 都没认领**的 `<topic>/*.jsonl` ⇒ **orphan**：照样入库、`ops.file_arrival.done_marker = false`、`src_file` 用**相对路径原文**，
+    并打**一条**（只一条）`logger.warning("orphan 装载 n=%d topics=%s 文件=%s", ...)`（文件最多列 5 个 + `…`）；
+    ⚠️ orphan 是**一个额外的伪批、排在最后处理**（不能让旧 `snap_ts` 盖掉有清单的新批次）；`.empty` **永远不算 orphan**（清单/窗口没覆盖的 `.empty` 只打日志、不入库）。
+ 4) 某 topic 既没被 1)/2) 覆盖、**磁盘上也没有任何文件** ⇒ 保持现状 `[(None,"missing")]`（真缺档才记 gap）。
+ ⇒ 净效果：**任何一行真数据都不会因为对方写坏清单而丢失**，且"违约 / 无主"在我方日志里**长期可见**。
+【D. 不许做】改 `jc_write.py` / `parse_*.py` / DDL / 夹具；改 2o 已落地的 `_check_entry` 行数对账语义；把无主文件**丢弃**或**并进别的批**；
+ 往 `/srv/league-staging/**` 写 / 改名 / 删任何东西（**只读**）；禁 git；禁 print；演练一律在 `/tmp/…`。
+【D2. 骨架（照抄；**总长必须 ≤100 行** ⇒ 允许把 `_window` 压行、允许合并相邻单行函数）】
+```python
+ def _resolve(root: Path, topics: tuple[str, ...], rel: str, decl: int) -> tuple[str, Path] | None:
+     """清单丢了目录前缀时消歧：唯一"存在且行数吻合"的 topic 才算命中，否则 None（不许猜）。"""
+     hits = [(t, root / t / rel) for t in topics
+             if (root / t / rel).is_file() and _count_lines(root / t / rel) == decl]
+     if len(hits) != 1:
+         return None
+     logger.warning("manifest-无目录前缀 topic=%s 文件=%s（按目录消歧）", hits[0][0], rel)
+     return hits[0]
+
+ # _manifest() 里：rel 含 "/" ⇒ out[topic].append((root/rel, decl))；不含 "/" ⇒ out.setdefault("", []).append((rel, decl))
+ # _from_manifest(root, marker, topics)：先按现有逻辑处理有前缀的；再对 out[""] 逐条 _resolve()，命中 ⇒ 并入该 topic；未命中 ⇒ 不放进返回值（留给 orphan）
+ def orphan_entries(root: Path, topics: tuple[str, ...], covered: set[str]) -> dict[str, list[tuple[Path, str]]]:
+     """covered = 已被 1)/2) 认领的相对路径集合（"topic/文件名"）；返回未被认领的 *.jsonl。"""
+```
+ `jc_load.load_batch()`（或 `load_all` 那层）在**全部 marker 处理完之后**，对 `orphan_entries(...)` 走一遍 `load_topic`，
+ `marker` 传合成值（`root/"orphan.done"`）⇒ `src_file` 落 `topic/文件名`、`done_marker=false`。
+
+【E. 必须成立（数字是队长 09:30 实测）】
+ E1 **改前改后 count 一字不变**（"不丢数据"证明）：`bash ~/bin/jc-ingest-run.sh` 跑三遍（改代码前 1 遍、改后 2 遍），
+    三遍末行 `count jc_match / jc_offer / jc_result` **完全相同**且每批 `errors=[]`（队长基线 `17/690/24`，**以你第一遍为准**）
+ E2 **B2 落地**：`PYTHONPATH=scripts python scripts/ingest/jc_load.py --dir /srv/league-staging/incoming/cn-collector`
+    → `2026-09-16T01-13-20Z` 那行必须**不再是 `ups=0`**、变成 **`ups=49`**（40 盘口 + 9 赛果；篮彩/传统足彩三 topic 走 `skip` 行）；
+    日志出现 **7 条** `manifest-无目录前缀`；`select max(snap_ts) from fact.jc_offer` 必须 **> `2026-09-16 01:03:02+00`**（01-13/01-23/01-30 三批都进来了）
+ E3 **B1 落地**：同一趟日志里 `orphan 装载` 的文件清单**必须包含** `22-48Z__001 / 22-49Z__001 / 22-54Z__001` 三个；
+    `psql -c "select src_file, done_marker from ops.file_arrival where src_file in ('jczq_offer/2026-09-15T22-48Z__001.jsonl','jczq_offer/2026-09-15T22-49Z__001.jsonl','jczq_offer/2026-09-15T22-54Z__001.jsonl')"` ⇒ 三条都在、`done_marker = f`
+ E4 **`__002` 演练**：`/tmp/qdup/` 自建：抄 `jczq_offer/2026-09-16T00-43Z__001.jsonl`（40 行）为 `__001`，复制改名 `__002` 并把每行 `snap_ts` 改成 `2026-09-16T00:44:02Z`；
+    写一个**非空** `.done` **只列 `__001`** ⇒ 跑 `--dir /tmp/qdup` ⇒
+    `select count(*) filter (where snap_ts='2026-09-16T00:43:02Z')||'/'||count(*) filter (where snap_ts='2026-09-16T00:44:02Z') from fact.jc_offer` → **`40/40`**，
+    且 `__002` 在 `ops.file_arrival` 里以 `done_marker=f` 存在。**这就是"以后出现分片不再静默丢数据"的证据。**
+ E5 **不许多造 gap**：`select count(*) from ops.file_arrival where src_file like '%#MISSING%'` 跑前 / 跑后各贴一次 ⇒ **只许 ≤，不许 >**
+ E6 静态：`python3 ~/bin/omp-ast-check.py scripts/ingest/jc_read.py scripts/ingest/jc_load.py scripts/ingest/jc_write.py` → **0 违规**，并**贴出 `jc_read.py` 实际行数（≤100）**
+ E7 `python3 ~/bin/jc-fk-audit.py fact` → exit=0；`python3 ~/bin/jc-cols-check.py scripts/ingest/jc_write.py` → 全 ✔
+ E8 `source ~/.venvs/league/bin/activate && PYTHONPATH=scripts python -m pytest tests -q` → **428 passed / 0 failed**
+【铁律】① 禁 git；② 禁 print；③ ≤100/≤50/≤120；④ 只改 `jc_read.py` + `jc_load.py`；
+ ⑤ 报告 `.omp-logs/P0-COLLECT2q.report.txt`（E1~E8 原始命令 + 原始输出 + 实际行数）
+ + 全绿才 `echo TASK_DONE > .omp-logs/P0-COLLECT2q.done`
+【边界】`jc_read.py` 装不进 100 行 ⇒ **贴实际行数停下**（我来决定拆文件还是挪 `_window`，**别自己放宽红线**）；
+ E2 消歧后 `ups` 不是 49 ⇒ 贴那几行原始日志停下；E4 出现 `40/0` 或 `0/40` ⇒ **orphan 没兜住**，停下。
+【验收（队长逐字复跑）】
+  bash ~/bin/jc-ingest-run.sh
+  LEAGUE_FROZEN_RE="scripts/core/" bash ~/bin/league-accept.sh P0-COLLECT2q scripts/ingest
