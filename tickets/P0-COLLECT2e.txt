@@ -66,7 +66,11 @@ JSONB_COLS = {"fact.jc_issue": ("draw_num_list","raw_head"),
 | `fact.jc_issue_match` | **62** | 期头侧展开 distinct = **38** + 开奖侧 = **24**，两侧 issue 不相交 ⇒ 并集 **62**（**不要**只从 `jc_issue` 展开，那样少 24 行） |
 | `fact.jc_issue_prize` | **0** | `prizeLevelList` 12 期全空 |
 | `fact.lottery_draw` | **120** | 480 行 → distinct `(game_num,issue_no)` = 120 |
- · 另外**每批 `lottery_draw` 都是 240 行、跨批完全重复** ⇒ 这一张表就是"幂等 + 去重"的最强测试（480 进 120 出）。
+ · **更正（队长 09:40Z 实测 19 个批的真落港包）**：`lottery_draw` 每批 **120 行**（不是 240），120 个 `(lotteryGameNum, lotteryDrawNum)` 键里
+   **有 60 个键的 payload 内容会跨批变化**（同一期号出现过 2 种内容）；`jc_issue_result` 3 个键**全部会变**（`90/26126` 见过 **5 种**内容）；
+   `jc_issue` 4 个键**内容不变** ⇒ **结论：开奖类数据不是"一次录入即不可变的历史"**，它会补、会改（延期公告、奖金滚存、PDF 上线）。
+   ⇒ ① 这一张表仍是幂等最强测试（120 键进 120 行出，不许变 240）；② 但**必须允许覆盖更新**（`gates=None` 已写死，别加防回退）；
+     ③ 任何依赖它们的分析都要能从 `last_seen_at` 看出"这行是最后一次被改于何时"。
 
 【E. 接线：`scripts/ingest/jc_load.py`（87 行，**只加不改语义**，最终 ≤100 行）】
  `WRITE` 从 `("jczq_offer","jczq_result")` 扩到 `("jczq_offer","jczq_result","jc_issue","jc_issue_result","lottery_draw")`；
@@ -95,7 +99,14 @@ JSONB_COLS = {"fact.jc_issue": ("draw_num_list","raw_head"),
     `... "select count(*) from fact.lottery_draw where jsonb_array_length(prizes) > 0"` → **120**
     `... "select count(*) from fact.jc_issue_match where raw ? 'leagueId'"` → **62**
  T7 **FK 可满足**：`python3 ~/bin/jc-fk-audit.py fact` → **exit=0**（真外键只有两条：`jc_issue_match → jc_issue`、`jc_issue_prize → jc_issue`；`jc_issue_draw` **无 FK** ⇒ T7 绿不代表 draw 侧数据完整，还得看 T3 的合成行）
- T8 `python3 ~/bin/omp-ast-check.py scripts/ingest/jc_issue_write.py scripts/ingest/jc_load.py scripts/ingest/jc_write.py scripts/store/parse_jcissue.py scripts/store/parse_misc.py` → **0 违规**
+ T7b **内容会变 ⇒ 必须真的覆盖**（新增，队长 09:40 实测驱动）：取 `lottery_draw` 里**内容变过的那一期**（自己从两个批的文件里 diff 出来，
+    例 `('35','26248')` 两种内容），按旧→新顺序连装两批，然后
+    `fact.lottery_draw` 的真列是 `game_num issue_no game_name draw_date status numbers_raw numbers prizes pool equipment_count src_hash src_file first_seen_at last_seen_at`
+    （**没有 `raw_full` 这种整包 jsonb**，队长 09:42 从 `information_schema` 查过）⇒ 断言写成：
+    `select count(*) as 行数, max(src_hash) as 现值哈希, (max(last_seen_at) > max(first_seen_at)) as 覆盖过 from fact.lottery_draw where game_num='35' and issue_no='26248'`
+    ⇒ **`行数 = 1`**、**`覆盖过 = t`**、`现值哈希` 必须等于**后一版** payload 的 `src_hash`（把两版的 hash 都贴出来证明你存的是新的）。
+    顺带贴一条 `select count(*) from fact.lottery_draw`（**必须仍是 120**，不许变 240）。
+T8 `python3 ~/bin/omp-ast-check.py scripts/ingest/jc_issue_write.py scripts/ingest/jc_load.py scripts/ingest/jc_write.py scripts/store/parse_jcissue.py scripts/store/parse_misc.py` → **0 违规**
  T9 `python3 ~/bin/jc-cols-check.py scripts/ingest/jc_issue_write.py` → 全 ✔；再跑 `python3 ~/bin/jc-cols-check.py scripts/ingest/jc_write.py` → **仍全 ✔**（证明没碰坏老文件）
  T10 `PYTHONPATH=scripts python -m pytest tests -q` → **428 passed / 0 failed**
 【铁律】① 禁 git；② 禁 print；③ ≤100 行/文件、函数 ≤50 行、列 ≤120；④ **只准新建 `jc_issue_write.py` + 改 `jc_load.py`**；
