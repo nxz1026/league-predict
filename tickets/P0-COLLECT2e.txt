@@ -131,3 +131,13 @@ T8 `python3 ~/bin/omp-ast-check.py scripts/ingest/jc_issue_write.py scripts/inge
 【验收（队长逐字复跑）】
   bash ~/bin/v2b-check.sh
   LEAGUE_FROZEN_RE="scripts/core/" bash ~/bin/league-accept.sh P0-COLLECT2e scripts/ingest/jc_issue_write.py scripts/ingest/jc_load.py
+
+【🔒 15:27 派工前追加三条（队长）】
+ ① **并行提示**：`P0-JCSPLIT3` 正在把 `_manifest/_count_lines/_check_entry/_resolve` 从 `jc_read.py` 搬到 `scripts/ingest/jc_manifest.py`
+    ⇒ 你**只准**动 `scripts/ingest/jc_topic.py`、新建 `scripts/ingest/jc_issue_write.py`、新建 `tests/test_jc_issue_write.py`
+    （**`jc_read.py` / `jc_manifest.py` / `jc_load.py` 一个字节都不许多改**，搬家与消歧不是你的活）；
+    开工与收尾各跑一次 `PYTHONPATH=.:scripts python -m pytest tests -q`，**两个数都贴进报告**（我要看增量，不看绝对值）。
+ ② **D 节的 oracle 数字**（我 00:20Z 逐表推导的那批）来自**离线真包**，不受 cron 影响 ⇒ 若与你现测不符，**以你现测为准**，并在报告里把差异列出来给我（别迁就我的数字改测试）。
+ ③ **写权限边界**：`ing` 角色对 `fact.jc_issue*` / `fact.lottery_draw` 只有 SELECT/INSERT/UPDATE、**没有 DELETE** ⇒
+    你的测试**必须全程在事务里、收尾 `rollback()`**（和 `test_jc_odds_write.py` 一个套路，那份就是现成范本：fixture 独占连接所有权 ⇒ §9-83）；
+    **不许**为了清理数据去要 superuser，也不许留下任何未回滚的行（收尾自己用 `pg.read_conn("ro")` 另开连接查 `count(*)` 证明是 0）。
