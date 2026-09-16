@@ -80,7 +80,11 @@
   }
 
   var NOTES = {
-    team: "按联赛聚合全部待售比赛日（不只最新一天）：已对齐=两队都解析到 ref.team；可预测=再都带 AF 历史。差值即缺 af_id——AF 免费档只到 2024 赛季，降级队无历史属预期。",
+    team: "按联赛聚合全部待售比赛日（不只最新一天）：已对齐=两队都解析到 ref.team；可预测=再都带 AF 历史。"
+      + "差值即缺 af_id。⚠️ 已接受为已知缺口（用户 2026-09-16 批复 C，不买付费档不拉次级联赛）："
+      + "AF 免费档只到 2024 赛季，4 支降级队（拉科鲁尼亚/桑坦德竞技/莱万特/马拉加）无历史。"
+      + "另有同俱乐部双 sporttery id（172 马德里竞技 / 664 皇家马德里，采集机用两个名字指同一家俱乐部），"
+      + "单值 aliases 无法表示、合并有损 ⇒ 见 tickets/P0-TEAMMIX1.txt。",
     topic: "ops.file_arrival 按话题：无主通道（done_marker=false）是 loader 每次 run 无条件全量重扫的产物，不是事故。jc_odds_history 只随 8-topic 批次进（每天 4 档），其余 7 个话题每 10 分钟。",
     quota: "ops.quota_ledger 当日各源配额余量；空 = 当日未发请求（非降级）。",
     rej: "只认 rejected jsonb 非空与 ok=false。空表 = 近 24h 零拒绝零失败。不要用 rows_in-rows_ups 判：重放未变更与按设计跳过都会让它变正。"
