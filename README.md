@@ -37,7 +37,7 @@ python collector.py --push-batch <topic>...   # v1.2 批量推送（B1 全 7 top
   - **4 daily 档**：09:30/15:30/21:30 = offer 快照 + 全 7 topic；23:30 = 开奖结果（result/issue/lottery）+ 全 7 topic
   - 每批 = **全部 7 topic 必齐全**（.jsonl 或 .empty，缺一个 = 批次缺陷，B1）
 - **B2 原子推送**：tar 解到 `.staging/` → 逐文件 `mv` 到 topic 目录 → 最后 `install` `.done`（`.done` 是批次最后一步）
-- **G(A) `.done` 清单**：`.done` 文件内含 manifest，每行 `<topic>/<file>\t<rowcount>\t<sha256-of-row-bytes>`；`.empty` 行数为 0、聚合列空。远端以清单为准（不再用文件名窗口匹配）
+- **G(A) `.done` 清单**：`.done` 文件内含 manifest，每行 `<topic>/<file>\t<rowcount>\t<sha256-of-row-bytes>`；**相对路径必须带 `topic/` 前缀**（2026-09-16 修复：前缀缺失导致远端 312 个文件"无主"、每批 440 条回退告警）；`.empty` 行数为 0、聚合列空。远端以清单为准（不再用文件名窗口匹配）
 - **`__002` 分片**：10 分钟档同分钟重跑/重试可能追加 `__002`，清单是唯一正确映射（旧文件名窗口匹配已死）
 
 ## 探针结论（2026-09-15，13 端点全 200）
@@ -51,6 +51,7 @@ python collector.py --push-batch <topic>...   # v1.2 批量推送（B1 全 7 top
 | jclq_offer | `uniform/basketball/getMatchCalculatorV1.qry?channel=c` | 彩种已停售，value 提示停止销售 |
 | jclq_result | `uniform/basketball/getUniformMatchResultV2.qry` | V2，历史开奖可查 |
 | lottery_draw | `lottery/getHistoryPageListV1.qry?gameNo=<no>&provinceId=0&isVerify=1&termLimits=30` | gameNo=85/35/350133/04（文档 3501/3502 无数据） |
+| jc_odds_history | `uniform/football/getOddsHistoryV1.qry?channel=c&matchId=<id>` | 新（v1.3）：一行 = 一场在售足球 × 整条赔率走势（6 块 + 元键原样），matchId 取自 getMatchCalculatorV1 的 Selling 场次；定时 8-topic 批 |
 
 ## 推送通道
 

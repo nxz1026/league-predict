@@ -48,7 +48,7 @@ HEAD_BYTES = int(CONFIG["probe_head_bytes"])
 HOST = CONFIG["collector_host"]
 SSH_ALIAS = CONFIG["push"]["ssh_alias"]
 REMOTE_ROOT = CONFIG["push"]["remote_root"]
-CONTRACT = "v1.2"
+CONTRACT = "v1.3"
 
 # 玩法块 → 官方 poolCode（§5.1 实测）
 _POOL_CODE = {"had": "HAD", "hhad": "HHAD", "crs": "CRS", "ttg": "TTG", "hafu": "HAFU"}
@@ -235,12 +235,45 @@ def parse_lottery_draw(url: str, rec: dict, snap_ts: str) -> list:
     return [_envelope("lottery_draw", url, rec, snap_ts, it)
             for it in (j.get("value") or {}).get("list") or []]
 
+def parse_jc_odds_history(url: str, rec: dict, snap_ts: str) -> list:
+    """jc_odds_history：一行 = 一场在售足球 × 整条赔率走势（getOddsHistoryV1 value 原样）。
+
+    流程：candidates[0]（jczq_offer 端点）取在售场次 matchId → 逐场 GET history_url
+    （QPS 节流走 fetch 内置）。payload = value dict 原样全搬（hadList/hhadList/crsList/
+    ttgList/hafuList/singleList + 场次元键），无裁剪。单场失败 → 该场 1 条 error 行，不中断。
+    """
+    spec = CONFIG["topics"]["jc_odds_history"]
+    j = json.loads(rec["body"].decode("utf-8", errors="replace"))
+    if not _ok(j):
+        return [_error_row("jc_odds_history", url, rec, snap_ts, rec["body"])]
+    mids = []
+    for mi in (j.get("value") or {}).get("matchInfoList") or []:
+        for sub in mi.get("subMatchList") or []:
+            if spec.get("selling_only") and sub.get("matchStatus") != "Selling":
+                continue
+            mid = sub.get("matchId")
+            if mid:
+                mids.append(mid)
+    rows = []
+    tpl = spec["history_url"]
+    for mid in mids:
+        hurl = tpl.format(matchId=mid)
+        hrec = fetch(hurl)
+        hj = json.loads(hrec["body"].decode("utf-8", errors="replace")) if hrec.get("body") else {}
+        if not _ok(hj):
+            rows.append(_error_row("jc_odds_history", hurl, hrec, snap_ts, hrec.get("body") or hrec.get("error", "").encode()))
+            continue
+        rows.append(_envelope("jc_odds_history", hurl, hrec, snap_ts, hj.get("value") or {}))
+    return rows
+
+
+
 
 _PARSERS = {
     "jczq_offer": parse_jczq_offer, "jczq_result": parse_jczq_result,
     "jc_issue": parse_jc_issue, "jc_issue_result": parse_jc_issue_result,
     "jclq_offer": parse_jclq_offer, "jclq_result": parse_jclq_result,
-    "lottery_draw": parse_lottery_draw,
+    "lottery_draw": parse_lottery_draw, "jc_odds_history": parse_jc_odds_history,
 }
 
 
@@ -429,7 +462,7 @@ def _manifest(paths: list) -> str:
     """
     lines = []
     for p in paths:
-        rel = p.name
+        rel = f"{p.parent.name}/{p.name}"
         if p.suffix == ".empty":
             lines.append(f"{rel}\t0\t")
         else:
@@ -522,7 +555,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="国内采集机（契约 v1.2）")
     ap.add_argument("--probe", action="store_true", help="探针模式（复探用）")
     ap.add_argument("--collect", metavar="TOPIC", help="采集指定 topic 落 JSONL")
-    ap.add_argument("--collect-all", action="store_true", help="采集全部 7 topic")
+    ap.add_argument("--collect-all", action="store_true", help="采集全部 8 topic")
     ap.add_argument("--push", action="store_true", help="推送 out/ 到远端 + .done（兼容旧路径）")
     ap.add_argument("--push-batch", nargs="+", metavar="TOPIC",
                     help="B1+B2+G(A)：采集指定 topic 批 + 原子推远端 + .done 清单")

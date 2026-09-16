@@ -51,6 +51,13 @@
         "https://webapi.sporttery.cn/gateway/lottery/getHistoryPageListV1.qry?gameNo=350133&provinceId=0&isVerify=1&termLimits=30",
         "https://webapi.sporttery.cn/gateway/lottery/getHistoryPageListV1.qry?gameNo=04&provinceId=0&isVerify=1&termLimits=30"
       ]
+    },
+    "jc_odds_history": {
+      "candidates": [
+        "https://webapi.sporttery.cn/gateway/uniform/football/getMatchCalculatorV1.qry?channel=c"
+      ],
+      "history_url": "https://webapi.sporttery.cn/gateway/uniform/football/getOddsHistoryV1.qry?channel=c&matchId={matchId}",
+      "selling_only": true
     }
   }
 }

@@ -9,9 +9,9 @@ echo usage: collect_batch.bat offer^|night
 exit /b 1
 
 :offer
-%PY% collector.py --push-batch jczq_offer jclq_offer jczq_result jclq_result jc_issue jc_issue_result lottery_draw >>logs\collector_offer.log 2>&1
+%PY% collector.py --push-batch jczq_offer jclq_offer jczq_result jclq_result jc_issue jc_issue_result lottery_draw jc_odds_history >>logs\collector_offer.log 2>&1
 exit /b 0
 
 :night
-%PY% collector.py --push-batch jczq_offer jclq_offer jczq_result jclq_result jc_issue jc_issue_result lottery_draw >>logs\collector_night.log 2>&1
+%PY% collector.py --push-batch jczq_offer jclq_offer jczq_result jclq_result jc_issue jc_issue_result lottery_draw jc_odds_history >>logs\collector_night.log 2>&1
 exit /b 0

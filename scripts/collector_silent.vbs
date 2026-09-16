@@ -9,7 +9,7 @@ mode = "offer"
 If args.Count >= 1 Then mode = args(0)
 
 Set oShell = CreateObject("WScript.Shell")
-cmd = """C:\Python314\python.exe"" E:\2026Workplace\Code\collector-cn\collector.py --push-batch jczq_offer jclq_offer jczq_result jclq_result jc_issue jc_issue_result lottery_draw --mode-log " & mode
+cmd = """C:\Python314\python.exe"" E:\2026Workplace\Code\collector-cn\collector.py --push-batch jczq_offer jclq_offer jczq_result jclq_result jc_issue jc_issue_result lottery_draw jc_odds_history --mode-log " & mode
 ' Run(cmd, 0, True): 0 = SW_HIDE (no window), True = wait for python to finish
 oShell.Run cmd, 0, True
 WScript.Quit 0
