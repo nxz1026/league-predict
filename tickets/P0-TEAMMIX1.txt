@@ -132,3 +132,31 @@ D9 惯例：永不依赖删除，靠 merge_map 标记）。
 2. `Real Madrid → 皇家马德里` 说明 AF 侧不会为皇马新建行（会并到已存在的 id=2350），
    但竞彩侧的 172/664 双 id 分裂**与 AF 无关**，AF 拉多少都解不了。
 3. 变体敏感（带不带音符、全称还是简称）是 `to_cn` 的固有行为，不在本单修。
+
+---
+
+## ✅ 2026-09-16 23:27 执行完毕（用户批复「执行」）
+`docs/db/seed_jc_team_merge_laliga.sql`（原名 `待审-西甲两对合并.sql`，已按惯例改名）。
+
+执行回执：
+```
+UPDATE 1 × 4（先摘 loser 两行、再加 winner 两行）
+INSERT 0 2（merge_map 留痕）
+A) 2354 Atletico Madrid | af=530 fd=78 jc=172 三键齐
+   3114 Alaves          | af=542 fd=263 jc=171 三键齐
+   120506 阿拉维斯     | {} 空壳
+   120507 马德里竞技   | {} 空壳
+B) 重复 jc_id：0 行
+COMMIT
+```
+
+执行后重跑 `bash ~/bin/jc-ingest-run.sh`（rc=0）验收：
+- 西甲 `n_af_ready` **3 → 5**，`n_aligned` 仍 9（对齐未破）
+- `171 → team_id 3114`、`172 → team_id 2354`（已指向 winner）
+- `fact.jc_match` 引用孤儿行 **0**（120506/120507 彻底无人引用）
+- `PYTHONPATH=scripts pytest tests -q` → **457 passed** 无回归
+- `dash-verify.sh` 全绿（ops 四键全 ok、残留 uvicorn = 0）
+
+**本单至此完结**：2 对已合并、4 支无历史按 C 决策接受、无需 coder。
+剩余未做项仅一个非阻塞观察：`team_merge_map` 在代码里零引用（合并关系无运行时消费方），
+属 `store/team_identity.py` 的 `resolve_team` 范畴，待基础设施恢复另开工单。
