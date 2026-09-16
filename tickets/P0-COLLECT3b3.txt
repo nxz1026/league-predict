@@ -41,8 +41,8 @@
     `wc -l` 三个文件（**97→≤100 / 44→≤60 / 66→≤80**）；三个文件各净增多少行列出来（**合计必须 ≤14**）。
  T5 **回归**：`source ~/.venvs/league/bin/activate && PYTHONPATH=.:scripts python -m pytest tests -q` → **`0 failed`**（基线 435+，按实测贴）；
     `python3 ~/bin/jc-fk-audit.py fact` → exit=0；`python3 ~/bin/jc-false-gaps.py` → **判伪 0 条**。
-【铁律】① 禁 git；② 禁 print；③ ≤100/≤50/≤120；④ 只改 B1/B2/B3 三处；⑤ 报告 `.omp-logs/P0-COLLECT3b3.report.txt`（T0~T5 原始输出）
- + 全绿才 `echo TASK_DONE > .omp-logs/P0-COLLECT3b3.done`
+【铁律】① 禁 git；② 禁 print；③ ≤100/≤50/≤120；④ 只改 B1/B2/B3 三处；⑤ 报告 `.omp-logs/P0-COLLECT3b3b.report.txt`（T0~T5 原始输出）
+ + 全绿才 `echo TASK_DONE > .omp-logs/P0-COLLECT3b3b.done`
 【边界】T1 的 `gaps` 只要 **>A2** ⇒ 立刻停下（这就是"一天一趟 vs 十分钟一趟"的坑，别用"加过滤条件"绕，按 B1 的 OPTIONAL 做）；
  净增 >14 行 ⇒ 停下贴 `wc -l`；`fact.jc_odds_history` 最终不为 0 ⇒ 停下（说明 T3 没清干净）。
 【验收（队长逐字复跑）】
