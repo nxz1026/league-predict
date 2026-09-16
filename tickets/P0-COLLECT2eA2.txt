@@ -1,0 +1,109 @@
+【项目】league-v2（§2-D7 硬红线：≤100 行/文件、≤50 行/函数、≤120 列；§9：禁 git 一切子命令、禁 print、报告用锚点）
+【单号】P0-COLLECT2eA2　【产出】`.omp-logs/P0-COLLECT2eA2.report.txt` + `.omp-logs/P0-COLLECT2eA2.done`（最后一步才写 .done）
+
+【这一单只做什么】**只新建两个文件**：
+  1) `scripts/ingest/jc_issue_write.py`（通用"写指令 → UPSERT"，**≤100 行**）
+  2) `tests/test_jc_issue_write.py`
+【这一单**不做**的事（多做一个字节都算 REJECT）】
+ ✗ 不接装载器（接线是下一张 `2e-B`：只往 `jc_topic.py` 加 3~6 行，我另开单）
+ ✗ 不做 `fact.jc_issue_match` / `fact.jc_issue_prize` 两张子表（**现网解析器根本不产它们的行**，见下"边界事实"，需另开解析层单）
+ ✗ 不改解析器（`store/parse_jcissue.py` / `store/parse_misc.py` / `store/parse_collector.py` 一律只读）
+ ✗ 不碰 DDL、不碰 `jc_load.py` / `jc_read.py` / `jc_manifest.py` / `jc_topic.py` / `jc_write.py` / `jc_odds_write.py`
+
+【🛑 幂等保护（§9-84，开工第一个动作）】
+  `ls scripts/ingest/jc_issue_write.py tests/test_jc_issue_write.py 2>/dev/null | wc -l`
+  ⇒ 若**两个文件都在**且 `PYTHONPATH=.:scripts python -m pytest tests/test_jc_issue_write.py -q` 已全绿：
+     **本单只剩"补报告 + 写 .done"，禁止重写、禁止"顺手优化"已存在的代码**；若只在其一 ⇒ 只补缺的那个。
+
+【🅣 动作顺序（§9-66②）】第 1 个动作就是 **write `scripts/ingest/jc_issue_write.py`**，两文件都写完之前**一行测试都不要跑**（不许边写边试、边试边改）。
+
+────────────────────────────────────────
+【边界事实：队长 16:52–17:00 用真包实测，**照抄，别自己再查**】
+· 三个 topic 的解析器返回**已经是"写指令"**，形状**完全一致**（这是我量过的，不是猜的）：
+    `{"table": "fact.jc_issue", "pk": {"game_num": "90", "issue_no": "26127"}, "row": {...}, "notes": [...]}`
+  ⇒ 所以写手是**一个通用函数**，不是三套逻辑。
+· 每批真包产出的指令数（真样实测）：`jc_issue → fact.jc_issue` **4 条**；`jc_issue_result → fact.jc_issue_draw` **3 条**；
+  `lottery_draw → fact.lottery_draw` **120 条**。**没有第四张表**：`jc_issue_result` 的 matchList **只出现在 `notes` 文字里**
+  （`parse_jcissue.py:27` 原文：`"matchList 14 场… → fact.jc_issue_match，P0-COLLECT2 落"`）⇒ 子表本单**无从填**，别硬造。
+· 三表主键**都是两列** `(game_num, issue_no)` ⇒ 期号跨玩法重号，**绝不可只用 issue_no**。
+· 解析出的列 ⊆ DDL 列，且 DDL 只多同一套审计尾列（我逐张对过，9/13/10 对 13-4/17-4/14-4 ✔）：
+    `fact.jc_issue`       解析 9 列 = draw_at draw_num_list game_name game_num issue_no n_matches raw_head sale_begin sale_end
+    `fact.jc_issue_draw`  解析 13 列 = delay_remark draw_result game_key game_name game_num is_delay issue_no
+                                     paid_begin paid_end pool_after pool_after_rj sales sales_rj
+    `fact.lottery_draw`   解析 10 列 = draw_date equipment_count game_name game_num issue_no numbers numbers_raw pool prizes status
+    审计尾列（写手负责补）：`src_hash, src_file, first_seen_at, last_seen_at`（后两列由 DDL 默认值 / `now()` 管，**不要出现在 INSERT 列表里**）
+· 类型（我已从 `information_schema` 导好，**别再查**）：
+    `sale_begin/sale_end/draw_at/paid_begin/paid_end` = **timestamp（无时区）**；`draw_date` = **date**；
+    `n_matches/is_delay` = smallint；`status/equipment_count` = integer；
+    **`draw_num_list/raw_head/numbers/prizes` = jsonb**；其余 = text。
+  ⇒ **psycopg3 会把 Python 的 `datetime`/`date`/`dict`/`list` 自动适配到对应列**（真包里就是 18 个 datetime、120 个 date、124 个 dict、124 个 list），
+     所以**不要手写 `Json(...)` 包裹、也不要 `str()` 强转**——直接绑参数。
+· **空串事实**：真包里空串只出现在 `jc_issue_draw` 的三个 **text** 列（`delay_remark / pool_after_rj / sales_rj`，一批 7 个），
+  **不落在任何时间戳/数值列** ⇒ 不会炸类型；但空串入库无意义 ⇒ **写手统一把 `""` 归一成 `None`**（一条规则，别做按列特例）。
+────────────────────────────────────────
+【要实现的公开面（固定，名字不许改）】
+`scripts/ingest/jc_issue_write.py`：
+
+  **必须是下面这个"表 → 允许列"的字面 dict**（队长 17:05 修正：只写表名集合会让 `jc-cols-check.py` 扫不到写点 ⇒ 它按设计 `exit 2` "这不是通过"；
+   而 dict 形态既能被静态核对，又能当白名单，**一举两得**）：
+  ```
+  COLUMNS = {
+      "fact.jc_issue": ("game_num", "issue_no", "game_name", "sale_begin", "sale_end", "draw_at",
+                        "n_matches", "draw_num_list", "raw_head"),
+      "fact.jc_issue_draw": ("game_num", "issue_no", "game_key", "game_name", "draw_result", "pool_after",
+                             "sales", "pool_after_rj", "sales_rj", "paid_begin", "paid_end",
+                             "is_delay", "delay_remark"),
+      "fact.lottery_draw": ("game_num", "issue_no", "game_name", "draw_date", "status", "numbers_raw",
+                            "numbers", "pool", "prizes", "equipment_count"),
+  }
+  ```
+  ⇒ 写手第 1 步查 `COLUMNS`：**表名不在里面 ⇒ `ValueError`**；
+  第 2 步**逐列过滤**：`ins["row"]` 里出现了 `COLUMNS[table]` 之外的列 ⇒ 同样 `ValueError`（**防解析器将来漂移把错列名带进 SQL**）；
+  第 3 步主键两列必须在 `row` 里，否则 `ValueError`。
+
+  def upsert_issue_instruction(cur, ins: dict, src_hash: str, src_file: str) -> int:
+      """一条写指令 → 一行 UPSERT；表名/列名不在 COLUMNS 登记内 ⇒ 抛 ValueError（响亮，别静默跳过）；返回受影响行数(0/1)。"""
+
+  实现要点（照抄级，逐条对齐）：
+   1. `table = ins["table"]`；`cols_ok = COLUMNS.get(table)`；`if cols_ok is None: raise ValueError(f"未知写指令目标表 {table!r}")`；`extra = set(ins["row"]) - set(cols_ok)`；`if extra: raise ValueError(f"指令含未登记列 {sorted(extra)} → {table}")`
+   2. `row = {k: (None if v == "" else v) for k, v in ins["row"].items()}`   # ① 空串归一
+   3. `cols = list(row)`，再 `cols += ["src_hash", "src_file"]`；`vals = list(row.values()) + [src_hash, src_file]`
+   4. 冲突目标用 `ins["pk"]` 的键**排序后**拼：`", ".join(sql.Identifier(c).as_string(None) for c in sorted(pk_cols))`（三表都是 `("game_num", "issue_no")`）
+   5. SET 子句 = **所有非主键列 `c = EXCLUDED.c`**，再加 `last_seen_at = now()`；
+      ⚠️ **`first_seen_at` 绝不出现在 SET 里**（首见时间只能由 DDL 默认值在真正插入那一次落定）
+   6. 用 `psycopg.sql` 拼：`sql.SQL("insert into {} ({}) values ({}) on conflict ({}) do update set {}")`
+      · 表名必须是 `sql.Identifier(schema, name)`（**两参拆开**，§9 铁律：`sql.Identifier("fact.jc_issue")` 会把点吃进引号 ⇒ UndefinedTable）
+      · 列名逐个 `sql.Identifier(c)`；`"c = EXCLUDED.c"` 用 **`sql.SQL`** 拼（用 Identifier 会整句变成一个带引号标识符 ⇒ 语法错）
+      · **验收必须**：把**整条**语句 `.as_string(None)` 渲染出来读一遍（只渲染一段会漏，§9 铁律）
+   7. `cur.execute(...)` 后 `return cur.rowcount or 0`（**照 `jc_odds_write.py` 里已验收的写法**）
+   8. **不要**在写手里开事务、不要 `commit()`、不要自己 catch 一切异常（连接归调用方，§9-83）
+
+【测试 `tests/test_jc_issue_write.py`（照抄现成范本，别自创形状）】
+· fixture **照抄 `tests/test_jc_odds_write.py`**：`conn = pg.connect("ing")` → `try: yield conn; finally: conn.rollback(); conn.close()`
+  ⇒ **fixture 独占连接所有权**；测试体拿到的就是连接（或 `conn.cursor()`），**不要再套一层 `closing()`**（§9-83 双 closing 会把连接关掉）
+· 导入：`from store import pg`（**是 `store.pg`，不是 `core`**）；跑测试必须 `PYTHONPATH=.:scripts`
+· 用例至少覆盖：
+  1) 三表各写 1 条真指令（**可直接用我在报告里给的 pk/列名形状造**）⇒ 各返回 1，且 `select` 得到该行、`first_seen_at` 非空
+  2) **同 pk 重放两遍** ⇒ 表里仍 1 行、被更新列变了、**`first_seen_at` 不变而 `last_seen_at` 变了**
+  3) **空串归一** ⇒ 传 `delay_remark=""` 落库是 `NULL`（`select … is null` 断言）
+  4) **坏指令响亮拒绝** ⇒ `table="fact.evil"` ⇒ `pytest.raises(ValueError)`（且**不污染同批其它行**：白名单拒绝后同批好行仍可写）
+  5) **jsonb 真进去** ⇒ 造 `numbers=[1,2,3]` / `raw_head={"a":1}`，落库后 `select numbers::text` 读回结构（**不是被 str() 成的 `"..."`**）
+  6) 收尾**另开** `with pg.read_conn("ro") as c:` 断言 **`fact.jc_issue` / `fact.jc_issue_draw` / `fact.lottery_draw` 三表 count 全 0**
+     （`league_ing` 对 fact **没有 DELETE** ⇒ 一切"清场"只能靠测试自己 `rollback()`，§9-83；这条 0 是证明没留痕的唯一硬证据）
+────────────────────────────────────────
+【必须成立（全绿才写 .done；两个数都要贴，不许抄我写的数字 §9-75）】
+ T0 **开工前先跑一次全量并记下数字**（这就是你的基线，报告里 T0/收尾两个数都要贴）
+ U1 `cd /home/ubuntu/league-v2/repo && source ~/.venvs/league/bin/activate && PYTHONPATH=.:scripts python -m pytest tests/test_jc_issue_write.py -q` → **全绿**
+ U2 `PYTHONPATH=.:scripts python -m pytest tests -q` → **0 failed**，并把**开工前的 T0 基线**与**收尾数**两个都贴出来
+    （T0：本单开工前先跑一次记数；今天 16:36 我实测基线 = **448 passed**，若你 T0 不是这个数**以你现测为准并点名差异**）
+ U3 `python3 ~/bin/omp-ast-check.py scripts/ingest/jc_issue_write.py tests/test_jc_issue_write.py` → **0 违规**；`wc -l` 写手 **≤100**
+ U4 **静态列核对必须真扫到三张表**（队长 17:05 改：这条原来是做不到的——工具只认 `_upsert` 字面表名或 `{表: (列…)}` dict，动态拼列会被它 `exit 2` 判"没扫到"，那不是通过）：
+    `python3 ~/bin/jc-cols-check.py scripts/ingest/jc_issue_write.py` → **exit 0 且 `CHECKS ≥ 3`**（把它的**原始输出整行**贴进报告，我要看见扫到了 3）；若你的 `COLUMNS` 里有列 DDL 里不存在 ⇒ 它会点名"表里没有=…"，那是**真 bug**，改代码不是改工具；
+    **再跑** `python3 ~/bin/jc-cols-check.py scripts/ingest/jc_write.py` → **仍全 ✔**（证明没碰坏老文件）
+ U5 `grep -c "print(" scripts/ingest/jc_issue_write.py` → **0**
+ U6 整条 SQL 渲染自证：临时脚本把三表各一条指令的语句 `.as_string(None)` 打印到**报告里**（不入库、不执行），我要看见 `on conflict ("game_num", "issue_no") do update set` 与 `last_seen_at = now()`
+【报告要额外写明】(a) 你对"子表不产行"这一事实的复核（跑一次 `jc_issue_result` 真包，打印解析器实际返回了哪些 `table`）；
+ (b) 你**没有**改任何禁改文件：`git status --porcelain scripts tests` 只允许出现那两个新文件。
+【铁律】① 禁 git 一切写命令；② 禁 print（生产码）；③ ≤100 行/文件、函数 ≤50 行、列 ≤120；④ 只准新建上面两个文件；
+ ⑤ 需要用户/采集机回话的事不猜，写进报告【待确认】。
+【边界】任何一条判据对不上：贴**原始输出** + 点名函数/行，**停下**交报告，别改 DDL、别改解析器、别为凑数造行。
