@@ -721,3 +721,10 @@ setsid bash ~/omp-resilient3.sh SMOKE1 /home/ubuntu/omp-smoke 300 1 ~/tickets/SM
         （顺序反了就杀不到：wrapper 一死，本轮 `setsid timeout` 会被 init 收养，`pgrep -P` 就空了——这个坑我做合成用例时抓到过）。
      · **待办（我自己）**：把 `manifest-hash-mismatch` / `manifest-hash-ambiguous` / `manifest-无法消歧` 三个关键字加进 `~/bin/jc-ingest-run.sh` 的报警
        （刚才有 2 个装载进程在跑 ⇒ 不改运行中的脚本，等这两张单落地再改，改完 `bash -n` + 合成用例验证）。
+91. **`P0-COLLECT2e` 两轮 29 分钟零产出，病根在单不在模型**（15:57 现场判定，别急着重派）
+     · 单长 **142 行 / T1–T10**，而且里面还留着**三处过期事实**：`jc_load.py(87)`（现 62，接线点早已搬到 `jc_topic.py`）、`T10 → 428 passed`（现 441）、"只准新建 + 改 `jc_load.py`"（**与 3b3b 刚落的 OPTIONAL 语义抢文件**）；
+     · **今天的实战曲线**已经很直白：**"照抄级补丁"单 = 1 轮 2 分钟变绿（`3b2c`、`3b3b`）**，**巨型/含过期事实的单 = 3~4 轮零产出（`3b2` 前三轮、`2e` 两轮）**；
+     · 处理：① 三处过期事实已当场改掉（并加了 `ing` 无 DELETE ⇒ 测试必须单事务回滚那条）；
+       ② **本单拆成两单重派（下一轮队长做）**：`2e-A` 只新建 `jc_issue_write.py`（B/C/D 节 + 自己的单测，**不接装载器**）
+       → `2e-B` 只做 `jc_topic.py` 的 `ISSUE_TOPICS` 分支（**照抄级：≤6 行**）+ 真包 T2 落库与全部 `select` 判据；
+       ③ 拆完再谈 `STORE2`（篮彩两表：`fact` 里现在**连 `*lq*` 表都没有**，DDL 是队长的活，先建表才能谈写手）。

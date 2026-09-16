@@ -11,7 +11,7 @@
 【项目】league-v2（§2-D7 ≤100 行/文件、≤50 行/函数、≤120 列 硬红线；§9：报告用锚点、禁 git、禁 print）
 【这一单做什么】把**传统足彩五表**从"解析器已就绪、装载器 skip"接成"能落库"。解析器 `store/parse_jcissue.py`(41)/`store/parse_misc.py`(33) **已验收，本单只读不改**；
  缺的只有**写层 + 接线**。队长 00:20Z 用 5 批真包**重新逐表推导过 oracle**（数字与本单旧版一致，但推导过程现在写全了，见 D 节）。
-【🅣 只准读这 5 个文件】`scripts/ingest/jc_load.py`(87) · `scripts/ingest/jc_write.py`(100，**只为抄 `_upsert` 调用姿势**) ·
+【🅣 只准读这 5 个文件】`scripts/ingest/jc_topic.py`(48) 与 `scripts/ingest/jc_load.py`(62) · `scripts/ingest/jc_write.py`(100，**只为抄 `_upsert` 调用姿势**) ·
  `scripts/store/parse_collector.py`(78) · `scripts/store/parse_jcissue.py`(41) · `scripts/store/parse_misc.py`(33)。第 1 分钟就 write/edit。
 
 【A. 解析器返回的**已经是写指令**（照抄，别猜）】`parse_line(env)` 对这三个 topic 返回
@@ -82,7 +82,7 @@ JSONB_COLS = {"fact.jc_issue": ("draw_num_list","raw_head"),
    ⇒ ① 这一张表仍是幂等最强测试（120 键进 120 行出，不许变 240）；② 但**必须允许覆盖更新**（`gates=None` 已写死，别加防回退）；
      ③ 任何依赖它们的分析都要能从 `last_seen_at` 看出"这行是最后一次被改于何时"。
 
-【E. 接线：`scripts/ingest/jc_load.py`】
+【E. 接线：`scripts/ingest/jc_topic.py` 的 `load_topic()`（**JCSPLIT 之后接线点在这里，不在 jc_load.py**）】
  ⚠️ **行数预算先现测**（队长 09:50 提醒自己的错：这句里写死的"87 行"是 **2q 之前**的数，2q 会往这个文件加 orphan 分派 ⇒ 你现在看到的大概是 **93 行左右**）：
    `wc -l scripts/ingest/jc_load.py` 贴出实测值，**最终必须 ≤100 行**。为了保住预算，**接线只许加三行**：
    `jc_issue_write.py` 里再公开**一个**入口 `def write_issue_topic(cur, topic, env, snap, src) -> int`（内部按 B 节三种情况分派），
@@ -123,8 +123,8 @@ JSONB_COLS = {"fact.jc_issue": ("draw_num_list","raw_head"),
     顺带贴一条 `select count(*) from fact.lottery_draw`（**必须仍是 120**，不许变 240）。
 T8 `python3 ~/bin/omp-ast-check.py scripts/ingest/jc_issue_write.py scripts/ingest/jc_load.py scripts/ingest/jc_write.py scripts/store/parse_jcissue.py scripts/store/parse_misc.py` → **0 违规**
  T9 `python3 ~/bin/jc-cols-check.py scripts/ingest/jc_issue_write.py` → 全 ✔；再跑 `python3 ~/bin/jc-cols-check.py scripts/ingest/jc_write.py` → **仍全 ✔**（证明没碰坏老文件）
- T10 `PYTHONPATH=scripts python -m pytest tests -q` → **428 passed / 0 failed**
-【铁律】① 禁 git；② 禁 print；③ ≤100 行/文件、函数 ≤50 行、列 ≤120；④ **只准新建 `jc_issue_write.py` + 改 `jc_load.py`**；
+ T10 `PYTHONPATH=.:scripts python -m pytest tests -q` → **0 failed**，passed 数以开工 T0 自测为准（今天 15:56 基线 = **441**；见 §9-75：不许抄死数字）
+【铁律】① 禁 git；② 禁 print；③ ≤100 行/文件、函数 ≤50 行、列 ≤120；④ **只准新建 `jc_issue_write.py` + 改 `jc_topic.py`**（`jc_load.py` 也不许动：3b3b 刚把 OPTIONAL 语义落在里面）；
  解析器三文件与 `jc_write.py` **只读**；⑤ 禁改 DDL/`tests/**`/`web/**`/`static/**`、禁真联网、禁 `truncate`/`delete`；
  ⑥ 报告 `.omp-logs/P0-COLLECT2e.report.txt`（T1~T10 原始输出 + "哪几处我很想顺手改但没改"）+ 全绿才 `echo TASK_DONE > .omp-logs/P0-COLLECT2e.done`
 【边界】D 节任何一格数不对：贴**原始 count 输出**+点名函数/行，**停下**；**绝对禁止**为凑数造 prize 行、把孤儿子行悄悄丢掉不记 `notes`、或改解析层。
