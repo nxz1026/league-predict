@@ -24,6 +24,7 @@ except Exception:  # AI 扩展模块损坏不得拖垮 app 启动（WO-M3 验收
     ai_router = None
 from web.routers.jobs import router as jobs_router
 from web.routers.jc import router as jc_router
+from web.routers.jc_ops import router as jc_ops_router
 from web.routers.predictions import router as predictions_router
 from web.routers.sources import router as sources_router
 from web.lifecycle import lifespan
@@ -66,6 +67,7 @@ def create_app() -> FastAPI:
     app.include_router(sources_router)
     app.include_router(jobs_router)
     app.include_router(jc_router)
+    app.include_router(jc_ops_router)
     if ai_router is not None:
         app.include_router(ai_router)
     return app

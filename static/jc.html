@@ -25,6 +25,10 @@
   <section id="s-fix"><h2>场次 × 盘口</h2><p class="note" id="n-fix"></p><div id="t-fix"></div></section>
   <section id="s-bt"><h2>基线指标</h2><p class="note" id="n-bt"></p><div id="t-bt"></div></section>
   <section id="s-is"><h2>期次</h2><p class="note" id="n-is"></p><div id="t-is"></div></section>
+  <section id="s-team"><h2>球队对照</h2><p class="note" id="n-team"></p><div id="t-team"></div></section>
+  <section id="s-topic"><h2>入库健康</h2><p class="note" id="n-topic"></p><div id="t-topic"></div></section>
+  <section id="s-quota"><h2>数据源配额</h2><p class="note" id="n-quota"></p><div id="t-quota"></div></section>
+  <section id="s-rej"><h2>近 24h 拒行</h2><p class="note" id="n-rej"></p><div id="t-rej"></div></section>
 </main>
 <script>
 (function () {
@@ -33,6 +37,11 @@
   var BT_COLS = ["play_type","n_fp","brier","brier_uniform","acc","clv_filled"];
   var IS_COLS = ["game_num","issue_no","game_name","sale_begin","sale_end","draw_at",
                  "n_matches","head_source","draw_result","is_delay"];
+  // P0-DASH2c：入库与对照四段（口径见 scripts/store/jc_ops_view.py 头部）
+  var TEAM_COLS = ["league","n_matches","n_days","n_aligned","n_af_ready"];
+  var TOPIC_COLS = ["topic","n_files","n_rows","n_marked","n_orphan","min_since_latest","latest_arrival"];
+  var QUOTA_COLS = ["source","used","cap","remaining"];
+  var REJ_COLS = ["topic","n_runs","n_failed","n_files_reject","n_reject_rows"];
 
   function esc(v) {
     return String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -40,7 +49,19 @@
 
   function cell(v) {
     if (v === null || v === undefined) return "-";
-    return esc(typeof v === "object" ? JSON.stringify(v) : String(v));
+    if (typeof v === "object") return esc(JSON.stringify(v));
+    var s = String(v);
+    // 时间戳统一转北京时间显示（库内一律 UTC）
+    if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(s)) {
+      var d = new Date(s);
+      if (!isNaN(d.getTime())) {
+        var o = new Date(d.getTime() + 8 * 3600 * 1000);
+        var p = function (n) { return String(n).padStart(2, "0"); };
+        return esc(o.getUTCFullYear() + "-" + p(o.getUTCMonth() + 1) + "-" + p(o.getUTCDate()) +
+                   " " + p(o.getUTCHours()) + ":" + p(o.getUTCMinutes()) + " 北京");
+      }
+    }
+    return esc(s);
   }
 
   function table(cols, rows) {
@@ -58,15 +79,28 @@
     box.innerHTML = table(cols, data.rows);
   }
 
+  var NOTES = {
+    team: "按联赛聚合全部待售比赛日（不只最新一天）：已对齐=两队都解析到 ref.team；可预测=再都带 AF 历史。差值即缺 af_id——AF 免费档只到 2024 赛季，降级队无历史属预期。",
+    topic: "ops.file_arrival 按话题：无主通道（done_marker=false）是 loader 每次 run 无条件全量重扫的产物，不是事故。jc_odds_history 只随 8-topic 批次进（每天 4 档），其余 7 个话题每 10 分钟。",
+    quota: "ops.quota_ledger 当日各源配额余量；空 = 当日未发请求（非降级）。",
+    rej: "只认 rejected jsonb 非空与 ok=false。空表 = 近 24h 零拒绝零失败。不要用 rows_in-rows_ups 判：重放未变更与按设计跳过都会让它变正。"
+  };
+
+  var COLS_BY_KEY = { team: TEAM_COLS, topic: TOPIC_COLS, quota: QUOTA_COLS, rej: REJ_COLS };
+  var OPS_KEYS = ["team", "topic", "quota", "rej"];
+
   function showAuthOnly() {
-    ["s-fix", "s-bt", "s-is"].forEach(function (id) { document.getElementById(id).style.display = "none"; });
+    ["s-fix", "s-bt", "s-is", "s-team", "s-topic", "s-quota", "s-rej"].forEach(function (id) {
+      document.getElementById(id).style.display = "none";
+    });
     document.getElementById("auth").style.display = "";
   }
 
   Promise.all([
     fetch("/api/jc/fixtures", { credentials: "same-origin" }),
     fetch("/api/jc/backtest", { credentials: "same-origin" }),
-    fetch("/api/jc/issues?limit=20", { credentials: "same-origin" })
+    fetch("/api/jc/issues?limit=20", { credentials: "same-origin" }),
+    fetch("/api/jc/ops", { credentials: "same-origin" })
   ]).then(function (rs) {
     if (rs.some(function (r) { return r.status === 401 || r.status === 403; })) { showAuthOnly(); return; }
     return Promise.all(rs.map(function (r) { return r.json(); }))
@@ -74,6 +108,12 @@
         render("fix", ds[0], FIX_COLS);
         render("bt", ds[1], BT_COLS);
         render("is", ds[2], IS_COLS);
+        var ops = ds[3] || { rows: {} };
+        OPS_KEYS.forEach(function (k) {
+          var body = { rows: (ops.rows || {})[k] || [], sql_note: NOTES[k] };
+          if (!ops.ok || ops.ok[k] === false) body.sql_note += " ⚠ 该段降级（store 异常，非业务空）";
+          render(k, body, COLS_BY_KEY[k]);
+        });
       });
   }).catch(function () { showAuthOnly(); });
 })();

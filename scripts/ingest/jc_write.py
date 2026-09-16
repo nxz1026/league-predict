@@ -37,7 +37,7 @@ def _team(cur, home_sporttery_id: int | None, away_sporttery_id: int | None) -> 
         return (None, None)
     rows = cur.execute(
             "SELECT (aliases->>'sporttery') AS jc, team_id FROM ref.team "
-            "WHERE (aliases->>'sporttery') = ANY(%s)", [str(i) for i in ids]).fetchall()
+            "WHERE (aliases->>'sporttery') = ANY(%s)", ([str(i) for i in ids],)).fetchall()
     by_jc = {row[0]: row[1] for row in rows}
     return (by_jc.get(str(home_sporttery_id)), by_jc.get(str(away_sporttery_id)))
 

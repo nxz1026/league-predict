@@ -13,6 +13,7 @@ T5 免 psycopg 环境）。web 启动带 PYTHONPATH=.（无 scripts/），故模
 from __future__ import annotations
 
 import sys
+from datetime import date
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -39,7 +40,12 @@ def _envelope(kind: str, rows: list) -> dict:
 
 @router.get("/fixtures")
 def fixtures(day: str | None = None, _: None = Depends(require_auth)) -> dict:
-    """场次 × 玩法盘口；day 原样透传（非法日期 store 层自行降级为 []）。"""
+    """场次 × 玩法盘口；day 非法直接 400（DASH2-D：脏参数不穿到 store 层，不静默降级成空表）。"""
+    if day is not None:
+        try:
+            date.fromisoformat(day)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="day must be an ISO date like 2026-09-16")
     from store import jc_view
     return _envelope("fixtures", jc_view.fixtures_on(day))
 
