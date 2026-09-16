@@ -37,9 +37,11 @@
     `… "select count(*) from ops.file_arrival where done_marker=false and src_file not like '%#MISSING%'"` ⇒ **必须 = T1 的 n**
     `… "select src_file, rows from ops.file_arrival where done_marker=false and src_file not like '%#MISSING%' order by 1 limit 6"`
     `… "select count(*) from ops.file_arrival where src_file like '%#MISSING%'"` ⇒ **必须仍 = 14**（孤儿一条 gap 都不许造）
- T3 **幂等**（这条是本单真正的验收刀）：**再跑一次** T1 ⇒ `orphan 装载 n=**0**`
+ T3 **幂等 = 行数不许增长**（队长 §9-71 已更正判据：孤儿**每次都会重新捞**，第二趟 `n=14` 是正常态、不是 bug）：
+    **再跑一次** T1 ⇒ `orphan 装载 n` **仍是 14**，但 `select count(*) from ops.file_arrival` 与 `fact.jc_offer / jc_match / jc_result` 三个计数
+    **与第一趟跑完一字不差**（都走 upsert ⇒ 不新增行）
     且 `fact.jc_offer` / `fact.jc_match` / `fact.jc_result` 三个计数**与第一次跑完完全相同**（孤儿已被 `seen` 通过窗口/清单认领，不会反复捞）
-    ⚠️ 若第二次 `n>0` ⇒ 说明 `seen` 没覆盖到它们（例如这些文件其实**每次都无主**）⇒ **停下贴两次的 n**，那属于契约问题（文件永远不会有 marker），别自己加去重表。
+    （原判据「第二次 n=0」**作废**，见 §9-71：孤儿本来每次都会重新捞；只要求**不新增行**，**不许加去重表**。）
  T4 **夹具没坏**：`PYTHONPATH=scripts python scripts/ingest/jc_load.py --dir /tmp/incoming` → `ups=15`、`--dir /tmp/incoming2` → `ups=40`、
     `errors=[]`，且**这两趟都不许出现 `orphan 装载 n>0`**（夹具目录里没有无主文件）。
  T5 **造一个孤儿**（只准 `/tmp/c5`）：一份合法 marker（清单列 `jczq_offer/x.jsonl` + 真实行数）并真放那个文件；
