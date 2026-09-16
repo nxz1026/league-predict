@@ -1,5 +1,7 @@
 -- ============================================================================
--- ⚠️⚠️ 未批准草案，别执行（D3：球队对照/扩池必须人工点头）。
+-- ✅ 已执行：2026-09-17 19:2x，用户批复原话「执行」⇒ 单个事务 BEGIN…COMMIT 原子落地（15 UPDATE + 6 INSERT + 回填 UPDATE 10）。
+--    回执：西甲 0/9 → 9/9、ref.team 122→128、sporttery 键=21、jc_id 非空=21、序列 120505→120511。
+--    2026-09-17 19:3x 补幂等：6 条 INSERT 原先没有守卫（重跑会被 partial unique (sport,jc_id) 打断），现已改 not exists ⇒ 整份脚本可反复执行。
 -- 生成：队长 2026-09-17 17:35。批复依据 = 用户 17:3x 原话「池子开始可以大，后面可以收缩」
 --        ⇒ 已选定 **方案 A**（按封闭清单把池子补大，后续再收缩），见
 --        `docs/project/待审-竞彩球队对照.md` 的 A/B/C 三选一。
@@ -13,7 +15,7 @@
 --   · `partial unique (sport, jc_id)` ⇒ 同一官方 id 塞进两队会被索引直接拒绝（天然防撞）；
 --   · `team_id` 是 **identity GENERATED ALWAYS**（序列 `ref.team_team_id_seq`）；表内 min=57 / max=10119，
 --     但**序列 last_value 已是 120311**（历史上被推进过、值未回写）⇒ 新增行**不指定 team_id，交给 identity 自动分配**
---     （预计 120312~120317）。我 17:38 试过手填 `10120`，报
+--     （实际执行时取到 120506~120511，序列 120505→120511 恰好 +6）。我 17:38 试过手填 `10120`，报
 --     `cannot insert a non-DEFAULT value into column "team_id"`（GENERATED ALWAYS 必须 OVERRIDING SYSTEM VALUE）；
 --     而强行 OVERRIDING 再 setval 会把序列往回拨，风险更大 ⇒ **让序列自增，最省事也最不会撞号**。
 -- ============================================================================
@@ -47,16 +49,16 @@ update ref.team set aliases = jsonb_set(coalesce(aliases,'{}'::jsonb), '{sportte
 update ref.team set aliases = jsonb_set(coalesce(aliases,'{}'::jsonb), '{sporttery}', '"19"') where team_id = 65 and not (coalesce(aliases,'{}'::jsonb) ? 'sporttery');  -- 热刺
 update ref.team set aliases = jsonb_set(coalesce(aliases,'{}'::jsonb), '{sporttery}', '"1"')  where team_id = 58 and not (coalesce(aliases,'{}'::jsonb) ? 'sporttery');  -- 阿森纳
 
--- ---------------------------------------------------------------- 3) 缺池 6 支：INSERT 新队（team_id 交给 identity）
+-- ---------------------------------------------------------------- 3) 缺池 6 支：INSERT 新队（team_id 交给 identity；带 not exists 守卫 ⇒ 可反复执行）
 --    名字**逐字取自** `fact.jc_match.home_cn`（竞彩官方全名），不是猜的；abbr 取自 `away_abbr/home_abbr`。
 --    ⚠️ `af_id` 一律留 NULL（见文件末"缺口"说明）——没有 AF id 就没有历史比赛可供训练，
 --      这 6 支队参与的场次**对齐得上、但预测只有联赛先验**，不能当"已经能预测"。
-insert into ref.team (sport, name_cn, aliases) values ('football','阿拉维斯',  '{"sporttery":"171"}');
-insert into ref.team (sport, name_cn, aliases) values ('football','马德里竞技','{"sporttery":"172"}');
-insert into ref.team (sport, name_cn, aliases) values ('football','莱万特',    '{"sporttery":"33"}');
-insert into ref.team (sport, name_cn, aliases) values ('football','拉科鲁尼亚','{"sporttery":"509"}');
-insert into ref.team (sport, name_cn, aliases) values ('football','马拉加',    '{"sporttery":"512"}');
-insert into ref.team (sport, name_cn, aliases) values ('football','桑坦德竞技','{"sporttery":"676"}');
+insert into ref.team (sport, name_cn, aliases) select 'football','阿拉维斯', '{"sporttery":"171"}' where not exists (select 1 from ref.team where sport='football' and aliases ? 'sporttery' and (aliases->>'sporttery')='171');
+insert into ref.team (sport, name_cn, aliases) select 'football','马德里竞技', '{"sporttery":"172"}' where not exists (select 1 from ref.team where sport='football' and aliases ? 'sporttery' and (aliases->>'sporttery')='172');
+insert into ref.team (sport, name_cn, aliases) select 'football','莱万特', '{"sporttery":"33"}' where not exists (select 1 from ref.team where sport='football' and aliases ? 'sporttery' and (aliases->>'sporttery')='33');
+insert into ref.team (sport, name_cn, aliases) select 'football','拉科鲁尼亚', '{"sporttery":"509"}' where not exists (select 1 from ref.team where sport='football' and aliases ? 'sporttery' and (aliases->>'sporttery')='509');
+insert into ref.team (sport, name_cn, aliases) select 'football','马拉加', '{"sporttery":"512"}' where not exists (select 1 from ref.team where sport='football' and aliases ? 'sporttery' and (aliases->>'sporttery')='512');
+insert into ref.team (sport, name_cn, aliases) select 'football','桑坦德竞技', '{"sporttery":"676"}' where not exists (select 1 from ref.team where sport='football' and aliases ? 'sporttery' and (aliases->>'sporttery')='676');
 
 -- ---------------------------------------------------------------- 4) 回填已入库的 36 场（生成列不会替你回填历史行）
 --    幂等：`where ... is null` 只补空的；对不上的（清单外/缺池）留 NULL —— 那部分本来就不预测。
