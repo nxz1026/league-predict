@@ -628,3 +628,6 @@ setsid bash ~/omp-resilient3.sh SMOKE1 /home/ubuntu/omp-smoke 300 1 ~/tickets/SM
        测试必须**先证明"关掉容错能插 1 行"**，再证明"开着容错坏行只损失它自己"，两步缺一就是给未来留哑火；
      · 工单模板增补一条（以后凡涉 DB 写手）：**"连接生命周期"必须写死 —— 一个 conn、断言全在 close 之前、
        rollback 前/后查数不许混用**；我这次就是只写了 `with closing(pg.connect("ing"))` 一句话，太薄。
+80. **psycopg3 事实（今天踩实）**：`Connection.transaction()` **没有** `savepoint=` 关键字（只收 `force/readonly/deferrable/isolated`）
+     ⇒ 要"每行一个保存点"就**写裸 SQL**：`cur.execute("savepoint rh")` → 成功 `release savepoint rh` / 失败 `rollback to savepoint rh`；
+     嵌套 `with conn.transaction():` 虽然会自动开保存点，但**在循环里逐行开 `with` 会把函数撑爆 50 行**（D7），所以裸 SQL 是本仓库的既定写法。
