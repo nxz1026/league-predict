@@ -26,13 +26,13 @@
 【C. 不许做】改 `jc_read.py`（97 行，刚验收）；改 `jc_write.py` / DDL / 夹具 / 任何解析器；**删或改库里任何一行**（gap 与 arrival 都不许删，那是队长的活）；
  往 `/srv/league-staging/**` 写/改名/删（**只读**，本单不许在那儿造文件）；禁 git；禁 print；演练一律 `/tmp/…`。
 【T. 必须成立（按序跑，原始输出全进报告）】
- T0 **先量基线**（改之前跑，贴原始输出）：`bash ~/bin/jc-ingest-run.sh` 之后的三条计数 +
+ T0 **基线（队长 11:49 已量，照抄，别自己再跑）**：`gaps=14`、`fact.jc_offer=1440`、`fact.jc_match=36`、`fact.jc_result=24`、**orphan 权威数 = 14**。
     `sudo -n -u postgres psql -d league -Atc "select count(*) from ops.file_arrival where src_file like '%#MISSING%'"`
     ⇒ 队长 11:31 实测 **gaps=14**（真缺档，含 6 条来自"残清单"批 `03-15-24Z`）；`fact.jc_offer=1440`、`jc_match=36`、`jc_result=24`。
  T1 **实时目录**：`bash ~/bin/jc-ingest-run.sh` ⇒ `rc=0`、每批 `errors=[]`、**出现一条** `orphan 装载 n=?`
-    ⚠️ **`n` 不许你猜**：我 11:38 用"文件名前 16 字 vs marker 前 16 字"粗算出 35 个"无主"，但那**不是权威口径**
-      （早期批次 `.done` 的**上传时刻**与文件的**采集分钟**不同，窗口分支会认领掉一部分）⇒ **以你的实际输出为准**，
-      报告里必须贴 `n` 的值 + 文件名（前 5 个）+ 下面 T2 三条 SQL 的原始结果。
+    ⇒ **`n` 队长 11:49 已用真代码量死 = 14**（`jsonl` 共 159、清单/窗口认领 145；无主分布在 `22-48 / 22-49 / 22-51 / 22-54`
+      四个采集分钟，这四分钟**根本没有 marker**；topic 分布 `jczq_offer 3 / jc_issue 3 / jc_issue_result 3 / lottery_draw 3 / jclq_result 2`）
+      ⇒ 你的日志里 `orphan 装载 n=` **必须是 14**；不是 14 就**停下贴你的 n 与文件名**（别改判据）。报告要贴：`n`、前 5 个文件名、T2 三条 SQL 原始输出。
  T2 **孤儿落账正确**（三条都要贴）：
     `… "select count(*) from ops.file_arrival where done_marker=false and src_file not like '%#MISSING%'"` ⇒ **必须 = T1 的 n**
     `… "select src_file, rows from ops.file_arrival where done_marker=false and src_file not like '%#MISSING%' order by 1 limit 6"`

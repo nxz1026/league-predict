@@ -74,3 +74,9 @@ select
 【验收（队长逐字复跑）】
   bash ~/bin/dash-verify.sh 8078
   LEAGUE_FROZEN_RE="scripts/core/|scripts/ingest/" bash ~/bin/league-accept.sh P0-DASH2 scripts/store web/routers web/lifecycle.py static
+
+【★ 队长 11:52 实测新增两条（`DASH_REUSE=1 bash ~/bin/dash-verify.sh` 打的是**给用户看的常驻实例**）】
+ · **真 bug 要顺手修**：`/api/jc/fixtures?day=garbage` 现在返回 **200**（其它脏参数 `limit=9999/0/abc` 都是 400 ✔）
+   ⇒ 本单必须让 **`day=` 的非日期值也 400**（照 `limit` 那条已有的校验写，别只修一个端点：三个端点口径要一致）。
+ · 现状数字（写进报告，别改）：`fixtures` 50 行 / 10 场 / 全部 `snap_ts=2026-09-16T03:15:22Z`；`backtest` 4 行
+   （had：n_fp 3504、brier 0.6270 vs 均匀 0.6667、acc 0.4772、**clv_filled=0**）；`issues` **0 行**（2e 未落地，属正常）。
