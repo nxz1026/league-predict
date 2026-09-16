@@ -19,7 +19,10 @@ python collector.py --push             # 旧路径：打包 out/ → scp+sudo �
 python collector.py --push-batch <topic>...   # v1.2 批量推送（B1 全 7 topic + B2 .done 最后 + G(A) 清单）
 ```
 
-批量脚本：`scripts/collect_batch.bat offer|night`（4 daily 档 09:30/15:30/21:30/23:30 + 10 分钟档 offer 均调它）。
+批量脚本：`scripts/collect_batch.bat offer|night`；计划任务走 `wscript+scripts/collector_silent.vbs [offer|night]`（无窗口）。
+- `offer`（默认）= 7 快 topic（jczq_offer jclq_offer jczq_result jclq_result jc_issue jc_issue_result lottery_draw），`collector_offer_10m` 专用
+- `night` = 8 topic（offer 7 + jc_odds_history），4 个 daily 档（09:30/15:30/21:30/23:30）专用
+- `jc_odds_history` 单批 ~60-75s（27 场在售 QPS=1.0），从 10m 快批挪到 daily，防网络挂起时 10m 档堆积僵尸 python（2026-09-16 死机复盘）
 
 ## 契约 v1.2（远端 2026-09-15 升级：新增 fetched_at 键 + 7 topic 完整推送 + .done 清单）
 
@@ -32,10 +35,10 @@ python collector.py --push-batch <topic>...   # v1.2 批量推送（B1 全 7 top
 - 身份键：offer/result = `matchId`；issue/lottery = `(lotteryGameNum, lotteryDrawNum)`
 - `jczq_offer`/`jclq_offer`：一行 = 一场 × 一个玩法（had/hhad/crs/ttg/hafu），`options` 整块 + `oddsHistory` 原样
 - `jclq_offer`/`jclq_result` 已冻结（v1.2 解除 "unverified-shape" 标记）：篮球 = NBA/CBA（老板 06:35 决定），`jclq_result` 窗口 = 近 7 日（`{today_minus_7}`~`{today}`）；`jclq_offer` 行粒度 = 一场 × 一个玩法（同 §5.1 足球），玩法 `mnl/hdc/hilo/wnm`
-- 采集节奏（v1.2）：
-  - **offer 10 分钟档**：`jczq_offer`+`jclq_offer` 每 10 分钟快照（`collector_offer_10m`），批次含 7 topic 齐全（B1）
-  - **4 daily 档**：09:30/15:30/21:30 = offer 快照 + 全 7 topic；23:30 = 开奖结果（result/issue/lottery）+ 全 7 topic
-  - 每批 = **全部 7 topic 必齐全**（.jsonl 或 .empty，缺一个 = 批次缺陷，B1）
+- 采集节奏（v1.3）：
+  - **offer 10 分钟档**：`jczq_offer`+`jclq_offer` 每 10 分钟快照（`collector_offer_10m`），批次含 7 topic 齐全（B1，**不含** `jc_odds_history`，防 10m 档堆积）
+  - **4 daily 档**：09:30/15:30/21:30/23:30 = 全 8 topic（含 `jc_odds_history`）；对应 `collector_silent.vbs night`
+  - 每批 = **该档 topic 全部齐全**（.jsonl 或 .empty，缺一个 = 批次缺陷，B1）
 - **B2 原子推送**：tar 解到 `.staging/` → 逐文件 `mv` 到 topic 目录 → 最后 `install` `.done`（`.done` 是批次最后一步）
 - **G(A) `.done` 清单**：`.done` 文件内含 manifest，每行 `<topic>/<file>\t<rowcount>\t<sha256-of-row-bytes>`；**相对路径必须带 `topic/` 前缀**（2026-09-16 修复：前缀缺失导致远端 312 个文件"无主"、每批 440 条回退告警）；`.empty` 行数为 0、聚合列空。远端以清单为准（不再用文件名窗口匹配）
 - **`__002` 分片**：10 分钟档同分钟重跑/重试可能追加 `__002`，清单是唯一正确映射（旧文件名窗口匹配已死）
