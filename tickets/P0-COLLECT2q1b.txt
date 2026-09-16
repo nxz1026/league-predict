@@ -1,0 +1,55 @@
+【项目】league-v2（§2-D7 ≤100 行/文件、≤50 行/函数、≤120 列 硬红线；§9：报告用锚点、禁 git、禁 print）
+【这一单只做一件事，**改 3 个函数、净增 ≤14 行**】`.done` 清单丢了 `topic/` 前缀 ⇒ 按目录消歧把数据认回来。
+【🅣 只准改 1 个文件】`scripts/ingest/jc_read.py`（现 **83 行**，改完 **≤100**）。
+【⚠️ 顺序死命令（队长 09:58 定的，这是前两次 attempt 零写入的根因）】
+ **第 1 个动作必须是 edit `jc_read.py`**；**改完之前一行测试都不许跑**（不许"先量基线"——基线队长全量过并贴在下面，你复跑只会烧掉自己的时间窗）；
+ 改完再按 E1→E8 顺序跑，一次一个命令，把原始输出抄进报告。
+【只碰这三个函数】`_manifest` / 新增 `_resolve` / `_from_manifest`。**其它函数（含 `_window`、`_check_entry`、`files_for_batch`、`read_lines`）一个字都不改。**
+
+【A. 现场事实（照抄，别去查、别去验）】
+ · 对方从 `2026-09-16T01-13-20Z` 批起把 `.done` 第一列写成 **`2026-09-16T01-13Z__001.jsonl`**（**少了 `jczq_offer/` 这样的目录前缀**）；
+   之前是 `jczq_offer/2026-09-16T01-13Z__001.jsonl`。截至队长 09:30 坏了 4 批（01-13 / 01-23 / 01-30 / 01-33）。
+ · 真文件都在盘上、行数与清单声明**逐一吻合**（队长 09:44 实测四批都是）：
+   `jczq_offer 40 · jczq_result 9 · jclq_result 23 · jc_issue 4 · jc_issue_result 3 · lottery_draw 120 · jclq_offer = .empty(0)`
+   ⇒ 同一分钟戳文件名在 7 个 topic 目录各有一份、**行数互不相同** ⇒ "存在 + 行数吻合"必然**唯一命中**（这就是敢消歧的依据）。
+ · 现状后果：这 4 批全部 `rejected`、`ups=0`，`fact.jc_offer.max(snap_ts)` 停在 `2026-09-16 01:03:02+00`。
+ · 队长基线（**你不需要重跑**）：`--dir /tmp/incoming` → `ups=85/85/15`；`--dir /tmp/incoming2` → `40/40`；`pytest` → **428 passed**。
+ · `.done` 行尾是 **CRLF** ⇒ 取字段一律 `.strip()`；第三列 hash **本单不校验**。
+【B. 规则（两步，**不要第三条**）】
+ 1) `_manifest()`：`rel` 含 `/` ⇒ 现状不变；`rel` 不含 `/` ⇒ **不要**拿首段当 topic（那是今天的 bug），
+    放进 `out.setdefault("", []).append((rel, decl))`。
+ 2) `_from_manifest(root, marker, topics)`：处理完带前缀的行之后，遍历 `out.get("", [])`，每条调新函数
+```python
+def _resolve(root: Path, topics: tuple[str, ...], rel: str, decl: int) -> tuple[str, Path] | None:
+    """清单丢了目录前缀时消歧：唯一"存在且行数吻合"的 topic 才算命中，否则 None（不许猜）。"""
+    hits = [(t, root / t / rel) for t in topics
+            if (root / t / rel).is_file() and _count_lines(root / t / rel) == decl]
+    if len(hits) != 1:
+        logger.warning("manifest-无法消歧 rel=%s 声明=%d 命中=%d", rel, decl, len(hits))
+        return None
+    logger.warning("manifest-无目录前缀 topic=%s 文件=%s（按目录消歧）", hits[0][0], rel)
+    return hits[0]
+```
+    命中 ⇒ 按现状把 `(path, state)` 并入该 topic（`.empty` 结尾自然得 `"empty"`）；未命中 ⇒ **什么都不加**
+    （**不要**为它记 `missing`、**不要**造 orphan、**不要**改 `files_for_batch` 的返回结构）。
+【C. 不许做】改 `jc_load.py` / `jc_write.py` / DDL / 夹具；做 orphan 或改 gap 语义；删/改库里任何一行（**队长已把 28 条假 gap 清掉了，你别碰库**）；
+ 往 `/srv/league-staging/**` 写/改名/删（**只读**）；禁 git；禁 print；演练一律在 `/tmp/…`。
+【E. 必须成立（按顺序跑；每个命令的原始输出都抄进报告）】
+ E1 `python3 ~/bin/omp-ast-check.py scripts/ingest/jc_read.py` → **0 违规**；`wc -l scripts/ingest/jc_read.py` → **≤100（贴实际数）**
+ E2 `PYTHONPATH=scripts python scripts/ingest/jc_load.py --dir /tmp/incoming` → `ups=85 / 85 / 15`、每批 `errors=[]`（老三批走窗口，必须没受影响）
+ E3 `PYTHONPATH=scripts python scripts/ingest/jc_load.py --dir /tmp/incoming2` → `40 / 40`、`errors=[]`（2o 的清单路径没被改坏）
+ E4 **本单的存在理由**：`PYTHONPATH=scripts python scripts/ingest/jc_load.py --dir /srv/league-staging/incoming/cn-collector`
+    → `01-13-20Z / 01-23-18Z / 01-30-20Z / 01-33-18Z` 四行**必须 `ups=49`**（40 盘口 + 9 赛果；篮彩与传统足彩三 topic 走 `skip` 行）；
+    日志里 `manifest-无目录前缀` 出现 **≥ 28 次**（4 批 × 7 条，贴前 8 条原文）
+ E5 `sudo -n -u postgres psql -d league -Atc "select max(snap_ts) from fact.jc_offer"` → **>= `2026-09-16 01:33:02+00`**；
+    并贴 `select count(*) from fact.jc_offer`（跑前队长值是 **690**，跑后只许 ≥）
+ E6 `select count(*) from ops.file_arrival where src_file like '%#MISSING%'` → **改后 ≤ 改前**（改前队长实测 **8**；消歧成功的批不该再产 gap）
+ E7 `python3 ~/bin/jc-fk-audit.py fact` → exit=0
+ E8 `source ~/.venvs/league/bin/activate && PYTHONPATH=scripts python -m pytest tests -q` → **428 passed / 0 failed**
+【铁律】① 禁 git；② 禁 print；③ ≤100/≤50/≤120；④ 只改 `jc_read.py`；
+ ⑤ 报告 `.omp-logs/P0-COLLECT2q1b.report.txt`（E1~E8 原始命令 + 原始输出 + 实际行数）+ 全绿才 `echo TASK_DONE > .omp-logs/P0-COLLECT2q1b.done`
+【边界】E4 的 `ups` 不是 49 ⇒ 贴那四行原始日志停下（**别为了让它变 49 去改 `_check_entry`**）；
+ `jc_read.py` 超 100 行 ⇒ 贴 `wc -l` 停下，我来决定挪谁；E2/E3 与基线不符 ⇒ 停下报"我改坏了窗口分支"。
+【验收（队长逐字复跑）】
+  bash ~/bin/jc-ingest-run.sh
+  LEAGUE_FROZEN_RE="scripts/core/|scripts/ingest/jc_(load|write)\.py" bash ~/bin/league-accept.sh P0-COLLECT2q1b scripts/ingest/jc_read.py

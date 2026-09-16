@@ -49,9 +49,10 @@ select
 
 【E. 必须成立（数字口径 2026-09-17 09:00 由队长实测；带 `≥` 的是实时增长的量，别去钉死精确值）】
  E1 `python3 ~/bin/omp-ast-check.py scripts/store/jc_view.py web/routers/jc.py web/lifecycle.py static/jc.html static/jc.js` → **0 违规**
- E2 `python3 ~/bin/jc-move-check.py /tmp/web_api.presplit.py web/api.py web/lifecycle.py --allow-add "include_router"` 形式：
-    `LEAGUE_ALLOW_ADD="include_router\(jc_router\)|import jc_router|from web\.routers\.jc|_SCRIPTS_DIR|sys\.path" python3 ~/bin/jc-move-check.py /tmp/web_api.presplit.py web/api.py web/lifecycle.py`
-    → **exit=0**（证明 ③ 是纯收敛、没往 `create_app`/`lifespan` 里塞业务）
+ E2 **白名单只走环境变量**（`--allow-add` 这种位置参数写法会被当成文件，别用）：
+    `LEAGUE_ALLOW_ADD="include_router\(jc_router\)|import jc_router|from web\.routers\.jc|_SCRIPTS_DIR|sys\.path|REPO_ROOT" python3 ~/bin/jc-move-check.py /tmp/web_api.presplit.py web/api.py web/lifecycle.py`
+    → **exit=0**（证明 ③ 是纯收敛、没往 `create_app`/`lifespan` 里塞业务）；
+    ⚠️ **反证也要贴**：把 `LEAGUE_ALLOW_ADD=` 设成空再跑一次 ⇒ **必须 FAIL**（否则说明这工具根本没在守卫）
  E3 **真起服务**（不许用 pytest 代替）：`PYTHONPATH=. nohup python -m uvicorn web.api:app --host 127.0.0.1 --port 8078 &`
     （⚠️ 这次**不要**带 `PYTHONPATH=scripts`——③ 做完就该由 app 引导自己解决；带不上就 500 ⇒ 说明没收敛成功）
     先 `POST /api/v1/login` 拿 cookie（**只试一次**，5 次错会锁该 IP 600 秒），然后：

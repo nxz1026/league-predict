@@ -72,7 +72,12 @@ JSONB_COLS = {"fact.jc_issue": ("draw_num_list","raw_head"),
    ⇒ ① 这一张表仍是幂等最强测试（120 键进 120 行出，不许变 240）；② 但**必须允许覆盖更新**（`gates=None` 已写死，别加防回退）；
      ③ 任何依赖它们的分析都要能从 `last_seen_at` 看出"这行是最后一次被改于何时"。
 
-【E. 接线：`scripts/ingest/jc_load.py`（87 行，**只加不改语义**，最终 ≤100 行）】
+【E. 接线：`scripts/ingest/jc_load.py`】
+ ⚠️ **行数预算先现测**（队长 09:50 提醒自己的错：这句里写死的"87 行"是 **2q 之前**的数，2q 会往这个文件加 orphan 分派 ⇒ 你现在看到的大概是 **93 行左右**）：
+   `wc -l scripts/ingest/jc_load.py` 贴出实测值，**最终必须 ≤100 行**。为了保住预算，**接线只许加三行**：
+   `jc_issue_write.py` 里再公开**一个**入口 `def write_issue_topic(cur, topic, env, snap, src) -> int`（内部按 B 节三种情况分派），
+   `jc_load.py` 里只加 `ISSUE_TOPICS = (...)` 一行 + 一个 `elif topic in ISSUE_TOPICS: ups += jc_issue_write.write_issue_topic(cur, topic, env, snap, src)` ⇒
+   **别把 B 节那套 if/else 铺进 `load_topic`**（那必然把 `jc_load.py` 顶过 100 行，而这种"差两行超线"的返工我今晚已经吃过三次）。
  `WRITE` 从 `("jczq_offer","jczq_result")` 扩到 `("jczq_offer","jczq_result","jc_issue","jc_issue_result","lottery_draw")`；
  这 5 个 topic 现在的 `logger.info("skip %s n=%d (2e 范围)")` 换成真写：
  · `jc_issue` ⇒ `upsert_descriptor(...)` + `upsert_issue_matches(cur, env["payload"], snap, src)`；
