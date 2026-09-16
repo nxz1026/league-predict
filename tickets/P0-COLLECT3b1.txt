@@ -2,6 +2,18 @@
 【这一单**只新建一个纯解析器**：`scripts/store/parse_odds_hist.py`（**≤100 行、函数 ≤50 行**）——**不碰库、不接线、不改任何现有文件**】
  它是 `P0-COLLECT3b`（盘口**全历史** → `fact.jc_odds_history`，契约 v1.4）的第一步：把一行的 `payload` 摊成"每玩法每版一行"的记录。
  【🅣 第 1 个动作就 write 这个新文件 + 一个新测试文件，改完之前一行测试都不许跑（§9-66②）。】
+【♻ 若解析器**已存在**（队长 12:22 已逐行读过并判定合格）：**本单剩下的活只有"写测试 + 跑 T1~T5"**，
+ · `scripts/store/parse_odds_hist.py` = **74 行**，`_PLAYS/_META/_row/parse_history/parse_env` 全在，**一行都不许多改**
+   （公开面比本单多了两个**可选参数** `src_hash/src_file` ⇒ 是兼容的超集，不用管）；
+ · **测试文件也已经存在**（`tests/test_parse_odds_hist.py` 106 行、7 个用例）：队长 12:29 亲跑 = **6 passed / 1 failed**，
+   唯一那条失败**是队长写错的断言**（`utcoffset() == timedelta(0)`，见 C4 的 §9-74 更正）⇒ **解析器代码是对的，别去改它**；
+   ⇒ 本单剩下的活**只有三件事**：① 把那一条断言改成 C4 更正后的写法（**只改这一处**）；
+      ② 跑 T2→T5 并把原始输出写进报告；③ 全绿才交 `.done`。
+   若你发现还有别的用例不对 ⇒ **停下贴实测值**（别改解析器、别改断言凑绿）。
+ · **12:33 更新（队长）**：那 7 个用例现在**全绿**（`7 passed`）—— 工人把 `update_ts` 先按 `Asia/Shanghai` 解释**再 `astimezone(timezone.utc)` 归一**，
+   于是我那句写歪的 `utcoffset() == timedelta(0)` **反而成立了**（`2026-09-15 01:39:39+00:00` = 北京 09:39:39 ✔ 语义没错）。
+   ⇒ **C4 那两条断言一个字都不许改**（也别"顺手优化"成 `timedelta(hours=8)`）；§9-74 的更正**只对"未来新写的测试"有效**。
+ · **不许**为了"看起来在工作"去重读 `jc_load.py`/`jc_read.py`/装载器——本单跟它们**完全无关**（解析器不连库、不接线）。
 【A. 输入形状（队长 11:44 用真夹具逐键量过，照抄别去查）】
  夹具：`tests/fixtures/odds_history/finished_卡塔尔亚vs韩国亚__2041482.jsonl`（1 行 11714 B）与
        `onsale_柏太阳神__2041495.jsonl`（1 行 2955 B）；**每行是一整个契约 v1.3 信封**（`kind/topic/snap_ts/fetched_at/endpoint/http_status/collector_host/payload/src_hash`）。
@@ -31,7 +43,10 @@ def parse_env(env: dict) -> list[dict]:           # 取 env["payload"] 调 parse
  2) 单份：`finished` **29 条**（had 6 · hhad 8 · crs 5 · ttg 5 · haf 5）、`onsale` **5 条**（每玩法 1）；
  3) `seq_no`：**0 = 最早** ⇒ `finished` 的 had `seq_no` 集合 = `{0,1,2,3,4,5}`；`hhad` = `{0..7}`；`crs/ttg/haf` = `{0..4}`；
  4) `finished` 的 had **`seq_no==0` 那条 `update_ts == datetime(2026,9,15,1,39,39, tz=timezone.utc)`**（= 北京 09:39:39），
-    **`seq_no==5` 那条 == datetime(2026,9,15,10,9,0, tz=utc)**（= 北京 18:09:00）；两条 `utcoffset()` 都必须 `== timedelta(0)`（**证明不是拿本机时区凑的**）；
+    **`seq_no==5` 那条 == datetime(2026,9,15,10,9,0, tz=utc)**（= 北京 18:09:00）；
+    ⚠️ **队长更正（§9-74）**：我原来还要求"两条 `utcoffset() == timedelta(0)`"——**这句是我写错的**：
+      `datetime` 比较看的是**时刻**（aware 之间 `==` 已经足够证明等于那个 UTC 瞬间），而带 tz 的对象 `utcoffset()` 必然给 `+8:00`；
+      ⇒ 改成断言 **`update_ts.utcoffset() == timedelta(hours=8)`** 并且 **`update_ts.tzinfo is not None`**（这才是"用 Asia/Shanghai 解释墙上时钟"的正证）；
  5) `is_first` 为 True 的条数 == **10**（= 2 份 × 5 玩法）；`is_close` 为 True 的条数 == **0**；
  6) `goal_line` 非 None 的条数 == **9**（全在 `hhad`），且这些条 `goal_line_value` 都是 float；`odds` 里**不含** `updateDate/updateTime/goalLine` 三个键，
     `had/hhad` 的 `odds` 键集合恰为 `{h,hf,d,df,a,af}`；
