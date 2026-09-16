@@ -26,6 +26,8 @@ import hashlib
 import json
 import subprocess
 import sys
+import os
+import threading
 import tarfile
 import time
 import urllib.error
@@ -551,6 +553,38 @@ def push_batch(topics: list) -> int:
 
 
 
+def _acquire_singleton_lock() -> bool:
+    """单例锁：同机同一时间只允许一个 collector 批次在跑。
+    任务 IgnoreNew 已挡调度层重叠；此锁兜底 wscript 被 PT30M 杀后 python 僵尸还活着、
+    下一轮新 wscript 又拉一个 python 的堆积场景（历史死机前 1GB+ 根因）。
+    锁文件 .collector.lock 写本进程 pid；旧 pid 已死 → 接管；还活着 → 返回 False。"""
+    import ctypes
+    lock = ROOT / ".collector.lock"
+    my_pid = os.getpid()
+    if lock.exists():
+        try:
+            old_pid = int(lock.read_text(encoding="utf-8").strip() or "0")
+        except (ValueError, OSError):
+            old_pid = 0
+        if old_pid and old_pid != my_pid:
+            K32 = ctypes.windll.kernel32
+            h = K32.OpenProcess(0x0400, 0, old_pid)
+            if h:
+                K32.CloseHandle(h)
+                return False
+    lock.write_text(str(my_pid), encoding="utf-8")
+    return True
+
+
+def _release_singleton_lock() -> None:
+    lock = ROOT / ".collector.lock"
+    try:
+        if lock.exists() and lock.read_text(encoding="utf-8").strip() == str(os.getpid()):
+            lock.unlink()
+    except OSError:
+        pass
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="国内采集机（契约 v1.2）")
     ap.add_argument("--probe", action="store_true", help="探针模式（复探用）")
@@ -568,18 +602,29 @@ def main() -> int:
         _lh.parent.mkdir(parents=True, exist_ok=True)
         sys.stdout = open(_lh, "a", encoding="utf-8")
         sys.stderr = open(_lh, "a", encoding="utf-8")
-    if args.probe:
-        return probe()
-    if args.collect:
-        return collect(args.collect)
-    if args.collect_all:
-        return collect_all()
-    if args.push:
-        return push()
+    # 单例锁：--push-batch 定时任务主路径专用；probe/collect 不锁（可并行诊断）
+    _locked = False
     if args.push_batch:
-        return push_batch(args.push_batch)
-    ap.print_help()
-    return 1
+        if not _acquire_singleton_lock():
+            print(f"[singleton] 已有活跃批次在跑，本次 no-op")
+            return 0
+        _locked = True
+    try:
+        if args.probe:
+            return probe()
+        if args.collect:
+            return collect(args.collect)
+        if args.collect_all:
+            return collect_all()
+        if args.push:
+            return push()
+        if args.push_batch:
+            return push_batch(args.push_batch)
+        ap.print_help()
+        return 1
+    finally:
+        if _locked:
+            _release_singleton_lock()
 
 
 if __name__ == "__main__":
