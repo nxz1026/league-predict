@@ -2,12 +2,13 @@
 from pathlib import Path
 
 from core.log import logger
-from ingest import jc_odds_write, jc_write
+from ingest import jc_issue_write, jc_odds_write, jc_write
 from ingest.jc_read import read_lines
 from psycopg.types.json import Json
 from store.parse_collector import parse_line
 
 WRITE = ("jczq_offer", "jczq_result")
+ISSUE = ("jc_issue", "jc_issue_result", "lottery_draw")
 
 
 def _ops(cur, topic: str, rel: str, size: int | None, n: int, ups: int,
@@ -37,6 +38,20 @@ def load_topic(cur, root: Path, marker: Path, topic: str, path: Path | None, sta
                 ups += jc_write.upsert_jc_offer(cur, p["row"], snap, src)
             else:
                 ups += jc_write.upsert_jc_result(cur, p["row"], snap, src, None, None)
+    elif topic in ISSUE:
+        for i, env in enumerate(lines, 1):
+            ins = parse_line(env)
+            if ins is None:
+                continue
+            try:
+                cur.execute("savepoint iw")
+                ups += jc_issue_write.upsert_issue_instruction(cur, ins, env.get("src_hash") or "", rel)
+                cur.execute("release savepoint iw")
+            except ValueError as e:
+                cur.execute("rollback to savepoint iw")
+                rej.append({"line": i, "reason": str(e)})
+                logger.warning("issue-reject topic=%s 文件=%s 期=%s err=%s",
+                               topic, rel, (ins or {}).get("pk"), str(e)[:80])
     elif topic == "jc_odds_history":
         for env in lines:
             env["src_file"] = rel
