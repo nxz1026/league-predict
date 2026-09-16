@@ -710,3 +710,14 @@ setsid bash ~/omp-resilient3.sh SMOKE1 /home/ubuntu/omp-smoke 300 1 ~/tickets/SM
      · **过渡期口径（2q4 落地前一律照此）**：看 `gaps` 之前先跑 `python3 ~/bin/jc-false-gaps.py`（只读）确认判伪条数，
        需要干净账就 `--sql --delete`（superuser、逐条 diff 核验，**这是唯一允许的 gap 清理路径**）；**别拿未判伪的 gaps 当趋势看**；
      · ⇒ **`P0-JCSPLIT3b → P0-COLLECT2q4` 现在是队列第一优先**（排在篮彩 `STORE2` 与传统足彩之后、但 2q4 本身已插队到一切"新范围"之前）。
+90. **队长错 #17（三件事挤在同一分钟里，全部我自己造成）**（2026-09-17 15:54–15:57）
+     ① **工单补丁脚本没执行成功，我却照样把单派了**：我用 `python3 - <<'PY'` 改 `P0-COLLECT2q4`，脚本里有**全角括号 `）` 当右括号** ⇒ 整段 `SyntaxError`、**一个字都没落地**；
+        我看了 `git add` 的输出没注意它报的是 `no changes added to commit`（那就是"什么都没改"）⇒ 直接派工 ⇒ **派出去的还是那张有硬伤的单**。
+        ⇒ 新纪律：**工单补丁脚本末尾必须自带"落地断言"**（`print(t.count('作废'), ...)` 之类），**断言为 0 就禁止派工**；`git commit` 报 `no changes added to commit` = **失败**，不是"没事发生"。
+     ② **并行数破了自己的新规矩（3 张同时在跑）**：`JCSPLIT3b` 我已验收（`a3f27ed`）但**没停 wrapper** ⇒ 它继续跑报告轮；我又连派 `2q4` / `2q4b` ⇒ 一度 12 个 omp 进程 = 3 会话。
+        ⇒ **验收 commit 的同一轮就要停轮**（已把这条并入下面的工具用法）。
+     ③ **✅ `~/bin/stop-omp.sh` 首次实战通过**：`stopped … 组=258230 剩余omp=8` → 再停一张 → `剩余omp=4`，
+        **全程没碰第三张（`P0-COLLECT2e`）** ⇒ 与 §9-81 的全局 pgrep 形成对照；它内部顺序是"**先记组长 → 再杀 wrapper → 最后 `kill -TERM -组`**"
+        （顺序反了就杀不到：wrapper 一死，本轮 `setsid timeout` 会被 init 收养，`pgrep -P` 就空了——这个坑我做合成用例时抓到过）。
+     · **待办（我自己）**：把 `manifest-hash-mismatch` / `manifest-hash-ambiguous` / `manifest-无法消歧` 三个关键字加进 `~/bin/jc-ingest-run.sh` 的报警
+       （刚才有 2 个装载进程在跑 ⇒ 不改运行中的脚本，等这两张单落地再改，改完 `bash -n` + 合成用例验证）。
