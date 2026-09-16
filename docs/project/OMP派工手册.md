@@ -464,3 +464,18 @@ setsid bash ~/omp-resilient3.sh SMOKE1 /home/ubuntu/omp-smoke 300 1 ~/tickets/SM
           这次我删前拍数、删后核对：`119/14 → DELETE 6 → 113/8`，剩下 8 条全是老三批（0 字节 marker 走窗口）**真缺**，逐条点过名；
        ③ 每次验收 ingest 类工单，末尾加一句 `select src_file from ops.file_arrival where src_file like '%#MISSING%' order by 1`，
           **数一下 gap 是不是只减少了没增加** —— 这一条我原先的 oracle 里没有（只写了"count 不许下降"），所以差点漏掉。
+64. **"工人 15 分钟零写入"的第三种解释：ACP 会话在长思考里静默死亡**
+     （2026-09-17 10:07 北京，`P0-COLLECT2q` 连炸三次之后才看清）：
+     我先按"它只会读不会写"下结论 ⇒ 把工单从"行为描述"改成"内联骨架"再改成"内联整个函数 + 禁止先跑基线"，
+     三次尝试分别 12 / 14 / 2 分钟、**全部零写入**。第四次去看进程和日志才发现真相：
+     `.attempts` 记 `try 1 rc=0 end=…`、日志尾巴是**我包装器自己写的 `[ACP 无返回]`**，而且**三次都有这一行**
+     ⇒ **omp 的 ACP 会话在生成中途断流，`omp-call` 正常退出（rc=0），我 `max_tries=1` 于是直接 EXHAUSTED。**
+     附实测：死亡时 `usage_update: size=524288 used=29443` ⇒ **不是上下文撑爆** ⇒ 所以"把工单写得更短"根本救不了它。
+     ⇒ 三条永久规矩：
+       ① 诊断顺序固定：**`.attempts` 的 rc/end → 日志尾有没有 `[ACP 无返回]` → 才回头怪工单写得不清楚**
+          （我今晚先怪了工单两轮，白拆两遍工单，还在报告里错怪了模型）；
+       ② 派工 **`max_tries≥3`**：**只认 `.done` 哨兵，`rc=0` 绝不等于成功**；会话死亡是概率性的，重派比重写便宜；
+       ③ 重派前必须验工区干净：派工器新增 `LEAGUE_WATCH_PATHS="scripts/ingest …"`，
+          **只检工单授权可写的路径**（别检全仓 —— `predictions/*.json`、我自己的 `tickets/`、`docs/` 常年是脏的，
+          我第一版就是全仓检查，被 `ai_scores.json` 误伤成 `DIRTY-ABORT`）；脏就 `exit 2` 交回队长看 diff，
+          **绝不允许新尝试在"半个文件"上续写**（这正是 §9-63 那批伪 gap 的成因）。
