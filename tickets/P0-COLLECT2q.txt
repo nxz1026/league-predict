@@ -1,0 +1,52 @@
+【项目】league-v2（§2-D7 ≤100 行/文件、≤50 行/函数、≤120 列 硬红线；§9：报告用锚点、禁 git、禁 print）
+【前置】`P0-COLLECT2o` 已完成（`.done` 清单优先、0 字节老 marker 走窗口兜底、行数对账不符 ⇒ 剔除 + `manifest-mismatch` 告警）。
+【这一单只补一件事：**清单外的"无主文件"不許丢，也不許张冠李戴**】
+ 队长 08:45 在**实时落港目录**实测到硬证据（不是假设）：
+```
+/srv/league-staging/incoming/cn-collector/jczq_offer/2026-09-15T22-48Z__001.jsonl   100533 B / 40 行
+                                                    /22-49Z__001.jsonl   100533 B / 40 行
+                                                    /22-54Z__001.jsonl   100533 B / 40 行
+```
+ 这三个文件**不在任何 `.done` 清单里**，且 `22:48/22:49/22:54` 这三个时刻**根本没有 marker**（marker 序列 `15-16-32Z` 直接跳到 `23-01-30Z`）
+ ⇒ 纯清单口径会**白扔 120 行真盘口**；旧的窗口口径会把它们并进 `23-01` 批（**张冠李戴**，所以我才看到 610 而不是 490）。
+【🅣 只准读 2 个文件】`scripts/ingest/jc_read.py`、`scripts/ingest/jc_load.py`。第 1 分钟就 write/edit。
+
+【A. 行为要求（**只加"第三类归属"，别动 2o 已有的两类**）】
+ 1) 新函数 `orphans_for_run(root: Path, markers: list[Path], topics: tuple[str, ...]) -> dict[str, list[tuple[Path, str]]]`
+    （放 `jc_read.py`）：返回**既不被任何清单列出、也不落在任何 0 字节 marker 的窗口里**的那些文件（按 topic 分组）。
+    · 判"已被覆盖"要**按路径后缀比**（清单里是 `jczq_offer/2026-09-15T23-01Z__001.jsonl` 这种相对路径，落港目录里是绝对路径）；
+    · `.empty` 文件**不算无主**（它们本来就该由清单声明）；清单/窗口都没覆盖到的 `.empty` ⇒ 记一条告警但**不入库**。
+ 2) `jc_load.py` 把无主文件当作**一个额外的伪批**处理，`done_marker` 记 **False**、`src_file` 用**相对路径原文**（这样 `ops.file_arrival` 里能一眼认出是谁），
+    并打一条 **`logger.warning("orphan 装载 n=%d topics=%s 文件=%s", ...)`**（文件列表最多列 5 个 + `…`，别刷屏）。
+ 3) **无主文件同样走行数/内容校验与幂等 upsert**（不因为"没清单"就降低标准）；解析失败照旧进 `errors=[]` 那个列表。
+ 4) ⚠️ 伪批**必须排在最后处理**（不能让无主文件的旧 snap_ts 覆盖掉有清单的新批次 ⇒ 我们的 upsert 有 `last_seen_at` 防回退门控，别去动它）。
+【B. 不许做】改 `jc_write.py`/`parse_*.py`/DDL/测试夹具；改 2o 的清单解析逻辑（只许"追加第三类"）；把无主文件**丢弃**或**并进别的批**（这就是本单存在的原因）。
+
+【必须成立——T1/T2 是"实时落港目录"，队长 08:45 已把现状数字钉死】
+ T1 **改前改后 count 一字不变**（这条是本单的"不丢数据"证明）：
+    先跑 `bash ~/bin/jc-ingest-run.sh --dir /srv/league-staging/incoming/cn-collector`（**这是队长的脚本，直接跑**），
+    记下末行 `count jc_match=? jc_offer=? jc_result=?`（队长 08:45 的实测是 `17/610/24`，但你跑的时候国内机可能又推了新批 ⇒ **以你这一遍为准**），
+    再**改代码**，改完**重跑同一条命令两遍**：三遍的 `jc_match / jc_offer / jc_result / count(distinct snap_ts)` 必须一致，且每批 `errors=[]`。
+ T2 **无主文件被看见**：改完后的日志里必须出现 `orphan 装载` 那一行，且**恰好包含这三个文件**（`22-48Z__001 / 22-49Z__001 / 22-54Z__001`）；
+    `sudo -n -u postgres psql -d league -c "select src_file, rows_ok, done_marker from ops.file_arrival where done_marker = false order by src_file limit 8"`
+    ⇒ 这三条 `jczq_offer/…Z__001.jsonl` 必须在里面（`done_marker=false`）。
+ T3 **`__002` 分片演练**（他们确认会出现的那个场景）：在 `/tmp/qdup/` 自造一批：
+    抄 `/srv/league-staging/incoming/cn-collector/jczq_offer/2026-09-16T00-43Z__001.jsonl`（40 行）到 `jczq_offer/`，
+    再复制一份改名 `…__002.jsonl` 但**把里面每行的 `snap_ts` 改成 `2026-09-16T00:44:02Z`**（模拟同分钟重跑、盘口微动），
+    并写一个 `.done` 清单**只列 `__001`**（**故意不列 `__002`**）。
+    ⇒ 跑 `PYTHONPATH=scripts python scripts/ingest/jc_load.py --dir /tmp/qdup`：**两个文件都必须入库**
+    （`select count(*) filter (where snap_ts='2026-09-16T00:43:02Z')||'/'||count(*) filter (where snap_ts='2026-09-16T00:44:02Z') from fact.jc_offer` → **`40/40`**），
+    且 `__002` 那行在 `ops.file_arrival` 里以 `done_marker=false` 存在。**这就是"以后出现 __002 不再静默丢数据"的证据。**
+ T4 归因不许错：`sudo -n -u postgres psql -d league -Atc "select count(*) from ops.file_arrival where src_file like 'jczq_offer/%' and src_file not like '%#MISSING%' and done_marker"`
+    贴出数字并说明它 == "被清单或窗口正式覆盖的文件数"（**不含** T2/T3 的无主文件）。
+ T5 `python3 ~/bin/omp-ast-check.py scripts/ingest/jc_read.py scripts/ingest/jc_load.py scripts/ingest/jc_write.py` → **0 违规**（两个被改文件仍 ≤100 行）
+ T6 `python3 ~/bin/jc-fk-audit.py fact` → exit=0；`python3 ~/bin/jc-cols-check.py scripts/ingest/jc_write.py` → 全 ✔（证明没碰坏写层）
+ T7 `source ~/.venvs/league/bin/activate && PYTHONPATH=scripts python -m pytest tests -q` → **428 passed / 0 failed**
+【铁律】① 禁 git；② 禁 print；③ ≤100/≤50/≤120；④ 只准改 `jc_read.py` + `jc_load.py` 两个文件；
+ ⑤ **只读** `/srv/league-staging/incoming/cn-collector`：**绝对禁止**往落港目录写/改名/删除任何文件（那是国内机的地盘，我方只消费）；
+ ⑥ 演练一律在 `/tmp/qdup/`；⑦ 报告 `.omp-logs/P0-COLLECT2q.report.txt`（T1~T7 原始输出）+ 全绿才 `echo TASK_DONE > .omp-logs/P0-COLLECT2q.done`
+【边界】T1 改前改后 count 变了 ⇒ **说明"不丢数据"没做到**，贴三遍原始 count 停下；T2 没出现那三个文件 ⇒ 贴 `ls` 与日志原文停下。
+ 任何一条不确定：**贴原文 + 停下**，别改口径、别放宽期望。
+【验收（队长逐字复跑）】
+  bash ~/bin/jc-ingest-run.sh   # 队长自己再跑一遍真目录 + 看 orphan 日志与 file_arrival 归因
+  LEAGUE_FROZEN_RE="scripts/core/" bash ~/bin/league-accept.sh P0-COLLECT2q scripts/ingest
