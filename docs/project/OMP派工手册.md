@@ -565,3 +565,11 @@ setsid bash ~/omp-resilient3.sh SMOKE1 /home/ubuntu/omp-smoke 300 1 ~/tickets/SM
           真正的形态是 **`agent_thought_chunk` 流到半个 token 就再也不动**，`rc` 给的是 **15（被 SIGTERM）**而不是 0；
           ⇒ 所以 §9-64 的诊断顺序补一格：**`.attempts` 的 rc=15 + 日志尾是半个 token + mtime 停滞 ⇒ 同样按"会话断流"处理**（单不用改，让 `max_tries` 续）。
      代价：try 2 已经读了 3 分半的夹具结构（有价值的探索被我抹掉），现在只剩 **try 3/3**（本轮跑不完就 `EXHAUSTED`，得整单重派）。
+73. **队长错账 #13：我把"文件 ≤100 行"错卡到了 `tests/**` 上**（2026-09-17 12:27，`P0-COLLECT3b1` 的测试写到 106 行被自己的工具判违规）
+     · 事实核对：仓库里**早就验收过**的测试文件本来就超 100 —— `test_poisson.py 175 / test_parse.py 135 / test_bball.py 128 / test_elo.py 124`
+       ⇒ 说明 D7 那条本意是**生产码**（`scripts/**`），我却在 `omp-ast-check.py` 里对所有路径一刀切（工具自己的 docstring 还写着"tests 只查大小/列宽"，**代码与注释都不一致**）；
+     · 一刀切的**实际害处**：逼人为了过线把"一个主题的断言"拆成 2~3 个文件 ⇒ 测试可读性与覆盖率都变差，是**为格式牺牲内容**（比 D7 想防的"巨型文件"更糟）；
+     · 修法（已改 + **双向验证**）：`omp-ast-check.py` 现在 **`tests/**` 免文件上限**，但 **函数 ≤50、列宽 ≤120 照查**；
+       正向：`omp-ast-check.py tests/test_parse_odds_hist.py scripts/store/parse_odds_hist.py` → **0 违规**；
+       反证：临时造一个 101 行的 `scripts/probe.py` → **仍报 `文件 101 行 > 100`**（生产码这条**一格没松**，§2-D7 未放宽）。
+     · 以后写工单：`ast 检查`一句要写清"**生产码 ≤100，测试只查函数/列宽**"，别再让工人为过线去拆测试。
