@@ -535,3 +535,12 @@ setsid bash ~/omp-resilient3.sh SMOKE1 /home/ubuntu/omp-smoke 300 1 ~/tickets/SM
        topic 分布 `jczq_offer 3 / jc_issue 3 / jc_issue_result 3 / lottery_draw 3 / jclq_result 2`）。
        我之前"文件名前 16 字 vs marker 前 16 字"的粗算给的是 35 ⇒ **口径错了**（早期批次 `.done` 的上传时刻 ≠ 文件的采集分钟，窗口分支会认领掉一批），
        以后**判"无主"必须用 `files_for_batch()` 真跑一遍取 `seen`**，不许拿文件名比字符串。
+70. **`is_close`（封盘那一版）暂时**只能全 False**，不许拿"数组最后一版"冒充**（2026-09-17 11:56 定，`3b` 系列工单都引用这条）
+     · 我 11:44 逐键量过 `getOddsHistoryV1` 的响应：**顶层恰好 16 个键**
+       （`matchId / leagueId(字符串!) / homeTeamId / awayTeamId / homeTeamAbbName / homeTeamAllName / awayTeamAbbName / awayTeamAllName / leagueAbbName / leagueAllName / singleList`
+       + 五个玩法数组 `hadList / hhadList / crsList / ttgList / hafuList`）⇒ **里面没有任何"卖停 / 完场 / 封盘"状态字段**；
+     · 而数组是**"最新在前、最早在后"**（实测 `arr[0].updateTime` 最大）⇒ "最后一条 = 封盘"**在语义上恰好是反的**（最后一条是"最早 = 开盘"），
+       所以我方规定：`seq_no = len(arr)-1-index`（**0 = 最早一版 = 开盘价**）、`is_first = (seq_no==0)`、**`is_close` 恒 False**；
+     · 为什么现在不给 `is_close` 真值：CLV 要的"收盘价"= **官方停止销售前最后一版**；没有状态字段就只能靠"别的数据"推
+       （`fact.jc_offer` 的快照序列在**该场开售窗口结束**后不再出现该 `matchId`；或 `jczq_result` 出现该场 ⇒ 已完场）⇒ 这是**跨表派生**，
+       属于 `analysis.jc_close_price` 单独一张工单的活（队列里排在 3b 接线之后），**绝不允许在解析器/写手里顺手写死**（那是"插错"，红线：宁可不插，不可插错）。

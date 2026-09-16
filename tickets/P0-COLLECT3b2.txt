@@ -1,0 +1,51 @@
+【项目】league-v2（§2-D7 ≤100 行/文件、≤50 行/函数、≤120 列 硬红线；§9：报告用锚点、禁 git、禁 print、不许放宽红线）
+【这一单**只新建一个写手**：`scripts/ingest/jc_odds_write.py`（**≤100 行、函数 ≤50 行**）——不接线、不改任何现有文件、**库里最终不留行**（见 T2 的"回滚自证"）】
+ 它是 `P0-COLLECT3b`（盘口**全历史** → `fact.jc_odds_history`）第二步；第一步（解析器 `scripts/store/parse_odds_hist.py`）**已单独成单 `P0-COLLECT3b1`**（本单**假定它已存在并按其输出喂**；若你发现它不在 ⇒ 停下告诉我）。
+【🅣 第 1 个动作就 write 这个新文件 + 一个新测试文件；**基线我全量好了，你不要自己去测基线**（§9-69）。】
+【A. 表与上游（队长 11:55 从运行库读的，照抄别去查）】
+ `fact.jc_odds_history`（**14 列**，DDL 见 `docs/db/infra_p0_11_odds_history.sql`，**已应用**）：
+   `match_id bigint NOT NULL` · `play_type text NOT NULL` · `update_ts timestamptz NOT NULL` · `seq_no integer NOT NULL`
+   · `goal_line text` · `goal_line_value numeric` · `odds jsonb NOT NULL` · `is_first boolean NOT NULL` · `is_close boolean NOT NULL`
+   · `league_id integer` · `src_hash text NOT NULL` · `src_file text NOT NULL` · `first_seen_at timestamptz NOT NULL default now()` · `last_seen_at timestamptz`
+ **PK = `(match_id, play_type, update_ts)`**；CHECK：`play_type IN ('had','hhad','crs','ttg','haf')`、`jsonb_typeof(odds)='object'`、`seq_no >= 0`；
+ **故意没有外键**（§9：装载链路不依赖 `ref.team`，D3）；授权：`league_ing` 只有 SELECT/INSERT/UPDATE（**没有 DELETE**）。
+ 上游 `parse_odds_hist.parse_env(env)` 每行返回 dict，**键就是上面这些列名**（`odds` 是 **Python dict**、`update_ts` 是带 tzinfo 的 `datetime`、`seq_no` 0=最早、`is_first` 只在 `seq_no==0` 为 True、`is_close` 恒 False）。
+【B. 公开面（就两个名字）】
+```
+def upsert_jc_odds_history(cur, rows: list[dict], src: dict) -> int   # 返回"真正影响行数"合计；单条坏行不许炸整批（见 B3）
+def upsert_from_env(cur, env: dict) -> int                            # 调 parse_odds_hist.parse_env 后转调上面，src 从信封取
+```
+ B1 语句形状（**照这个写，别改列顺序**）：
+  `insert into fact.jc_odds_history (match_id,play_type,update_ts,seq_no,goal_line,goal_line_value,odds,is_first,is_close,league_id,src_hash,src_file)`
+  ` values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)`
+  ` on conflict (match_id,play_type,update_ts) do update set seq_no=excluded.seq_no, goal_line=excluded.goal_line,`
+  ` goal_line_value=excluded.goal_line_value, odds=excluded.odds, is_first=excluded.is_first, is_close=excluded.is_close,`
+  ` league_id=excluded.league_id, src_hash=excluded.src_hash, src_file=excluded.src_file, last_seen_at=now()`
+  ⇒ **`first_seen_at` 不在 do-update 列表里**（首次插入靠 default now()，重复装载只刷 `last_seen_at`）。
+ B2 `odds` 是 jsonb ⇒ **必须 `Json(row["odds"])` 包**（psycopg3 直接塞 dict 会被当 Python 对象报错；这是仓库里踩过的坑）。
+ B3 **坏行不许炸整批**（每天 144 趟，一炸就断一批）：逐行 `try/except` ⇒ 失败行 **只允许**用 `logger.warning("odds-hist-reject …")` 记一条（**不许 print**），
+     继续下一行；返回的 int = 成功行数。⚠️ **不许吞异常后返回 0 还打 TASK_DONE**（数不对就要在报告里显出来）。
+ B4 `is_close` **原样透传**（上游恒 False）——**不许在这一层猜"最后一版就是收盘价"**（§9-70：v1.4 载荷 16 个键里没有任何状态字段，我量过）。
+【C. 不许做】不许 `ALTER`/建表（表已存在）；不许改 `jc_write.py`（md5 锁）/`jc_load.py`（`P0-COLLECT2q3b` 正在改）/`jc_read.py`/DDL/夹具；
+ **不许往 `fact.jc_odds_history` 最终留行**（T2 用回滚证明）；不许碰 `ref.team`（D3）；不许写 `/srv/league-staging/**`；禁 git；禁 print；演练一律 `/tmp/…`。
+【T. 必须成立（按序跑，原始输出全进报告）】
+ T1 **先算期望**（用解析器在本地跑两份夹具，不落库）：合计 **34 行**（had 7 · hhad 9 · crs 6 · ttg 6 · haf 6；`finished` 29 / `onsale` 5）
+ T2 **回滚自证（本单核心）**：写一个测试（`tests/test_jc_odds_write.py`），
+    用 `with closing(pg.connect("ing")) as conn:` 打开事务 ⇒ `upsert_from_env` 喂两份夹具（**34 行**）⇒ 断言
+      `select count(*) from fact.jc_odds_history` == **34**、`select count(*) filter (where is_first) ...` == **10**、
+      `select count(*) filter (where is_close)` == **0**、`select count(*) filter (where goal_line is not null)` == **9**、
+      重放同一批第二遍 ⇒ 行数**仍是 34**（PK upsert 生效）且 `last_seen_at` 非空、`first_seen_at` 不变（贴两条时间戳原文）
+    ⇒ **`conn.rollback()`** ⇒ 再 `select count(*) from fact.jc_odds_history` == **0**（**证明库里最终不留行**）
+ T3 **坏行不炸批**：构造 3 条（1 条正常、1 条 `play_type='xxx'` 违反 CHECK、1 条 `odds` 是 list 违反 `jsonb_typeof='object'`）
+    ⇒ 函数**不抛异常**、返回 **1**、日志出现 `odds-hist-reject`（原始输出贴回来）；**同样在回滚事务里跑**
+ T4 **静态**：`python3 ~/bin/omp-ast-check.py scripts/ingest/jc_odds_write.py tests/test_jc_odds_write.py` → 0 违规；`wc -l`（写手 **≤100**、函数 ≤50）
+ T5 **回归**：`source ~/.venvs/league/bin/activate && PYTHONPATH=.:scripts python -m pytest tests -q` → **428 + N passed / 0 failed**（贴你数出的 N）
+    且 `bash ~/bin/jc-ingest-run.sh` → `rc=0`、`select count(*) from ops.file_arrival where src_file like '%#MISSING%'` **跑前跑后都 = 14**
+【铁律】① 禁 git；② 禁 print；③ ≤100/≤50/≤120；④ 只新建"写手 + 它的测试"两个文件；
+ ⑤ 报告 `.omp-logs/P0-COLLECT3b2.report.txt`（T1~T5 原始命令 + 原始输出 + 两个文件行数）+ 全绿才 `echo TASK_DONE > .omp-logs/P0-COLLECT3b2.done`
+【边界】T2 任何一数对不上 ⇒ **停下贴实测值**（不许改断言凑绿）；`parse_odds_hist.py` 不存在 ⇒ 停下；写不进 100 行 ⇒ 停下贴 `wc -l`。
+【验收（队长逐字复跑）】
+  sudo -n -u postgres psql -d league -Atc "select count(*) from fact.jc_odds_history"        # 必须仍是 0
+  PYTHONPATH=.:scripts python -m pytest tests -q
+  python3 ~/bin/omp-ast-check.py scripts/ingest/jc_odds_write.py
+  LEAGUE_FROZEN_RE="scripts/(core|store/pg|ingest/jc_write|ingest/jc_read|ingest/jc_load)\.py" bash ~/bin/league-accept.sh P0-COLLECT3b2 scripts/ingest tests/test_jc_odds_write.py

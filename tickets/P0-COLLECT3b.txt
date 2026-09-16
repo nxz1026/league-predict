@@ -1,3 +1,9 @@
+⚠️⚠️ **本单已拆成三张微单（2026-09-17 11:56），保留作过程记录，别再整单派**：
+ · `P0-COLLECT3b1` = 纯解析器 `scripts/store/parse_odds_hist.py`（8 组硬断言：34 行 / 7·9·6·6·6 / seq0=最早 / is_close 恒 False / 不 import 库）
+ · `P0-COLLECT3b2` = 写手 `scripts/ingest/jc_odds_write.py`（**测试全程在事务里 rollback ⇒ 库里最终 0 行**）
+ · `P0-COLLECT3b3` = 接线（`parse_collector.PARSERS` 加 `jc_odds_history` + `jc_load.py` 的 WRITE/TOPICS 分支，净增 ≤12 行）
+ 拆的原因见 §9-66：**一单一个函数级别**（三步打包那单 `2q2` 两轮零写入就是证据）。—— 以下为原单正文。
+
 【项目】league-v2（§2-D7 ≤100 行/文件、≤50 行/函数、≤120 列 硬红线；§9：报告用锚点、禁 git、禁 print）
 【这一单干什么】**接契约 v1.4：把官方"盘口全历史"（`getOddsHistoryV1`）解析并写进 `fact.jc_odds_history`** —— 这是真 CLV 的唯一入口
  （此前真 CLV 可算样本恒为 **0**；官方一次请求就给某场 5–8 版完整走势，含**封盘那一版**）。
