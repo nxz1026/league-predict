@@ -728,3 +728,17 @@ setsid bash ~/omp-resilient3.sh SMOKE1 /home/ubuntu/omp-smoke 300 1 ~/tickets/SM
        ② **本单拆成两单重派（下一轮队长做）**：`2e-A` 只新建 `jc_issue_write.py`（B/C/D 节 + 自己的单测，**不接装载器**）
        → `2e-B` 只做 `jc_topic.py` 的 `ISSUE_TOPICS` 分支（**照抄级：≤6 行**）+ 真包 T2 落库与全部 `select` 判据；
        ③ 拆完再谈 `STORE2`（篮彩两表：`fact` 里现在**连 `*lq*` 表都没有**，DDL 是队长的活，先建表才能谈写手）。
+92. **队长错 #18（第二次栽在"按名字搜表"上）**：我在 §9-87/§9-91 写过 "`fact` 里连 `*lq*` 表都没有 ⇒ 篮彩要先建表" —— **是错的**：
+     · 篮彩三表**一直都在**，名字是 **`fact.jbq_match` / `fact.jbq_offer` / `fact.jbq_result`**（源 topic 叫 `jclq_*`，落库表叫 `jbq_*`），
+       DDL 文档 `docs/db/infra_p0_10_jbq_tables.sql`（99 行，我今天 10:36 从运行库反建并做过"临时 schema 重放 ⇒ 表3/约束19/列61 逐项相同"的验证）；
+       实况：**三表都存在、都 0 行**（`select … from pg_tables where tablename like 'jbq%'` ✔）。
+     · 我又用 `like '%lq%'` 搜表名就下结论 ⇒ 与 §9-76（拿 `league_cn` 当 `league_abbr` 混着 union）同一类错：**"查不到"≠"不存在"，先确认我搜的键对不对**。
+     · **纪律**：以后凡是"某张表/某一列不存在"的论断，必须同时给出 **①我搜的 pattern ②全库同类对象的实际列表**（例如 `select tablename from pg_tables where schemaname='fact' order by 1`），不许只贴"查不到"。
+93. **篮彩真包形状今天首次量到（此前一直是 `.empty`）⇒ `P0-STORE2` 的 oracle 不用再等了，我先替工人量好**（16:0x，两批真 `jclq_offer`）
+     · 每行 = **一场**，26 键扁平（**不是** `matchInfoList` 列表！与足球 `jczq_offer` 结构不同，别照抄足球解析器）：
+       `matchId=2041527 matchNumStr=周四301 leagueId=26 leagueAbbName=美职女篮 businessDate=2026-09-17 matchDate=2026-09-18 matchTime=07:30:00`
+       `homeTeamId/Name/AbbName/Rank` + `away*` 同名一套 · `block='had'` · 顶层 `poolCode='HAD'` · **顶层 `options={}`（空！）**
+     · 真正的盘口在 **`oddsHistory`（本场 3 条）**，每条 13 键：`poolCode ∈ {HILO, HDC, WNM}`、`goalLine`/`goalLineValue`（`+170.5` / `-15.5` / `WNM` 为空串）、
+       **赔率在 `h` / `a`**（HDC 这场 `h=1.60 a=1.81`）、`d` 为空（篮球无平），**`odds` 键是空字符串 `""`（不是列表，别当数组解析）**，
+       时间戳 = `updateDate + ' ' + updateTime`（例 `2026-09-16 15:14:42`）⇒ 正好落 `jbq_offer.snap_ts`（**text**，DDL 当初就是为字符串留的 ✔ 现在被真包核验了）。
+     · **注意这条也在真包里**：`leagueId=26 美职女篮` **不在封闭清单（篮彩只 NBA/CBA）** ⇒ 篮子一接线，`core/jc_gate.py` 就要参与判定（对照入库、永不进模型）。
