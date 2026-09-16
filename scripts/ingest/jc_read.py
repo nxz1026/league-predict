@@ -23,16 +23,16 @@ def _count_lines(path: Path) -> int:
     return sum(1 for s in open(path, encoding="utf-8") if s.strip())
 
 
-def _manifest(root: Path, marker: Path) -> dict[str, list[tuple[Path, int]]]:
-    """.done 文本清单 → {topic: [(绝对路径, 声明行数)]}；0 字节 marker ⇒ {} 表示走窗口。"""
-    out: dict[str, list[tuple[Path, int]]] = {}
+def _manifest(root: Path, marker: Path) -> dict[str, list[tuple[str, int]]]:
+    """.done 文本清单 → {topic: [(相对路径, 声明行数)]}；无前缀行挂 ""；0 字节 marker ⇒ {} 走窗口。"""
+    out: dict[str, list[tuple[str, int]]] = {}
     for line in marker.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         parts = line.split("\t")
-        rel, n = parts[0], parts[1] if len(parts) > 1 else "0"
-        topic = rel.split("/", 1)[0]
-        out.setdefault(topic, []).append((root / rel, int(n.strip() or "0")))
+        rel, decl = parts[0].strip(), int(parts[1].strip() or "0")
+        key = rel.split("/", 1)[0] if "/" in rel else ""
+        out.setdefault(key, []).append((rel, decl))
     return out
 
 
@@ -48,14 +48,30 @@ def _check_entry(topic: str, p: Path, decl: int) -> tuple[Path, str]:
     return (p, p.suffix.lstrip("."))
 
 
-def _from_manifest(man: dict[str, list[tuple[Path, int]]],
+def _resolve(root: Path, topics: tuple[str, ...], rel: str, decl: int):
+    """清单丢了目录前缀时消歧：唯一"存在且行数吻合"的 topic 才算命中，否则 None（不许猜）。"""
+    hits = [(t, root / t / rel) for t in topics
+            if (root / t / rel).is_file() and _count_lines(root / t / rel) == decl]
+    if len(hits) != 1:
+        logger.warning("manifest-无法消歧 rel=%s 声明=%d 命中=%d", rel, decl, len(hits))
+        return None
+    logger.warning("manifest-无目录前缀 topic=%s 文件=%s（按目录消歧）", hits[0][0], rel)
+    return hits[0]
+
+
+def _from_manifest(root: Path, man: dict[str, list[tuple[str, int]]],
                    topics: tuple[str, ...]) -> dict[str, list[tuple[Path, str]]]:
     out: dict[str, list[tuple[Path, str]]] = {}
     for topic in topics:
         if topic not in man:
             out[topic] = [(None, "missing")]
             continue
-        out[topic] = [_check_entry(topic, p, decl) for p, decl in man[topic]]
+        out[topic] = [_check_entry(topic, root / rel, decl) for rel, decl in man[topic]]
+    for rel, decl in man.get("", []):
+        hit = _resolve(root, topics, rel, decl)
+        if hit:
+            t, p = hit
+            out.setdefault(t, []).append(_check_entry(t, p, decl))
     return out
 
 
@@ -76,7 +92,7 @@ def _window(root: Path, marker: Path,
 def files_for_batch(root: Path, marker: Path,
                     topics: tuple[str, ...]) -> dict[str, list[tuple[Path, str]]]:
     man = _manifest(root, marker)
-    return _from_manifest(man, topics) if man else _window(root, marker, topics)
+    return _from_manifest(root, man, topics) if man else _window(root, marker, topics)
 
 
 def read_lines(path: Path) -> list[dict]:
