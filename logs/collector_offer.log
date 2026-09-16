@@ -1,0 +1,32 @@
+[collect] jczq_offer: 40 Ë°å ‚Üí E:\2026Workplace\Code\collector-cn\out\jczq_offer\2026-09-16T02-34Z__001.jsonl
+[collect] jclq_offer: 0 Ë°å ‚Üí E:\2026Workplace\Code\collector-cn\out\jclq_offer\2026-09-16T02-34Z__001.empty
+[collect] jczq_result: 9 Ë°å ‚Üí E:\2026Workplace\Code\collector-cn\out\jczq_result\2026-09-16T02-34Z__001.jsonl
+[collect] jclq_result: 23 Ë°å ‚Üí E:\2026Workplace\Code\collector-cn\out\jclq_result\2026-09-16T02-34Z__001.jsonl
+[collect] jc_issue: 4 Ë°å ‚Üí E:\2026Workplace\Code\collector-cn\out\jc_issue\2026-09-16T02-34Z__001.jsonl
+[collect] jc_issue_result: 3 Ë°å ‚Üí E:\2026Workplace\Code\collector-cn\out\jc_issue_result\2026-09-16T02-34Z__001.jsonl
+[collect] lottery_draw: 120 Ë°å ‚Üí E:\2026Workplace\Code\collector-cn\out\lottery_draw\2026-09-16T02-34Z__001.jsonl
+[push_batch] ÂÆåÊàêÔºö['jczq_offer', 'jclq_offer', 'jczq_result', 'jclq_result', 'jc_issue', 'jc_issue_result', 'lottery_draw'] + 2026-09-16T02-34-38Z.done
+[collect] jczq_offer: 40 –– °˙ E:\2026Workplace\Code\collector-cn\out\jczq_offer\2026-09-16T02-38Z__001.jsonl
+[collect] jclq_offer: 0 –– °˙ E:\2026Workplace\Code\collector-cn\out\jclq_offer\2026-09-16T02-38Z__001.empty
+[collect] jczq_result: 9 –– °˙ E:\2026Workplace\Code\collector-cn\out\jczq_result\2026-09-16T02-38Z__001.jsonl
+[collect] jclq_result: 23 –– °˙ E:\2026Workplace\Code\collector-cn\out\jclq_result\2026-09-16T02-39Z__001.jsonl
+[collect] jc_issue: 4 –– °˙ E:\2026Workplace\Code\collector-cn\out\jc_issue\2026-09-16T02-39Z__001.jsonl
+[collect] jc_issue_result: 3 –– °˙ E:\2026Workplace\Code\collector-cn\out\jc_issue_result\2026-09-16T02-39Z__001.jsonl
+[collect] lottery_draw: 120 –– °˙ E:\2026Workplace\Code\collector-cn\out\lottery_draw\2026-09-16T02-39Z__001.jsonl
+[push_batch] ÕÍ≥…£∫['jczq_offer', 'jclq_offer', 'jczq_result', 'jclq_result', 'jc_issue', 'jc_issue_result', 'lottery_draw'] + 2026-09-16T02-39-11Z.done
+[collect] jczq_offer: 40 –– °˙ E:\2026Workplace\Code\collector-cn\out\jczq_offer\2026-09-16T02-43Z__001.jsonl
+[collect] jclq_offer: 0 –– °˙ E:\2026Workplace\Code\collector-cn\out\jclq_offer\2026-09-16T02-43Z__001.empty
+[collect] jczq_result: 9 –– °˙ E:\2026Workplace\Code\collector-cn\out\jczq_result\2026-09-16T02-43Z__001.jsonl
+[collect] jclq_result: 23 –– °˙ E:\2026Workplace\Code\collector-cn\out\jclq_result\2026-09-16T02-43Z__001.jsonl
+[collect] jc_issue: 4 –– °˙ E:\2026Workplace\Code\collector-cn\out\jc_issue\2026-09-16T02-43Z__001.jsonl
+[collect] jc_issue_result: 3 –– °˙ E:\2026Workplace\Code\collector-cn\out\jc_issue_result\2026-09-16T02-43Z__001.jsonl
+[collect] lottery_draw: 120 –– °˙ E:\2026Workplace\Code\collector-cn\out\lottery_draw\2026-09-16T02-43Z__001.jsonl
+[push_batch] ÕÍ≥…£∫['jczq_offer', 'jclq_offer', 'jczq_result', 'jclq_result', 'jc_issue', 'jc_issue_result', 'lottery_draw'] + 2026-09-16T02-43-49Z.done
+[collect] jczq_offer: 40 Ë°å ‚Üí E:\2026Workplace\Code\collector-cn\out\jczq_offer\2026-09-16T02-47Z__001.jsonl
+[collect] jclq_offer: 0 Ë°å ‚Üí E:\2026Workplace\Code\collector-cn\out\jclq_offer\2026-09-16T02-48Z__001.empty
+[collect] jczq_result: 9 Ë°å ‚Üí E:\2026Workplace\Code\collector-cn\out\jczq_result\2026-09-16T02-48Z__001.jsonl
+[collect] jclq_result: 23 Ë°å ‚Üí E:\2026Workplace\Code\collector-cn\out\jclq_result\2026-09-16T02-48Z__001.jsonl
+[collect] jc_issue: 4 Ë°å ‚Üí E:\2026Workplace\Code\collector-cn\out\jc_issue\2026-09-16T02-48Z__001.jsonl
+[collect] jc_issue_result: 3 Ë°å ‚Üí E:\2026Workplace\Code\collector-cn\out\jc_issue_result\2026-09-16T02-48Z__001.jsonl
+[collect] lottery_draw: 120 Ë°å ‚Üí E:\2026Workplace\Code\collector-cn\out\lottery_draw\2026-09-16T02-48Z__001.jsonl
+[push_batch] ÂÆåÊàêÔºö['jczq_offer', 'jclq_offer', 'jczq_result', 'jclq_result', 'jc_issue', 'jc_issue_result', 'lottery_draw'] + 2026-09-16T02-48-13Z.done
