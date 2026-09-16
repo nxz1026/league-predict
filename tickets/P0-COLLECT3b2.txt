@@ -2,6 +2,11 @@
 【这一单**只新建一个写手**：`scripts/ingest/jc_odds_write.py`（**≤100 行、函数 ≤50 行**）——不接线、不改任何现有文件、**库里最终不留行**（见 T2 的"回滚自证"）】
  它是 `P0-COLLECT3b`（盘口**全历史** → `fact.jc_odds_history`）第二步；第一步（解析器 `scripts/store/parse_odds_hist.py`）**已单独成单 `P0-COLLECT3b1`**（本单**假定它已存在并按其输出喂**；若你发现它不在 ⇒ 停下告诉我）。
 【🅣 第 1 个动作就 write 这个新文件 + 一个新测试文件；**基线我全量好了，你不要自己去测基线**（§9-69）。】
+【🛑 **幂等保护（队长 14:47 加，专治"重试会话重写已验收代码"，§9-84）**：开工前先跑
+   `ls scripts/ingest/jc_odds_write.py tests/test_jc_odds_write.py 2>/dev/null | wc -l`，再跑
+   `source ~/.venvs/league/bin/activate && PYTHONPATH=.:scripts python -m pytest tests/test_jc_odds_write.py -q`
+   ⇒ **若两个文件都在且已经 `2 passed`：本单剩下的活只有"补报告 + 交 `.done`"，一个字节都不许多改**
+   （写手与测试已由队长验收进 commit `a17f798`；重写只会浪费一轮，并把已绿的实现置于风险中）。
 【A. 表与上游（队长 11:55 从运行库读的，照抄别去查）】
  `fact.jc_odds_history`（**14 列**，DDL 见 `docs/db/infra_p0_11_odds_history.sql`，**已应用**）：
    `match_id bigint NOT NULL` · `play_type text NOT NULL` · `update_ts timestamptz NOT NULL` · `seq_no integer NOT NULL`
@@ -53,7 +58,7 @@ def upsert_from_env(cur, env: dict) -> int                            # 调 pars
  T5 **回归**：`source ~/.venvs/league/bin/activate && PYTHONPATH=.:scripts python -m pytest tests -q` → **428 + N passed / 0 failed**（贴你数出的 N）
     且 `bash ~/bin/jc-ingest-run.sh` → `rc=0`、`select count(*) from ops.file_arrival where src_file like '%#MISSING%'` **跑前跑后都 = 14**
 【铁律】① 禁 git；② 禁 print；③ ≤100/≤50/≤120；④ 只新建"写手 + 它的测试"两个文件；
- ⑤ 报告 `.omp-logs/P0-COLLECT3b2.report.txt`（T1~T5 原始命令 + 原始输出 + 两个文件行数）+ 全绿才 `echo TASK_DONE > .omp-logs/P0-COLLECT3b2.done`
+ ⑤ 报告 `.omp-logs/P0-COLLECT3b2c.report.txt`（T1~T5 原始命令 + 原始输出 + 两个文件行数）+ 全绿才 `echo TASK_DONE > .omp-logs/P0-COLLECT3b2c.done`
 【边界】T2 任何一数对不上 ⇒ **停下贴实测值**（不许改断言凑绿）；`parse_odds_hist.py` 不存在 ⇒ 停下；写不进 100 行 ⇒ 停下贴 `wc -l`。
 【验收（队长逐字复跑）】
   sudo -n -u postgres psql -d league -Atc "select count(*) from fact.jc_odds_history"        # 必须仍是 0
