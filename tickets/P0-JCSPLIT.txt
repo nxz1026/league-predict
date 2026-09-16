@@ -3,7 +3,7 @@
  为什么现在必须搬：`P0-COLLECT3b3`（盘口全历史接线）要在 `jc_load.py` 里加 `WRITE` 一项 + 分支 ⇒ 99 行的文件**装不下**；
  而 `jc_load.py` 的"每 topic 怎么落库"本来就与"批次怎么扫"是两件事 ⇒ **搬完 `jc_load.py` 约 65 行、`jc_topic.py` 约 45 行**，两边都留出余量。
  【🅣 第 1 个动作就 edit，改完之前一行测试都不许跑（§9-66②）；基线我量好了，别自己测（§9-69）。】
-【A. 基线（队长 11:59 实测，照抄）】`jc_load.py` **99 行**；`gaps=14`；`fact.jc_offer=1440`、`jc_match=36`、`jc_result=24`、`ops.file_arrival` 里 `done_marker=false 且 src_file not like '%#MISSING%'` = **14**（orphan 已兜住）；
+【A. 参考背景（队长 11:59 实测；**判据一律以 E0 自量为准**，cron 会让写死的数过期）】`jc_load.py` **99 行**；`gaps=14`；`fact.jc_offer=1440`、`jc_match=36`、`jc_result=24`、`ops.file_arrival` 里 `done_marker=false 且 src_file not like '%#MISSING%'` = **14**（orphan 已兜住）；
  `--dir /tmp/incoming` → `ups=15`；`--dir /tmp/incoming2` → `ups=40`；`pytest tests -q` → **428 passed**。
 【B. 搬家规则（**一行逻辑都不许多改**）】
  · 搬 `_ops` 与 `load_topic` **两个函数原样移动**（连注释、连 docstring、连参数默认值都不许多改一个字）；
@@ -21,13 +21,19 @@
     （若这一步 FAIL ⇒ 说明你有新增行，纯搬家不该有；把它退回零新增再来）
 【D. 不许做】改 `_ops`/`load_topic` 内部任何一行逻辑（连"顺手加个日志"都不许）；改 `jc_read.py`(97)/`jc_write.py`(100,md5 锁)/解析器/DDL/夹具；
  删或改库里任何一行；往 `/srv/league-staging/**` 写；禁 git；禁 print；演练一律 `/tmp/…`。
-【E. 必须成立（改完之后按序跑，原始输出全进报告）】
- E1 `bash ~/bin/jc-ingest-run.sh` → `rc=0`、每批 `errors=[]`、`orphan 装载 n=0`（已兜过 ⇒ **必须还是 0**，别把孤儿当新孤儿再装一遍）
- E2 `sudo -n -u postgres psql -d league -Atc "select count(*) from fact.jc_offer"` = **1440**、`… jc_match` = **36**、`… jc_result` = **24**
-     以及 `… "select count(*) from ops.file_arrival where src_file like '%#MISSING%'"` = **14**（**搬家不许动账本**）
- E3 `--dir /tmp/incoming` → `ups=15`、`--dir /tmp/incoming2` → `ups=40`、`errors=[]`（与基线一字不差）
- E4 `python3 ~/bin/omp-ast-check.py scripts/ingest/jc_load.py scripts/ingest/jc_topic.py` → 0 违规；`wc -l` 两个文件
- E5 `python3 ~/bin/jc-fk-audit.py fact` → exit=0；`source ~/.venvs/league/bin/activate && PYTHONPATH=scripts python -m pytest tests -q` → **428 passed / 0 failed**
+【E. 必须成立（**全部改成"自量自比"，不写死数**——cron 每 10 分钟会自己跑一次装载，写死的数一定过期，队长 12:47 重派本单就是这个原因）】
+ E0 **先量基线**（改代码**之前**跑一次，三个数抄进报告，后面全与它比）：
+    `bash ~/bin/jc-ingest-run.sh`（跑完立刻记：`A1=orphan 装载 n=?`、`A2=gaps=?`、`A3=arrival 总行=?`、`A4=jc_offer=?`）
+    队长 12:46 实测参考值（**只供核对，不作判据**）：`A1=14`（孤儿每趟都会重装，见 §9-71，不是 bug）、`A2=20`、`A4≥1575`（还在涨）。
+ E1 **改完代码后**再跑 `bash ~/bin/jc-ingest-run.sh` → `rc=0`、每批 `errors=[]`，并且
+    · `orphan 装载 n` **仍 = A1**（搬家不许改变孤儿数）
+    · `gaps` **仍 = A2**（**这条是搬家唯一真正的账本判据**）
+    · `arrival 总行` **≥ A3**（cron 可能插一批 ⇒ 多出来是正常的；**变少才是搬家弄坏了**）
+    · `fact.jc_offer` **≥ A4**（同上，只许多不许少）
+ E2 夹具回归：`--dir /tmp/incoming` → `ups=15`、`--dir /tmp/incoming2` → `ups=40`、`errors=[]`（这两个是**离线目录**，与 cron 无关 ⇒ 必须一字不差）
+ E3 `python3 ~/bin/omp-ast-check.py scripts/ingest/jc_load.py scripts/ingest/jc_topic.py` → 0 违规；`wc -l` 两个文件（**`jc_load.py` ≤70、`jc_topic.py` ≤60**）
+ E4 `python3 ~/bin/jc-fk-audit.py fact` → exit=0
+ E5 `source ~/.venvs/league/bin/activate && PYTHONPATH=.:scripts python -m pytest tests -q` → **`435 passed / 0 failed`**（3b1 刚加了 7 个用例，别再拿 428 当基线）
 【铁律】① 禁 git；② 禁 print；③ ≤100/≤50/≤120；④ **只搬不改**；⑤ 报告 `.omp-logs/P0-JCSPLIT.report.txt`（B/C/E 全部原始输出）
  + 全绿才 `echo TASK_DONE > .omp-logs/P0-JCSPLIT.done`
 【边界】C2/C3 任一不 exit=0 ⇒ **停下贴原文**（那是你偷偷改了逻辑）；E2 任何数变了 ⇒ **停下贴原文**（搬家不许碰数据）；超行 ⇒ 停下贴 `wc -l`。
