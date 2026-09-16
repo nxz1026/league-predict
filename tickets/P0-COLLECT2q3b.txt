@@ -42,7 +42,7 @@
     **与第一趟跑完一字不差**（都走 upsert ⇒ 不新增行）
     且 `fact.jc_offer` / `fact.jc_match` / `fact.jc_result` 三个计数**与第一次跑完完全相同**（孤儿已被 `seen` 通过窗口/清单认领，不会反复捞）
     （原判据「第二次 n=0」**作废**，见 §9-71：孤儿本来每次都会重新捞；只要求**不新增行**，**不许加去重表**。）
- T4 **夹具没坏**：`PYTHONPATH=scripts python scripts/ingest/jc_load.py --dir /tmp/incoming` → `ups=15`、`--dir /tmp/incoming2` → `ups=40`、
+ T4 **夹具没坏**：`PYTHONPATH=scripts python scripts/ingest/jc_load.py --dir /tmp/incoming` → `ups=15`、`--dir /tmp/incoming2 --batch 2026-09-15T23-01-30Z` → `ups=40`、
     `errors=[]`，且**这两趟都不许出现 `orphan 装载 n>0`**（夹具目录里没有无主文件）。
  T5 **造一个孤儿**（只准 `/tmp/c5`）：一份合法 marker（清单列 `jczq_offer/x.jsonl` + 真实行数）并真放那个文件；
     **另在 `jczq_offer/` 放一个 2 行的 `y.jsonl` 不列进清单** ⇒ `--dir /tmp/c5` ⇒ 日志 `orphan 装载 n=1 文件=y.jsonl`，

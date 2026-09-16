@@ -31,7 +31,7 @@
     ② **只有第一列没有制表符**（`jczq_result/y.jsonl`）、③ 第二列是 `abc`；`PYTHONPATH=scripts python scripts/ingest/jc_load.py --dir /tmp/c1`
     ⇒ **不得抛异常**（`rc=0` 或至少进程正常结束、日志出现 `rejected`/`manifest-mismatch`），②③ 两个文件**不许进库**；
     贴原始输出（含 `select src_file, rows from ops.file_arrival where src_file like '%y.jsonl%' or src_file like '%2026-09-16T114200Z/%'` 之类能证明它们被记为 rejected 的行——**记不进 arrival 也算过，但要贴出日志**）。
- T2 **正常清单不受影响**：`--dir /tmp/incoming` → `ups=15`、`--dir /tmp/incoming2` → `ups=40`、`errors=[]`（**与 2q3 验收时一字不差**）
+ T2 **正常清单不受影响**：`--dir /tmp/incoming --batch 2026-09-15T15-16-32Z` → `ups=15`、`--dir /tmp/incoming2 --batch 2026-09-15T23-01-30Z` → `ups=40`、`errors=[]`（**与 2q3 验收时一字不差**）
  T3 **实时目录**：`bash ~/bin/jc-ingest-run.sh` ⇒ `rc=0`、每批 `errors=[]`、
     `select count(*) from ops.file_arrival where src_file like '%#MISSING%'` **跑前跑后相等**（当前基线 **14**）
  T4 静态与回归：`python3 ~/bin/omp-ast-check.py scripts/ingest/jc_read.py` → 0 违规 + `wc -l`（**≤100**）；

@@ -30,7 +30,9 @@ def _manifest(root: Path, marker: Path) -> dict[str, list[tuple[str, int]]]:
         if not line.strip():
             continue
         parts = line.split("\t")
-        rel, decl = parts[0].strip(), int(parts[1].strip() or "0")
+        rel = parts[0].strip()
+        try: decl = int(parts[1].strip())
+        except (IndexError, ValueError): decl = -1
         key = rel.split("/", 1)[0] if "/" in rel else ""
         out.setdefault(key, []).append((rel, decl))
     return out

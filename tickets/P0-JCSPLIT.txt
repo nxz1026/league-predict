@@ -4,7 +4,7 @@
  而 `jc_load.py` 的"每 topic 怎么落库"本来就与"批次怎么扫"是两件事 ⇒ **搬完 `jc_load.py` 约 65 行、`jc_topic.py` 约 45 行**，两边都留出余量。
  【🅣 第 1 个动作就 edit，改完之前一行测试都不许跑（§9-66②）；基线我量好了，别自己测（§9-69）。】
 【A. 参考背景（队长 11:59 实测；**判据一律以 E0 自量为准**，cron 会让写死的数过期）】`jc_load.py` **99 行**；`gaps=14`；`fact.jc_offer=1440`、`jc_match=36`、`jc_result=24`、`ops.file_arrival` 里 `done_marker=false 且 src_file not like '%#MISSING%'` = **14**（orphan 已兜住）；
- `--dir /tmp/incoming` → `ups=15`；`--dir /tmp/incoming2` → `ups=40`；`pytest tests -q` → **428 passed**。
+ `--dir /tmp/incoming --batch 2026-09-15T15-16-32Z` → `ups=15`；`--dir /tmp/incoming2 --batch 2026-09-15T23-01-30Z` → `ups=40`；`pytest tests -q` → **428 passed**。
 【B. 搬家规则（**一行逻辑都不许多改**）】
  · 搬 `_ops` 与 `load_topic` **两个函数原样移动**（连注释、连 docstring、连参数默认值都不许多改一个字）；
  · 新文件 `scripts/ingest/jc_topic.py`：需要的 import 从 `jc_load.py` **一起搬过去**（`logger` / `Json` / `Path` / `jc_write` / `read_lines` / `parse_line`），
@@ -30,7 +30,7 @@
     · `gaps` **仍 = A2**（**这条是搬家唯一真正的账本判据**）
     · `arrival 总行` **≥ A3**（cron 可能插一批 ⇒ 多出来是正常的；**变少才是搬家弄坏了**）
     · `fact.jc_offer` **≥ A4**（同上，只许多不许少）
- E2 夹具回归：`--dir /tmp/incoming` → `ups=15`、`--dir /tmp/incoming2` → `ups=40`、`errors=[]`（这两个是**离线目录**，与 cron 无关 ⇒ 必须一字不差）
+ E2 夹具回归：`--dir /tmp/incoming --batch 2026-09-15T15-16-32Z` → `ups=15`、`--dir /tmp/incoming2 --batch 2026-09-15T23-01-30Z` → `ups=40`、`errors=[]`（这两个是**离线目录**，与 cron 无关 ⇒ 必须一字不差）
  E3 `python3 ~/bin/omp-ast-check.py scripts/ingest/jc_load.py scripts/ingest/jc_topic.py` → 0 违规；`wc -l` 两个文件（**`jc_load.py` ≤70、`jc_topic.py` ≤60**）
  E4 `python3 ~/bin/jc-fk-audit.py fact` → exit=0
  E5 `source ~/.venvs/league/bin/activate && PYTHONPATH=.:scripts python -m pytest tests -q` → **`435 passed / 0 failed`**（3b1 刚加了 7 个用例，别再拿 428 当基线）
