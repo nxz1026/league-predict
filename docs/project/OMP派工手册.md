@@ -692,3 +692,11 @@ setsid bash ~/omp-resilient3.sh SMOKE1 /home/ubuntu/omp-smoke 300 1 ~/tickets/SM
        ——这是这个工具第二次在生产上抓到真问题（第一次是 §9-64 那批）；
      · **根修**：`P0-JCSPLIT3`（搬家腾行数）→ `P0-COLLECT2q4`（**用第三列哈希做精确归属**：这两行的哈希 `756d2ec4…` / `1001d495…` 完全不同 ⇒ 一次就能定死）。
        ⇒ 排队纪律改一条：**2q4 优先级高于 `STORE2`**（消歧错了会让"缺档账"长期失真，而篮彩晚一周入库无损失）。
+88. **🔴 我自己犯下 §9-81 同款错（手工版）**：15:29:5x 我为了停 `P0-JCSPLIT3` 用了 `for p in $(pgrep -f "local/bin/[o]mp"); do kill -TERM $p; done`
+     ⇒ 这一条**全局 pgrep** 顺手把**并行跑的 `P0-COLLECT2e` try 1** 也杀了（`try 1 rc=15 end=15:30:02`，损失 2 分钟，wrapper 自动起了 try 2 ⇒ 无实质损害）。
+     · **正确的手工停轮姿势（以后一律照这个做，V4 的组语义同样适用于手工）**：
+       `W=$(pgrep -f "omp-resilient4.sh <TAG>")` → **先 `kill -TERM $W`**（先止住它自己重试）
+       → 再 `TP=$(pgrep -P $W | tail -1)`（本轮 `setsid timeout` 的 pid，它就是组长）→ `kill -TERM -"$TP"`（**带负号杀整组，精确到本轮**）；
+       → 最后 `pgrep -f "local/bin/[o]mp"` **只用来确认**"是否还有别的工单在跑"，**绝不拿它当 kill 的目标清单**。
+     · 另一条时间教训：`TZ=Asia/Shanghai date` 与 `date -u` 在同一轮里混着看，我会把 15:30 读成 15:34 进而误判"工人 5 分钟没动手"⇒
+       **判断节奏前先用同一种时区把"现在几点"钉一次**。

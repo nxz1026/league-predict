@@ -15,7 +15,9 @@
 【C. 判据（全绿才准交 `.done`）】
  T0 **先量基线**（搬之前跑，贴进报告）：`wc -l scripts/ingest/jc_read.py`、`PYTHONPATH=.:scripts python -m pytest tests -q`（期望 **441 passed**；
    若此刻 `P0-COLLECT3b3` 正在改别的文件导致**你看到 441 以外的数**，把**搬前搬后两次数字都贴出来**，我要的是**增量不变**，不是绝对值）。
- T1 **纯度自证**（这是本单的核心）：`python3 ~/bin/jc-move-check.py scripts/ingest/jc_read.py scripts/ingest/jc_manifest.py`
+ T1 **纯度自证**（这是本单的核心；⚠️ **工具的第一个参数必须是"搬移之前"的 golden 文件**，别拿搬完的文件当 golden）：
+   开工**第一件事**先把 golden 存出来：`git show HEAD:scripts/ingest/jc_read.py > /tmp/golden_jc_read.py && wc -l /tmp/golden_jc_read.py`（应为 **100**）；
+   搬家完成后跑：`python3 ~/bin/jc-move-check.py /tmp/golden_jc_read.py scripts/ingest/jc_read.py scripts/ingest/jc_manifest.py`
    ⇒ 必须输出 `--- OK: 纯机械搬移`（该工具会比对搬出/搬入的 AST 与函数体文本，**改一个字都会报**）。**把这个工具的完整输出贴进报告。**
  T2 **行为不变（离线，可写死数字）**：`PYTHONPATH=.:scripts python -m pytest tests -q` ⇒ **passed 数与 T0 相同、failed = 0**。
  T3 **行为不变（实时目录，禁止写死、自己现测）**：
@@ -25,5 +27,5 @@
    且 `wc -l` 两个文件都 **≤100**（预期 `jc_read.py` ≈ 67、`jc_manifest.py` ≈ 44）。
  T5 全量：`PYTHONPATH=.:scripts python -m pytest tests -q` → **0 failed**。
 
-【D. 交付】报告写 `.omp-logs/P0-JCSPLIT3.report.txt`（本单文件名就是 `P0-JCSPLIT3.txt`）：
- 按 `== T0 ==` … `== T5 ==` 分段贴**原始输出**，最后单独一行写两个文件的 `wc -l`。全绿再 `echo TASK_DONE > .omp-logs/P0-JCSPLIT3.done`。
+【D. 交付】报告写 `.omp-logs/P0-JCSPLIT3b.report.txt`（本单文件名就是 `P0-JCSPLIT3.txt`）：
+ 按 `== T0 ==` … `== T5 ==` 分段贴**原始输出**，最后单独一行写两个文件的 `wc -l`。全绿再 `echo TASK_DONE > .omp-logs/P0-JCSPLIT3b.done`。
