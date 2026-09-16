@@ -573,3 +573,10 @@ setsid bash ~/omp-resilient3.sh SMOKE1 /home/ubuntu/omp-smoke 300 1 ~/tickets/SM
        正向：`omp-ast-check.py tests/test_parse_odds_hist.py scripts/store/parse_odds_hist.py` → **0 违规**；
        反证：临时造一个 101 行的 `scripts/probe.py` → **仍报 `文件 101 行 > 100`**（生产码这条**一格没松**，§2-D7 未放宽）。
      · 以后写工单：`ast 检查`一句要写清"**生产码 ≤100，测试只查函数/列宽**"，别再让工人为过线去拆测试。
+74. **队长错账 #14：我在 `3b1` 的 C4 里写了"带北京 tz 的 `datetime.utcoffset()` 必须是 `timedelta(0)`"——概念错**
+     aware `datetime` 的 **`==` 比的是"时刻"**（所以 `2026-09-15 09:39:39+08:00 == 2026-09-15 01:39:39+00:00` 为真），
+     而 `utcoffset()` 只是"这个对象自带的那层偏移标签"，用 `Asia/Shanghai` 打 tzinfo 就必然是 `+8:00`。
+     ⇒ 我原本想表达的是"**不许拿本机时区凑**"，正确的写法应是**断言那个 UTC 瞬间本身**（`== datetime(..., tzinfo=timezone.utc)`，我同一条里其实已经写了 ✔）。
+     结果很有趣：工人改成 `... .replace(tzinfo=ZoneInfo("Asia/Shanghai")).astimezone(timezone.utc)`（**先解释墙上时钟、再归一到 UTC**）
+     ⇒ 我那句错的断言**反而成立了**、7 个用例全绿。**代码是对的、我的判据是歪的**，所以记进错账本而不是怪工人。
+     ⇒ 规矩：**跨时区的断言只断"时刻"（与 UTC 瞬间比较），不断"偏移标签"**；`timestamptz` 入库统一存 UTC 归一值（省 ZoneInfo、比较不歧义）。
