@@ -1,5 +1,5 @@
 @echo off
-rem v1.3: 计划任务直接走 collector_silent.ps1（CreateNoWindow，无黑框）；本 bat 保留作手动调试入口
+rem v1.4: 计划任务走 wscript+collector_silent.vbs（无黑框）；本 bat 保留作手动调试入口（可见窗口版）
 cd /d E:\2026Workplace\Code\collector-cn
 if not exist logs mkdir logs
 set PY=C:\Python314\python.exe
