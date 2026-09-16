@@ -60,3 +60,15 @@ def upsert_from_env(cur, env: dict) -> int                            # 调 pars
   PYTHONPATH=.:scripts python -m pytest tests -q
   python3 ~/bin/omp-ast-check.py scripts/ingest/jc_odds_write.py
   LEAGUE_FROZEN_RE="scripts/(core|store/pg|ingest/jc_write|ingest/jc_read|ingest/jc_load)\.py" bash ~/bin/league-accept.sh P0-COLLECT3b2 scripts/ingest tests/test_jc_odds_write.py
+
+【🔎 队长 13:22 亲自诊断出的**唯一真因**（我跑 `pytest -k t2 --log-cli-level=WARNING` 抓到被容错吞掉的原文）：
+ `odds-hist-reject match_id=2041482 play_type=had: Connection.transaction() got an unexpected keyword argument 'savepoint'`
+ ⇒ 你用的是 **`conn.transaction(savepoint=...)`，psycopg3 没有这个关键字**（`Connection.transaction()` 只收 `force/readonly/deferrable/isolated`）；
+ ⇒ **改用裸 SQL savepoint**（就是我 B3 写的三行）：`cur.execute("savepoint rh")` / 成功 `cur.execute("release savepoint rh")` / 失败 `cur.execute("rollback to savepoint rh")`；
+ ⇒ 除此之外**代码与测试都别动**（`assert 0 == 34` 与 `the connection is closed` 都是这一条的连带症状：坏行被容错吞成 0 成功，测试收尾又在 close 之后碰了 cursor）。
+【🎯 13:42 追加（队长现场看到的**当前**错误写法，新会话请**第一刀就改掉它**）：
+ 现在 `scripts/ingest/jc_odds_write.py:34` 是 `with cur.transaction(savepoint=True):` —— **psycopg3 的 Cursor 根本没有 `transaction()`**
+ （上一版是 `conn.transaction(savepoint=...)`，同样不存在这个关键字）⇒ 每条 insert 都被容错吞掉 ⇒ 测试仍 `assert 0 == 34`。
+ ⇒ **唯一正确写法（不要再试任何 `*.transaction(savepoint=…)` 变体）**：
+   `cur.execute("savepoint rh")` → 执行 insert → 成功 `cur.execute("release savepoint rh")` → 失败 `cur.execute("rollback to savepoint rh")` + `logger.warning` + `continue`。
+ （psycopg3 里"嵌套事务自动开保存点"只有 `with conn.transaction():`，但它**不接受 `savepoint=` 参数**，而且放进 for 循环会让函数超 50 行 ⇒ 一律用裸 SQL。）

@@ -631,3 +631,13 @@ setsid bash ~/omp-resilient3.sh SMOKE1 /home/ubuntu/omp-smoke 300 1 ~/tickets/SM
 80. **psycopg3 事实（今天踩实）**：`Connection.transaction()` **没有** `savepoint=` 关键字（只收 `force/readonly/deferrable/isolated`）
      ⇒ 要"每行一个保存点"就**写裸 SQL**：`cur.execute("savepoint rh")` → 成功 `release savepoint rh` / 失败 `rollback to savepoint rh`；
      嵌套 `with conn.transaction():` 虽然会自动开保存点，但**在循环里逐行开 `with` 会把函数撑爆 50 行**（D7），所以裸 SQL 是本仓库的既定写法。
+81. **🔴 队长工具缺陷（不是工人的错）：`omp-resilient3.sh` 的"孤儿清理"会**跨工单杀会话**（13:43:34 一次杀掉另外两张在跑的单）**
+     · 现场：`P0-COLLECT3b2` try 3 超时结束（13:43:34）的**同一秒**，`P0-JCGATE1` try 2 与 `P0-COLLECT2q3c` try 2 同时 `rc=15`（被 SIGTERM）
+       —— 三张单只有一个是自己到点的，另两个是被**打扫**掉的；
+     · 根因（第 34/38 行）：`BEFORE=$(pgrep -f "local/bin/[o]mp")` 是**本 wrapper 启动这一轮时的全局快照**，
+       收尾时 `for p in $(pgrep …); do [[不在 BEFORE]] && kill $p; done` ⇒
+       **任何"比我这一轮晚启动"的 omp 进程都会被当成孤儿杀掉**——包括**别的工单**的会话（gate 13:23、2q3c 13:39 都晚于 3b2 的 13:22 快照）；
+     · **修法（精确圈定，不做全局快照）**：把 `timeout …` 后台跑并记下 `$!` 为 `TP`，收尾只 `kill -TERM -$TP`
+       （实测 `timeout` 自己就是**组长**：它的 `pgid == 它的 pid` ⇒ 组里只有"本轮 omp-call + omp acp + omp worker"，**天然不越界**）；
+       ——这也正好解释了 12:47 我杀 `P0-JCSPLIT` 时"杀了 wrapper 但 omp 链还活着"的现象（当时那轮的组不是我 wrapper 的组）。
+     · 顺带定一条**并行纪律**：**同时最多 2 张单**（3 张并行时 ACP 断流率明显上升：今天 13:2x–13:4x 三单并行，10 分钟内断了 3 次）。
