@@ -49,3 +49,34 @@
   bash ~/bin/jc-ingest-run.sh        # gaps 必须与 T0 相同
   sudo -n -u postgres psql -d league -Atc "select count(*) from fact.jc_odds_history"   # 必须 0
   LEAGUE_FROZEN_RE="scripts/ingest/jc_write\.py|docs/db/" bash ~/bin/league-accept.sh P0-COLLECT3b3 scripts/ingest
+
+【🎯 15:07 追加：**照抄级补丁**（队长把三处改法逐字写出来，你只需要落地 + 跑判据；前两轮都卡在"想怎么接"上，别再想了）
+ ——**净增合计 8 行**（≤14 预算之内），**除下面 5 处外一个字节都不许多改**：
+ ① `scripts/ingest/jc_topic.py` 第 5 行 import 区加一行：
+     `from ingest import jc_odds_write`
+ ② `scripts/ingest/jc_topic.py` 里 `load_topic()` 的 `else:`（现在是 `logger.info("skip %s n=%d (2e 范围)"…)`）**之前**插入 **4 行**：
+     `    elif topic == "jc_odds_history":`
+     `        for env in lines:`
+     `            env["src_file"] = rel`
+     `            ups += jc_odds_write.upsert_from_env(cur, env)`
+     （`rel` 与 `lines` 都是函数里现成的变量；`upsert_from_env(cur, env) -> int` 已验收在 `jc_odds_write.py:44`，
+      它从 `env["src_file"]` 取来源文件 ⇒ 所以第 ③ 行那句赋值**必须**有，别省。）
+ ③ `scripts/ingest/jc_load.py` 在 `TOPICS = (...)` 之后加 **1 行**：
+     `OPTIONAL = ("jc_odds_history",)`
+     并把 `files_for_batch(root, marker, TOPICS)` 改成 `files_for_batch(root, marker, TOPICS + OPTIONAL)`（**同一行内改，不加行**）。
+ ④ `scripts/ingest/jc_load.py` 的 `for path, state in cands or [(None, "missing")]:` 改成（**同一行内改，不加行**）：
+     `for path, state in cands or ([] if topic in OPTIONAL else [(None, "missing")]):`
+ ⑤ `scripts/ingest/jc_read.py` 的 `_from_manifest()` 里，`for topic in topics:` 循环体**第一句**位置加 **1 行**：
+     `        if not entries and topic in OPTIONAL:`
+     `            continue`
+     ⚠️ ⑤ 会让 `jc_read.py` **99 → 101 行 ⇒ 直接撞 §2-D7 红线**！所以 ⑤ 写成**一行**：
+     `        if not entries and topic in OPTIONAL: continue`  （**99 → 100 行，正好压在红线上，一行都不许多**）
+     并且 `files_for_batch` / `_from_manifest` 的签名**不加参数**：`OPTIONAL` 从 `jc_load` 传进来的方式是——
+     `from ingest.jc_load import OPTIONAL` **会循环 import** ⇒ 所以 `OPTIONAL` 这个**元组常量要在 `jc_read.py` 里自己定义一份**（`OPTIONAL = ("jc_odds_history",)`），
+     `jc_load.py` ③ 里改成 `TOPICS + jc_read.OPTIONAL`（或 `from ingest.jc_read import OPTIONAL`）——**只允许一份定义，别两边各写一份**（以后加 topic 会漂移）。
+【判据重申（就三条，别的都别自己加戏）】
+ · **R1 现状零变化**：`bash ~/bin/jc-ingest-run.sh` ⇒ `rc=0`、`gaps` 跑前跑后**同一个数**（现在真包清单里没有 `jc_odds_history` ⇒ 一行都不该多出缺档）、`errors=[]`；
+ · **R2 列了才处理**：`/tmp/q3/` 里造 `jc_odds_history/` + 一份把该 topic 列进去的 `.done`（数据文件直接 cp 那两份 `odds_history_sample/*.jsonl`），
+   跑 `--dir /tmp/q3 --batch <你的 marker 名>` ⇒ `fact.jc_odds_history` **出现行数 = 34**（我 14:52 独立复算值），**测完你自己 `delete` 干净**（`ing` 角色有 DELETE 权限）；
+   再跑一次**同一批** ⇒ 仍 **34**（幂等 upsert，不许变 68）；
+ · **R3 全绿**：`PYTHONPATH=.:scripts python -m pytest tests -q` ⇒ **0 failed**（passed 不少于开工基线，两个数都贴）+ `omp-ast-check` 三个文件 **0 违规** + `wc -l` 三个文件全 ≤100。
